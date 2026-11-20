@@ -184,6 +184,17 @@ td small { display: block; margin-top: 2px; }
 .command-dialog li + li { margin-top: 6px; }
 .command-dialog code { display: block; white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
 .command-dialog form { margin-top: 14px; text-align: right; }
+/* 역할 줄의 '값의 출처'(살아 있는 세션 요약)와 '최근 변경' 표의 되돌리기. 장식 없이 글자 크기·색으로만 구분한다. */
+.runners-summary .origin { display: block; margin-top: 4px; font-size: 12px; color: var(--ds-color-muted); }
+.recent-changes { margin-top: 14px; word-break: keep-all; overflow-wrap: break-word; }
+.recent-changes > summary { cursor: pointer; font-weight: 600; }
+.change-table { width: 100%; border-collapse: collapse; }
+.change-table th, .change-table td { padding: 6px 8px; font-size: 13px; text-align: left; vertical-align: top; border-bottom: 1px solid #dce2de; }
+.change-table td:last-child { white-space: nowrap; }
+.change-table .row-revert { padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+.change-table .why { display: block; margin-top: 4px; max-width: 24em; font-size: 12px; white-space: normal; text-wrap: pretty; }
+.change-table .raw { margin-top: 4px; font-size: 12px; }
+.change-table .raw pre { max-height: 14em; overflow: auto; }
 /* 좁은 화면: 칸을 옆으로 두면 값이 글자 단위로 접힌다. 줄마다 세로 묶음으로 접고 칸 이름을 앞에 붙인다('바꾸기'는 묶음 맨 아래). */
 @media (max-width: 600px) {
   .runners-summary table, .runners-summary tbody, .runners-summary tr, .runners-summary th, .runners-summary td { display: block; width: auto; }
@@ -197,6 +208,12 @@ td small { display: block; margin-top: 2px; }
   .runners-summary tbody tr:not(.runner-edit-row) > td:nth-child(3)::before { content: '대체 후보 (순서대로)'; }
   .runners-summary .runner-edit-row > td { padding: 0; }
   .runners-summary .edit-cell { width: auto; }
+  /* 최근 변경 표도 줄마다 세로 묶음으로 접고 칸 이름을 앞에 붙인다. */
+  .change-table, .change-table tbody, .change-table tr, .change-table td { display: block; width: auto; }
+  .change-table thead { display: none; }
+  .change-table tr { padding: 8px 0; border-bottom: 1px solid #dce2de; }
+  .change-table td { border: 0; padding: 2px 4px; }
+  .change-table td::before { content: attr(data-label); display: block; font-size: 12px; font-weight: 600; color: var(--ds-color-muted); }
 }
 .model-register { margin: 6px 0 4px; }
 .model-register > summary { cursor: pointer; font-weight: 600; font-size: 13px; text-wrap: balance; }

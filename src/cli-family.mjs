@@ -42,6 +42,19 @@ export function startDisplay(start) {
   };
 }
 
+// 지금 떠 있는 세션이 어떻게 떴는지(2026-11-20 실행 모델 화면 '값의 출처'). start 사건에 이미 적힌 칸만 읽는다 — 원장을 새로 훑지 않는다.
+// 다시 열기·재시작·복원은 명령이 설정 틀 그대로가 아니라 옛 명령을 이은 것이라 launchSource가 없다: 'resume'으로 따로 센다.
+// 이미 살아 있어 재사용한 start(reuseOf)는 호출하는 쪽이 그 세대를 띄운 start를 넘긴다.
+export function launchOrigin(start) {
+  if (!start) return null;
+  const hard = start.difficulty === "hard";
+  const index = Number.isInteger(start.fallbackIndex) && start.fallbackIndex >= 1 ? start.fallbackIndex : null;
+  const resumed = ["restartOf", "reopenOf", "restoredFrom", "secretaryResumeSource"].some((key) => start[key]);
+  const source = resumed ? "resume"
+    : ["settings", "fallback", "override", "review-for"].includes(start.launchSource) ? start.launchSource : "unknown";
+  return {source, ...(source === "fallback" || (source === "review-for" && index) ? {fallbackIndex: index} : {}), ...(hard ? {hard: true} : {})};
+}
+
 function lastStartModel(entries, role) {
   const last = (entries ?? []).filter((entry) => entry?.kind === "start" && entry.role === role).at(-1);
   return typeof last?.model === "string" && last.model ? last.model : undefined;

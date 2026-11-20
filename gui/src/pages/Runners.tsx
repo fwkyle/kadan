@@ -1,4 +1,4 @@
-import { useContext, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { save, useResource } from "../resource";
 import type { Stamp } from "../types";
 import { PresetEditor } from "./PresetEditor";
@@ -6,6 +6,8 @@ import { PresetManager } from "./PresetManager";
 import { CompareMode } from "./CompareMode";
 import { RunnerTables } from "./RunnerTables";
 import { RunnerSummary } from "./RunnerSummary";
+import { RecentChanges } from "./RecentChanges";
+import type { OriginSession } from "../launch-origin";
 import {
   ActionForm,
   AppContext,
@@ -89,7 +91,9 @@ export default function Runners({ ready = true }: { ready?: boolean }) {
     data = resource.data,
     viewOnly = readOnly || !ready || resource.stored,
     // 열어 둔 고급 설정이 주기 새로고침·저장 뒤에도 닫히지 않도록 이 화면이 직접 들고 있는다.
-    [advancedOpen, setAdvancedOpen] = useState(false);
+    [advancedOpen, setAdvancedOpen] = useState(false),
+    // 역할 줄의 '값의 출처'가 세는 살아 있는 세션 목록. 표를 그린 뒤에 따로 읽고(OriginFeed), 모르면 줄에 아무것도 보이지 않는다.
+    [live, setLive] = useState<OriginSession[] | null>(null);
   return (
     <section>
       <h1>실행 모델 설정</h1>
@@ -126,23 +130,27 @@ export default function Runners({ ready = true }: { ready?: boolean }) {
               마지막으로 받은 설정을 먼저 보입니다. 최신 값을 읽은 뒤에 바꿀 수 있습니다.
             </p>
           )}
+          {/* 값의 출처는 표를 그린 뒤 현황의 살아 있는 세션 자료를 따로 읽어 채운다. 보관 값으로 그리는 동안은 읽지 않는다. */}
+          {ready && !resource.stored && <OriginFeed onLive={setLive} />}
           {viewOnly ? (
-            <RunnerSummary data={data} />
+            <RunnerSummary data={data} live={live} />
           ) : (
-            <PresetEditor data={data} settings={data.settings} />
+            <PresetEditor data={data} settings={data.settings} live={live} />
           )}
           {!viewOnly && <PresetSwitch settings={data.settings} />}
           {/* 비교 모드는 따로 조회(/runners/compare)를 보낸다. 표를 먼저 그리고, 최신 설정과 session을 읽은 뒤에 붙인다. */}
           {ready && !resource.stored && <CompareMode settings={data.settings} />}
           {viewOnly ? (
-            <RecentChanges history={data.history} />
+            <RecentChanges data={data} saved={null} draft={null}
+              locked={resource.stored ? "마지막으로 받은 설정입니다 — 최신 값을 읽은 뒤 되돌릴 수 있습니다"
+                : readOnly ? "원격 보기에서는 되돌릴 수 없습니다" : "설정을 읽는 중입니다 — 읽은 뒤 되돌릴 수 있습니다"} />
           ) : (
             <details
               className="runner-advanced"
               open={advancedOpen}
               onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
             >
-              <summary>고급 설정 — 프리셋 · 즐겨찾기 · 실행기 표 · 쉬는 역할 · 최근 변경</summary>
+              <summary>고급 설정 — 프리셋 · 즐겨찾기 · 실행기 표 · 쉬는 역할</summary>
               <details>
                 <summary>대체 후보·감시 AI·시니어·설명 AI 안내</summary>
                 <p className="muted">
@@ -210,7 +218,6 @@ export default function Runners({ ready = true }: { ready?: boolean }) {
                   />
                 </details>
               )}
-              <RecentChanges history={data.history} />
             </details>
           )}
         </>
@@ -252,15 +259,13 @@ function PresetSwitch({ settings }: { settings: Settings }) {
     </details>
   );
 }
-function RecentChanges({ history }: { history: unknown[] }) {
-  return (
-    <details>
-      <summary>최근 변경</summary>
-      {history.map((h, i) => (
-        <JsonValue key={i} value={h} />
-      ))}
-    </details>
-  );
+// 현황(status)의 살아 있는 세션 자료를 읽어 부모에 넘긴다. 이 화면의 첫 표시가 아니라 표를 그린 뒤에 마운트된다.
+// 현황 응답은 다른 화면(사이드바·전략 맵)이 이미 구독하는 조회라 같은 주소는 한 번만 보낸다.
+function OriginFeed({ onLive }: { onLive: (live: OriginSession[] | null) => void }) {
+  const status = useResource<{ live?: OriginSession[] | null }>("status");
+  const live = status.data?.live ?? null;
+  useEffect(() => { onLive(live); }, [live, onLive]);
+  return null;
 }
 // 즐겨찾기 관리: 목록 보기와 삭제. 추가는 각 역할의 '이 조합 즐겨찾기' 버튼으로 한다.
 function Favorites({ settings }: { settings: Settings }) {

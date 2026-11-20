@@ -8,7 +8,10 @@ import {
 import {changedRoles, effortProblems, emptyModelRoles} from '../runner-draft';
 import {EMPTY_EFFORT_NOTE} from '../effort-keep';
 import {RunnerForm} from './RunnerForm';
-import {CommandButton, NumberedList as List, ValueCell, summaryCells} from './RunnerSummary';
+import {CommandButton, NumberedList as List, OriginLine, ValueCell, summaryCells} from './RunnerSummary';
+import {RecentChanges} from './RecentChanges';
+import {revertReason, revertSaveBlock, type SettingsEvent} from '../revert';
+import type {OriginSession} from '../launch-origin';
 import type {Choice, RunnersData, Settings} from './Runners';
 
 // 어려운 일 작업자 자리의 값이 정해져 있는가(모델까지 골랐는가). 대체 후보 칸은 이때만 연다.
@@ -49,13 +52,15 @@ const sameList = (a: string[], b: string[]) => JSON.stringify(a) === JSON.string
 
 // '다음 발령의 실행 모델' 표 = 편집기. 표와 편집 칸이 초안 하나를 같이 본다(저장 전 충돌 판정도 하나).
 // 고칠 곳은 표의 '지금 값'(= 활성 프리셋)이라 저장도 활성 프리셋에 한다. 새 저장소·서버 경로는 없다.
-export function PresetEditor({data, settings, initialOpen = []}: {
-  data: RunnersData; settings: Settings; initialOpen?: string[];
+export function PresetEditor({data, settings, initialOpen = [], live}: {
+  data: RunnersData; settings: Settings; initialOpen?: string[]; live?: OriginSession[] | null;
 }) {
   const context = useContext(AppContext), id = useId();
   const [draft, setDraft] = useState(settings), [base, setBase] = useState(presetStamp(settings));
   // 바꾸는 이유: 손대기 전(null)에는 기본 문구(바꾼 역할 이름)를 칸에 미리 채워 보인다. 칸은 늘 보이고 고쳐 쓸 수 있다.
   const [reason, setReason] = useState<string | null>(null), [busy, setBusy] = useState(false);
+  // '최근 변경'의 되돌리기로 변경안에 채운 변경들. 손대기 전 저장 이유 칸의 기본 문구('N번 변경 되돌리기')가 된다.
+  const [reverts, setReverts] = useState<SettingsEvent[]>([]);
   // 저장이 서버에서 '설정이 바뀌었다'로 거절됐을 때의 변경안 버전(화면이 아직 새 값을 못 읽은 사이의 리비전 충돌). 최신 설정을 읽으면 푼다.
   const [refused, setRefused] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +80,10 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   const problems = effortProblems(draft, changed, data.catalog);
   const noEffort = problems.filter(p => p.kind === 'pick').map(p => data.roles[p.role] ?? p.role);
   const emptyList = problems.filter(p => p.kind === 'empty').map(p => data.roles[p.role] ?? p.role);
-  const blocked = frozen || unpicked.length > 0 || problems.length > 0;
+  // 비교 모드가 켜진 동안 되돌리기로 채운 값이 든 변경안은 저장하지 않는다(비교를 켜기 전에 채웠어도 같다).
+  const revertBlock = revertSaveBlock(reverts, settings, draft, Boolean(settings.compare?.enabled));
+  const blocked = frozen || unpicked.length > 0 || problems.length > 0 || revertBlock !== null;
+  const autoReason = reverts.length ? revertReason(reverts) : reasonFor('', labels);
   useEffect(() => {
     context.draft(id, dirty || busy);
     return () => context.draft(id, false);
@@ -101,10 +109,17 @@ export function PresetEditor({data, settings, initialOpen = []}: {
   }, [settings, refused, base, context.notice]);
   const discard = () => {
     setDraft(old => adoptSettings(old, settings)); setBase(presetStamp(settings)); setReason(null); setError(null);
-    setOpen([]); setReset(n => n + 1); setRefused(null);
+    setOpen([]); setReset(n => n + 1); setRefused(null); setReverts([]);
   };
   // 다시 읽기: 최신 설정을 새로 받아 오고 고치던 변경안은 버린다. 설정 파일은 건드리지 않는다.
   const reload = () => { invalidateResources(); discard(); };
+  // 되돌리기: 그 변경이 바꾼 칸만 이전 값으로 변경안에 채운다(저장은 아래 '저장'을 눌러야 한다).
+  const fillRevert = (event: SettingsEvent, apply: (draft: Settings) => Settings) => {
+    setDraft(old => apply(old)); setReverts(old => [...old, event]);
+  };
+  // 최근 변경의 되돌리기는 활성 프리셋이 비교 목록 안이든 밖이든 비교 모드가 켜져 있으면 모두 끈다(일반 편집 잠금 locked와 따로 판정).
+  const lockReason = busy ? '저장 중입니다' : locked || settings.compare?.enabled ? '비교 모드 중 — 먼저 끄기'
+    : conflict || waiting ? '다른 곳에서 설정이 바뀌었습니다 — 최신 값을 읽은 뒤 되돌릴 수 있습니다' : null;
   const toggle = (role: string) => setOpen(old => old.includes(role) ? old.filter(r => r !== role) : [...old, role]);
   return <div style={{wordBreak: 'keep-all', overflowWrap: 'break-word', textWrap: 'pretty'}}>
     <p className="muted">역할 줄의 <strong>바꾸기</strong>로 값을 고른 뒤 표 아래 <strong>저장</strong>을 한 번 누르세요.
@@ -136,6 +151,7 @@ export function PresetEditor({data, settings, initialOpen = []}: {
                     </>
                     : <>{cells.value} → <strong>{next.value}</strong> <span className="pending-mark">(저장 전)</span></>)
                   : <ValueCell cells={cells} />}
+                  <OriginLine live={live} role={role} />
                   <CommandButton data={data} role={role} label={label} cells={cells} /></td>
                 <td>{listChanged
                   ? <>
@@ -178,9 +194,9 @@ export function PresetEditor({data, settings, initialOpen = []}: {
       if (blocked) return;
       setBusy(true); setError(null);
       try {
-        const saved = await save('/runners/preset-save', presetSaveFields(draft, reasonFor(reason ?? '', labels)), context.token);
+        const saved = await save('/runners/preset-save', presetSaveFields(draft, reason?.trim() ? reason : autoReason), context.token);
         setWarnings(saved.result.warnings ?? []);
-        setBase(presetStamp(draft)); setReason(null); setOpen([]); setReset(n => n + 1);
+        setBase(presetStamp(draft)); setReason(null); setOpen([]); setReset(n => n + 1); setReverts([]);
         context.notice('저장했습니다. 다음 발령부터 적용됩니다.');
       } catch (e) {
         const message = e instanceof Error ? e.message : '저장 실패';
@@ -197,16 +213,18 @@ export function PresetEditor({data, settings, initialOpen = []}: {
       {waiting && <p className="save-warn">다른 곳에서 설정이 바뀌어 저장되지 않았습니다. 최신 값을 읽는 중입니다.</p>}
       {conflict && <p className="save-warn">다른 곳에서 이 프리셋이 바뀌어 저장되지 않습니다. 최신 값을 불러온 뒤 다시 고르세요.{' '}
         <button type="button" disabled={busy} onClick={reload}>다시 읽기</button></p>}
+      {revertBlock && <p className="save-warn">{revertBlock}</p>}
       {unpicked.length > 0 && <p className="save-warn">{unpicked.map(label => `${label}: 모델을 고르세요`).join(' · ')}</p>}
       {noEffort.length > 0 && <p className="save-warn">{noEffort.map(label => `${label}: 강도를 고르세요`).join(' · ')}</p>}
       {emptyList.length > 0 && <p className="save-warn">{emptyList.map(label => `${label}: ${EMPTY_EFFORT_NOTE}`).join(' · ')}</p>}
       <label className="save-reason">바꾸는 이유
-        <input maxLength={500} value={reason ?? reasonFor('', labels)} disabled={busy}
+        <input maxLength={500} value={reason ?? autoReason} disabled={busy}
           placeholder="비우면 바꾼 역할 이름으로 채웁니다" onChange={event => setReason(event.target.value)} />
       </label>
     </form>
     <ErrorMessage error={error} /></div>}
     {!dirty && <ErrorMessage error={error} />}
     {warnings.map(message => <p className="warning" key={message}>{message}</p>)}
+    <RecentChanges data={data} saved={settings} draft={draft} locked={lockReason} fill={fillRevert} />
   </div>;
 }

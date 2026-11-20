@@ -1,6 +1,7 @@
 import { useRef } from "react";
 import { fallbackLabels } from "../runner-draft";
 import { HARD_ROLE, SECRETARY_ROLE } from "../preset-draft";
+import { originLine, type OriginSession } from "../launch-origin";
 import type { Choice, RunnersData, Settings } from "./Runners";
 
 // 모델을 아직 안 고른 초안은 빈 글자로 두지 않고 그렇다고 말한다.
@@ -46,6 +47,12 @@ export function NumberedList({ items, empty }: { items: string[]; empty: string 
 export const ValueCell = ({ cells }: { cells: Cells }) =>
   cells.seniors?.length ? <NumberedList items={cells.seniors} empty="" /> : <>{cells.value}</>;
 
+// 역할 줄의 '값의 출처': 지금 살아 있는 그 프로필 세션들이 어떻게 떴는지의 요약. 살아 있는 세션이 없거나 세션 상태를 모르면 아무것도 그리지 않는다.
+export function OriginLine({ live, role }: { live?: OriginSession[] | null; role: string }) {
+  const line = originLine(live, role);
+  return line ? <span className="origin" title="지금 떠 있는 세션이 설정·대체 후보·덮어쓰기 중 무엇으로 떴는지 센 것입니다(설정값 자체의 출처가 아닙니다)">{line}</span> : null;
+}
+
 // 발령 때 채워질 명령은 길어서 표 칸에 두지 않는다. 줄마다 작은 버튼으로 기본 <dialog> 팝업을 열어 지금 값과 대체 후보의 명령을 본다.
 // 읽기 전용 화면에서도 같은 길로 본다. 명령 글은 서버가 만든 값을 그대로 보인다(화면에서 틀을 다시 조립하지 않는다).
 export function CommandButton({ data, role, label, cells }: { data: RunnersData; role: string; label: string; cells: Cells }) {
@@ -72,7 +79,7 @@ export function CommandButton({ data, role, label, cells }: { data: RunnersData;
   );
 }
 
-export function RunnerSummary({ data }: { data: RunnersData }) {
+export function RunnerSummary({ data, live }: { data: RunnersData; live?: OriginSession[] | null }) {
   return (
     <div className="table-scroll runners-summary">
       <table>
@@ -91,6 +98,7 @@ export function RunnerSummary({ data }: { data: RunnersData }) {
                 <th>{label}</th>
                 <td>
                   <ValueCell cells={cells} />
+                  <OriginLine live={live} role={role} />
                   <CommandButton data={data} role={role} label={label} cells={cells} />
                 </td>
                 <td>
