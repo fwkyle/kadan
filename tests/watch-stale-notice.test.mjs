@@ -79,6 +79,47 @@ test('분류(발령 순서): 발령 시각을 모르면 라운드로 넘어간 �
   assert.equal(bigNoTime.find(c => c.id === 'r1').movedOn, undefined);
 });
 
+// 검수 changes(2026-11-20): 같은 카드·역할의 재발령이 sentAt을 덮어도 큰 라운드의 첫 발령 시각은 남아야 한다.
+const lowHigh = () => {
+  const {card} = mk();
+  return [card('low', '작업자-1', {round: '1'}), card('high', '검수자-2', {round: '2'})];
+};
+const noticeKeys = (cards, entries) => planStaleNotices({cards, entries, now: NOW, liveSessions: new Set()}).flatMap(p => p.keys);
+
+test('분류(첫 발령 보존): 먼저 발령된 큰 라운드를 같은 담당에게 재발령해도 작은 라운드는 넘어간 것이 아니다', () => {
+  const [low, high] = lowHigh();
+  const entries = [send('high', '검수자-2', '2026-10-19T05:00:00Z'), send('low', '작업자-1', '2026-10-19T05:10:00Z'),
+    send('high', '검수자-2', '2026-10-19T05:20:00Z')];
+  const cs = center([low, high], entries);
+  assert.equal(cs.find(c => c.id === 'low').movedOn, undefined);
+  assert.equal(bucketOf(cs, 'low'), 'stuck');
+  assert.deepEqual(noticeKeys([low, high], entries), []);
+  // 마지막 발령(sentAt)의 뜻은 그대로고 첫 발령은 따로 남는다
+  const run = cs.find(c => c.id === 'high').runs[0];
+  assert.equal(run.sentAt, '2026-10-19T05:20:00Z');
+  assert.equal(run.firstSentAt, '2026-10-19T05:00:00Z');
+});
+
+test('분류(첫 발령 보존): 큰 라운드의 첫 발령 시각을 모르면 뒤 재발령 시각으로 순서를 지어내지 않는다', () => {
+  const [low, high] = lowHigh();
+  const entries = [{...send('high', '검수자-2'), t: undefined}, send('low', '작업자-1', '2026-10-19T05:10:00Z'),
+    send('high', '검수자-2', '2026-10-19T05:20:00Z')];
+  const cs = center([low, high], entries);
+  assert.equal(cs.find(c => c.id === 'low').movedOn, undefined);
+  assert.equal(bucketOf(cs, 'low'), 'stuck');
+  assert.deepEqual(noticeKeys([low, high], entries), []);
+});
+
+test('분류(첫 발령 보존): 큰 라운드가 나중에 발령된 뒤 시각 없는 재발령이 와도 round 표시는 유지된다', () => {
+  const [low, high] = lowHigh();
+  const entries = [send('low', '작업자-1', '2026-10-19T05:10:00Z'), send('high', '검수자-2', '2026-10-19T05:15:00Z'),
+    {...send('high', '검수자-2'), t: undefined}];
+  const cs = center([low, high], entries);
+  assert.equal(cs.find(c => c.id === 'low').movedOn, 'round');
+  assert.equal(bucketOf(cs, 'low'), 'stale');
+  assert.deepEqual(noticeKeys([low, high], entries), ['repo/low']);
+});
+
 test('분류: 취소·일시정지된 옛 실행은 오래된 미확정이 아니라 제 칸에 남고 재안내도 없다', () => {
   const {card, store} = mk();
   const a = card('c1', '작업자-1', {work: 'w1'}), b = card('h1', '작업자-1', {work: 'w3'}), next = card('n1', '작업자-1', {work: 'w2'});

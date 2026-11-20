@@ -8,11 +8,16 @@ const time = value => Date.parse(value) || 0;
 const heldAt = r => Object.hasOwn(r, 'ownedAt') ? time(r.ownedAt) : time(r.sentAt);
 const ownRuns = card => (card.runs ?? []).filter(r => r.role === card.role);
 const heldSince = card => Math.max(0, ...ownRuns(card).map(heldAt));
-// 아직 발령 전이거나 접힌 카드는 뒤 라운드로 세지 않는다.
+// 그 발령 행의 첫 발령 시각(0=모름). 재발령이 sentAt을 덮어도 firstSentAt은 처음 값이 남는다. 이 칸이 없는 행은 sentAt으로 본다.
+const firstOf = r => Object.hasOwn(r, 'firstSentAt') ? time(r.firstSentAt) : time(r.sentAt);
+// 아직 발령 전이거나 접힌 카드는 뒤 라운드로 세지 않는다. 첫 발령 시각이 하나라도 알려진 카드만 발령된 것으로 본다.
 const NOT_STARTED = new Set(['draft', 'ready', 'cancelled', 'archived', 'hold', 'superseded']);
-const started = card => !NOT_STARTED.has(card.status) && (card.runs ?? []).some(r => time(r.sentAt));
-// 그 실행의 첫 발령 시각(모르면 0). 라운드 판정은 이 시각이 상대 실행이 붙은 시각보다 뒤일 때만 쓴다.
-const firstSent = card => Math.min(...(card.runs ?? []).map(r => time(r.sentAt)).filter(Boolean));
+const started = card => !NOT_STARTED.has(card.status) && (card.runs ?? []).some(firstOf);
+// 그 카드의 첫 발령 시각: 발령 행들의 첫 발령 중 가장 이른 것. 행 하나라도 시각을 모르면 먼저인지 알 수 없으니 0(모름).
+const firstSent = card => {
+  const firsts = (card.runs ?? []).map(firstOf);
+  return firsts.length && firsts.every(Boolean) ? Math.min(...firsts) : 0;
+};
 // 끝났다고 볼 근거: 지금 담당의 실행이 실패했거나 세션이 사라졌다. 결과 없이 진행 중일 수 있는 실행은 넘기지 않는다.
 const ended = card => ownRuns(card).some(r => r.state === 'failed' || r.state === 'orphaned');
 
