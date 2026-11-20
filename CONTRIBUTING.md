@@ -44,7 +44,8 @@ This repository intentionally ships no `AGENTS.md` / `CLAUDE.md`. If you work wi
   (`tests/helpers/run-sweep.mjs`). Command lines and environment values are not ownership evidence:
   if both socket and working folder are outside, the test must clean up its own process.
   The runner deletes its run folder afterward. Do not run `node --test` bare.
-  Tests that need tmux skip when it is absent.
+  Tests that need tmux skip when it is absent. `npm test -- --shard=N/M` runs only every M-th file of
+  the name-sorted list (CI runs Ubuntu as `1/2` and `2/2` in parallel); the shards together are all files.
 - `scripts/watch-judge.sh` — example judge command for `kadan watch`; requires `KADAN_JUDGE_MODEL`.
 - `skills/` — agent skills that drive Kadan (conductor, supervisor, secretary).
 - `docs/` — current rules; `docs/design.md` explains the locked rules and ledger format.

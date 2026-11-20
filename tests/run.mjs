@@ -12,6 +12,7 @@ import {spawnSync} from 'node:child_process';
 import {isDefaultHome} from '../src/live-floor-guard.mjs';
 import {runTestFile} from './helpers/run-file.mjs';
 import {sweepRun} from './helpers/run-sweep.mjs';
+import {parseShard, selectShard} from './helpers/shard.mjs';
 
 // 최장 개별 시험 86.6초(2026-10-29)와 같은 파일의 나머지 시험·병렬 지연에 여유를 둔다.
 const FILE_TIMEOUT_MS = 300_000;
@@ -80,10 +81,13 @@ function reportNetHits() {
 const dir = new URL('./', import.meta.url);
 const options = [], selected = [];
 let concurrency = Math.max(1, os.availableParallelism() - 1);
+let shard = null; // --shard=번호/전체: 시험 파일 목록의 한 조각만 돈다(CI 우분투 잡 분할용)
 for (let i = 2; i < process.argv.length; i++) {
   const arg = process.argv[i];
   if (arg.startsWith('--test-concurrency')) {
     concurrency = Number(arg.includes('=') ? arg.split('=')[1] : process.argv[++i]);
+  } else if (arg === '--shard' || arg.startsWith('--shard=')) {
+    shard = parseShard(arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : process.argv[++i] ?? '');
   } else if (arg.startsWith('-')) {
     options.push(arg);
     if (!arg.includes('=') && /^--test-(name-pattern|skip-pattern|reporter|reporter-destination|timeout)$/.test(arg)) {
@@ -92,8 +96,10 @@ for (let i = 2; i < process.argv.length; i++) {
   } else selected.push(arg);
 }
 if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error('시험 동시 개수는 양의 정수여야 합니다');
-const files = selected.length ? selected
+const allFiles = selected.length ? selected
   : fs.readdirSync(dir).filter(f => f.endsWith('.test.mjs')).sort().map(f => `tests/${f}`);
+const files = shard ? selectShard(allFiles, shard) : allFiles;
+if (shard) console.error(`시험 조각 ${shard.index}/${shard.total}: 전체 ${allFiles.length}개 중 ${files.length}개`);
 const controller = new AbortController();
 let interrupted = null; // 중단 신호를 받으면 시험 쪽 종료 코드와 상관없이 128+신호 번호로 끝낸다
 for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) {

@@ -13,11 +13,16 @@ concurrency:
 
 jobs:
   test:
+    name: test (${{ matrix.os }}${{ matrix.shard != '' && format(' {0}', matrix.shard) || '' }})
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # 우분투는 시험 파일을 두 조각으로 나눠 동시에 돈다(tests/run.mjs --shard). 맥은 한 잡에서 전체.
+        include:
+          - {os: ubuntu-latest, shard: '1/2'}
+          - {os: ubuntu-latest, shard: '2/2'}
+          - {os: macos-latest, shard: ''}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +42,12 @@ jobs:
       - run: npm --prefix gui ci
       - run: npm run test:gui
       - run: npm run build:gui
-      - run: npm test
+      - name: npm test
+        # 조각 값이 비면(맥) 인자 없이 전체를 돈다. 값은 위 matrix의 고정 문자열이다.
+        run: npm test -- ${SHARD:+--shard=$SHARD}
         env:
           KADAN_HOME: ${{ runner.temp }}/kadan-home
+          SHARD: ${{ matrix.shard }}
   public-strings:
     runs-on: ubuntu-latest
     timeout-minutes: 5
