@@ -69,11 +69,14 @@ export function captureSource({conversation, env = process.env, inspect = proces
 
 // Workspace/user settings are reloaded in the same cwd. Per-launch overrides need explicit handling;
 // never silently drop a deny list or a restricted tool set while claiming equivalent permissions.
+// --allowed-tools/--allowedTools is only a pre-approval list: dropping it can make the new conductor ask
+// more often (never less), so it is not a restriction and is not rejected. Its value is not carried over
+// (ps cannot restore quoting such as `Bash(git diff:*)` exactly).
 export function checkLaunchPermissions(ai, run = spawnSync) {
   if (!ai) return;
   const result = run('ps', ['-ww', '-p', ai.pid, '-o', 'args='], {encoding: 'utf8', timeout: 3000});
   if (result.status !== 0) throw new Error('원본 실행 권한 옵션을 확인하지 못했습니다.');
-  const overrides = ['allowedTools', 'allowed-tools', 'disallowedTools', 'disallowed-tools',
+  const overrides = ['disallowedTools', 'disallowed-tools',
     'tools', 'restricted', 'settings', 'setting-sources', 'add-dir', 'permission-prompt-tool'];
   const pattern = new RegExp(`(?:^|\\s)--(?:${overrides.join('|')})(?:[=\\s]|$)`);
   if (pattern.test(result.stdout)) {
