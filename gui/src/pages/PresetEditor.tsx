@@ -117,6 +117,7 @@ export function PresetEditor({data, settings, initialOpen = []}: {
             <th>역할</th>
             <th>지금 값</th>
             <th>대체 후보 (순서대로)</th>
+            <th>편집</th>
           </tr>
         </thead>
         <tbody>
@@ -126,12 +127,7 @@ export function PresetEditor({data, settings, initialOpen = []}: {
             const listChanged = edited && !sameList(cells.fallbacks, next.fallbacks);
             return <Fragment key={role}>
               <tr className={edited ? 'is-changed' : undefined}>
-                <th><div className="role-head"><span className="role-name">{label}</span>
-                  <button type="button" className="row-edit" aria-expanded={isOpen}
-                    disabled={!isOpen && frozen} onClick={() => toggle(role)}>
-                    {isOpen ? '닫기' : '바꾸기'}
-                  </button>
-                </div></th>
+                <th>{label}</th>
                 <td>{edited && cells.value !== next.value
                   ? (cells.seniors
                     ? <>
@@ -147,9 +143,16 @@ export function PresetEditor({data, settings, initialOpen = []}: {
                     <div><strong>바꿀 값</strong> <span className="pending-mark">(저장 전)</span>: <List items={next.fallbacks} empty="없음" /></div>
                   </>
                   : <List items={cells.fallbacks} empty={cells.note} />}</td>
+                {/* '바꾸기'는 역할 칸이 아니라 오른쪽 끝 '편집' 칸에 둔다(2026-11-20 [kyle]). 펼침 편집·저장 흐름은 그대로다. */}
+                <td className="edit-cell">
+                  <button type="button" className="row-edit" aria-expanded={isOpen}
+                    disabled={!isOpen && frozen} onClick={() => toggle(role)}>
+                    {isOpen ? '닫기' : '바꾸기'}
+                  </button>
+                </td>
               </tr>
               {isOpen && <tr className="runner-edit-row">
-                <td colSpan={3}>
+                <td colSpan={4}>
                   <div className="runner-edit">
                     <fieldset disabled={frozen}>
                       <legend>{label} 바꾸기</legend>

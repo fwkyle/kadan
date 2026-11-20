@@ -170,10 +170,17 @@ test("시니어 '지금 값'은 옆으로 잇지 않고 대체 후보와 같은 
   }
 });
 
-test("역할 칸: 이름과 바꾸기 버튼이 한 묶음(같은 줄)에 있고 강제 줄바꿈이 없다", () => {
-  const html = editor(dataOf("empty"));
-  assert.match(html, /<th><div class="role-head"><span class="role-name">작업자<\/span><button type="button" class="row-edit" aria-expanded="false">바꾸기<\/button><\/div><\/th>/);
-  assert.doesNotMatch(html, /<th>[^<]*<br\/?>/);
+test("편집 표: 바꾸기 버튼은 역할 칸이 아니라 오른쪽 끝 '편집' 칸에 있다(읽기 전용 요약표는 세 칸 그대로)", () => {
+  const html = editor(dataOf("empty"), ["reviewer"]);
+  assert.match(html, /<thead><tr><th>역할<\/th><th>지금 값<\/th><th>대체 후보 \(순서대로\)<\/th><th>편집<\/th><\/tr><\/thead>/);
+  assert.match(html, /<tr><th>작업자<\/th><td>/, "역할 칸에는 이름만 있다");
+  assert.doesNotMatch(html, /<th>[^<]*<(br|button|div)/, "역할 칸에 버튼·강제 줄바꿈이 없다");
+  assert.equal([...html.matchAll(/<td class="edit-cell"><button type="button" class="row-edit" aria-expanded="(true|false)">(바꾸기|닫기)<\/button><\/td><\/tr>/g)].length,
+    Object.keys(roles).length, "줄마다 마지막 칸에 버튼 하나");
+  assert.match(html, /<tr class="runner-edit-row"><td colSpan="4">/, "펼친 편집 칸은 네 칸 전체 폭");
+  const summary = render(React.createElement(RunnerSummary, { data: dataOf("empty") }));
+  assert.match(summary, /<thead><tr><th>역할<\/th><th>지금 값<\/th><th>대체 후보 \(순서대로\)<\/th><\/tr><\/thead>/);
+  assert.doesNotMatch(summary, /편집|row-edit/);
 });
 
 test("발령 명령 팝업: 지금 값 명령과 대체 후보 명령이 순서대로, 시니어는 한 명씩 줄로 보인다", () => {
@@ -189,11 +196,11 @@ test("발령 명령 팝업: 지금 값 명령과 대체 후보 명령이 순서�
 
 test("편집 칸: 대체 후보·시니어 줄마다 수정 버튼이 있고(제출 버튼이 아니다), 가득 찬 시니어는 추가만 막히고 안내가 보인다", () => {
   const html = editor(withSeniors(), ["reviewer", "senior"]);
-  const reviewer = html.slice(html.indexOf("검수자 바꾸기"), html.indexOf('<span class="role-name">일반감독'));
+  const reviewer = html.slice(html.indexOf("검수자 바꾸기"), html.indexOf("<th>일반감독</th>"));
   assert.equal([...reviewer.matchAll(/<button type="button">수정<\/button>/g)].length, 2, "대체 후보 두 줄");
   assert.match(reviewer, /<button class="primary" value="add">대체 후보 추가<\/button>/, "가득 찬 목록이 아니면 추가는 지금처럼 켜져 있다");
   assert.doesNotMatch(reviewer, /자리 바꾸기|고치는 중|최대 \d/);
-  const senior = html.slice(html.indexOf("시니어 바꾸기"), html.indexOf('<span class="role-name">설명 AI'));
+  const senior = html.slice(html.indexOf("시니어 바꾸기"), html.indexOf("<th>설명 AI</th>"));
   assert.equal([...senior.matchAll(/<button type="button">수정<\/button>/g)].length, 2, "시니어 두 줄");
   assert.match(senior, /최대 2명까지입니다 — 줄의 &#x27;수정&#x27;으로 바꾸거나 삭제한 뒤 추가하세요\./);
   assert.match(senior, /<button class="primary" value="add" disabled="">시니어 추가<\/button>/);
