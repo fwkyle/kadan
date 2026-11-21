@@ -165,14 +165,19 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
   }
   if (result.secretaryError && !auto) process.exitCode = 1;
   // 로티 없이 숨김으로 뜬 비서에 로티가 뜬 뒤 탭을 한 번 붙인다(자동 주기만). 실패는 기록·출력하지 않는다.
+  // 이 줄은 주기 전체 출력(감시기 안내 등)과 따로 "같으면 한 번"을 판정한다: 다른 줄이 끼는 주기에 같은 비서 줄이 다시 나오지 않게.
+  const secretaryLines = [];
   if (auto && tmuxFloor && result.secretary === "reused") {
     try {
       const sessionOfSecretary = sessionName("비서");
       const attached = withRecoveryLock(home, "kadan-비서", () => attachHiddenSecretary({
         home, floor, session: sessionOfSecretary, readEntries: () => readSystemLedger(home),
         record: entry => appendLedger(entry, home) }));
-      if (attached.attached) lines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}`);
-      else { const failure = attachFailureLine(attached); if (failure) lines.push(failure); } // 같은 줄은 changedOutput이 한 번만 남긴다
+      if (attached.attached) {
+        secretaryLines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}${attached.restoredFrom
+          ? ` (옛 탭 ${String(attached.restoredFrom).slice(0, 8)} ${attached.oldState}를 바꿈)` : ""}`);
+      }
+      else { const failure = attachFailureLine(attached); if (failure) secretaryLines.push(failure); } // 같은 줄은 changedOutput이 한 번만 남긴다
     } catch { /* 복원이 진행 중이면 다음 주기에 다시 본다 */ }
   }
   // 자동 실행은 비서를 새로 띄우거나 복원했을 때만 대화 복원 정보를 갱신한다(매분 프로세스 조회를 하지 않는다).
@@ -194,8 +199,10 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
     }
   }
   // 손상 상태는 prepareRevive가 이미 한 번 알렸다. 출력 중복 기록으로 손상 파일에 쓰지 않는다.
-  if (auto) for (const line of prepared.corrupt ? lines : changedOutput(home, lines)) {
-    console.log(`[${new Date().toISOString()}] ${line}`);
+  if (auto) {
+    const shown = prepared.corrupt ? [...lines, ...secretaryLines]
+      : [...changedOutput(home, lines), ...changedOutput(home, secretaryLines, "lastSecretaryOutput")];
+    for (const line of shown) console.log(`[${new Date().toISOString()}] ${line}`);
   }
 }
 
