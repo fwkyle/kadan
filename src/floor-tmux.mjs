@@ -170,6 +170,8 @@ export function parseRottieCreateResult(stdoutText) {
         ok: true,
         id: value.result.terminal.id,
         pid: value.result.terminal.pid,
+        // 로티는 같은 멱등 키·같은 인자에 기존 탭을 돌려주며 created:false를 준다. 이번 호출이 만든 탭이 아니라는 표시만 더한다.
+        ...(value.result.created === false ? { created: false } : {}),
       };
     }
     return { ok: false, code: value?.error?.code || "ROTTIE_UNKNOWN" };
@@ -346,6 +348,21 @@ export function clientAttached(session) {
   return result.status === 0 && result.stdout.trim().length > 0;
 }
 
+// 세션에 붙은 client 수를 "확실히 읽었을 때만" 숫자로 준다: {ok: true, count} | {ok: false, code}.
+// clientAttached는 list-clients 실패(서버 없음·세션 없음·시간 초과)도 false로 접지만 여기서는 "모름"으로 따로 둔다.
+// 제어 모드 client(로티 연동 탭의 중계)도 센다. `=`로 정확히 그 이름의 세션만 가리킨다.
+export function sessionClientCount(session, { run = tmux, timeoutMs = 5000 } = {}) {
+  try {
+    const result = run(["list-clients", "-t", `=${session}`, "-F", "#{client_pid}"], undefined, { timeout: timeoutMs });
+    if (result.status !== 0) return { ok: false, code: result.error?.code || `tmux-exit-${result.status}` };
+    const lines = String(result.stdout ?? "").split("\n").map(line => line.trim()).filter(Boolean);
+    if (lines.some(line => !/^\d+$/.test(line))) return { ok: false, code: "tmux-output-unreadable" };
+    return { ok: true, count: lines.length };
+  } catch (error) {
+    return { ok: false, code: error.code || "tmux-error" };
+  }
+}
+
 function waitForClientDefault(session, tries = 12) {
   for (let i = 0; i < tries; i++) {
     if (clientAttached(session)) return true;
@@ -388,7 +405,7 @@ export function openWindow(session, platform = process.platform, deps = {}) {
       warn("창 rottie: 패널은 만들어졌으나 tmux 클라이언트 미접속");
       return null;
     }
-    return { method: "rottie", rottieTerminalId: result.id };
+    return { method: "rottie", rottieTerminalId: result.id, ...(result.created === false ? { created: false } : {}) };
   }
 
   const result = orcaWindowCreate({

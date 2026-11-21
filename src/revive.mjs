@@ -38,6 +38,7 @@ function validShape(v) {
   if (!isPlain(v)) return false;
   for (const key of ['targets', 'history', 'blocked', 'lastResult', 'restarts']) if (key in v && !isPlain(v[key])) return false;
   if ('lastOutput' in v && typeof v.lastOutput !== 'string') return false;
+  if ('lastSecretaryOutput' in v && typeof v.lastSecretaryOutput !== 'string') return false;
   if ('targets' in v && !Object.values(v.targets).every((t) => isPlain(t) && typeof t.state === 'string')) return false;
   if ('history' in v && !Object.values(v.history).every((h) => Array.isArray(h) && h.every(Number.isFinite))) return false;
   if ('blocked' in v && !Object.values(v.blocked).every(isPlain)) return false;
@@ -277,10 +278,11 @@ export function finishRevive({ home, pending, results, now = Date.now(), ops }) 
 }
 
 // 바뀐 것이 있을 때만 로그를 쓴다: 직전과 같은 출력이면 빈 배열, 다르면 그대로. 아무 일 없으면 직전 출력도 비운다.
-export function changedOutput(home, lines) {
+// key: 비교할 상태 칸. 기본은 한 주기 전체 출력(lastOutput)이고, 다른 줄 묶음과 섞이면 안 되는 줄(비서 탭 붙이기)은 자기 칸을 쓴다.
+export function changedOutput(home, lines, key = 'lastOutput') {
   const state = readReviveState(home), text = lines.join('\n');
-  if (state.lastOutput === text) return [];
-  state.lastOutput = text;
+  if ((state[key] ?? '') === text) return [];
+  state[key] = text;
   writeReviveState(home, state);
   return lines;
 }
