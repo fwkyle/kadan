@@ -531,10 +531,10 @@ const EXPECTED = [
     attached: false, reason: 'tab-unknown', calls: ['status', 'show old', 'remove old'], records: [], line: refused('ROTTIE_TERMINAL_QUERY_FAILED')},
   {name: 'remove 시간 초과면 열지 않는다', remove: {old: {timeout: true}},
     attached: false, reason: 'tab-unknown', calls: ['status', 'show old', 'remove old'], records: [], line: refused('ETIMEDOUT')},
-  {name: 'create가 created:false로 기존 탭을 돌려주면 열지 않은 것이다(닫기·제거·기록 0)', creates: [{id: 'existing-tab', created: false}],
-    attached: false, reason: 'open-failed', calls: ['status', 'show old', 'remove old', 'create'], records: [],
-    line: reused('existing을 돌려줌(created=false)')},
-  {name: 'create가 옛 탭과 같은 ID를 돌려줘도 열지 않은 것이다', creates: [{id: 'old'}],
+  {name: 'create가 created:false로 옛 탭과 다른 ID를 돌려주면 앞 주기에 우리가 만든 탭이므로 열린 것으로 본다(기록 1·닫기 0)',
+    creates: [{id: 'existing-tab', created: false}], attached: true, calls: ['status', 'show old', 'remove old', 'create'],
+    records: swapped('existing-tab', 'old', 'unknown'), line: null},
+  {name: 'create가 옛 탭과 같은 ID를 돌려주면 열지 않은 것이다(기록 0·닫기 0)', creates: [{id: 'old'}],
     attached: false, reason: 'open-failed', calls: ['status', 'show old', 'remove old', 'create'], records: [],
     line: reused('old을 돌려줌(created=없음, 옛 탭과 같은 ID)')},
   {name: 'created:false + 같은 ID', creates: [{id: 'old', created: false}],
@@ -588,48 +588,72 @@ test('X2: after remove succeeded but create failed, the next cycle reopens throu
 });
 
 // 로티는 제거한 탭의 키를 기억해 같은 키를 다시 쓰면 인자가 같아도 ROTTIE_IDEMPOTENCY_CONFLICT를 준다(Rottie cli/memory.rs resolve_idempotency).
-// 가짜 로티가 그 규칙을 그대로 흉내 낸다: remove하면 그 탭의 키가 기억되고, 기억된 키로 create하면 충돌.
-function rottieRememberingKeys(initial) {
-  const tabKey = new Map(Object.entries(initial)); const retained = new Set(); const keys = []; let made = 0;
+// 살아 있는 탭의 키로 같은 인자를 다시 요청하면 그 탭을 created:false로 돌려준다(Rottie cli/terminal.rs). 가짜 로티가 이 규칙을 그대로 흉내 낸다:
+// remove한 탭은 이후 show가 NOT_FOUND, 그 탭의 키로 create하면 충돌, 살아 있는 탭의 키로 create하면 그 탭을 created:false로 돌려준다.
+// loseReplyOnce: 처음 적용된 create의 응답만 놓친다(탭은 만들어졌고 키도 저장됐는데 카단은 시간 초과·빈 출력을 받는다).
+function rottieRememberingKeys(initial, {loseReplyOnce = false} = {}) {
+  const keyToTab = new Map(Object.entries(initial).map(([id, key]) => [key, id]));
+  const removed = new Set(); const created = []; const keys = []; let lose = loseReplyOnce;
   const json = (value, status = 0) => ({status, stdout: JSON.stringify(value)});
   const run = (bin, args) => {
     const at = args.indexOf('--terminal'); const id = at >= 0 ? args[at + 1] : null;
     if (args[0] === 'status') return json({ok: true});
-    if (args[1] === 'show') return json(shownState('unknown'));
-    if (args[1] === 'remove') { retained.add(tabKey.get(id)); tabKey.delete(id); return json({ok: true}); }
+    if (args[1] === 'show') return removed.has(id) ? json({ok: false, error: {code: 'ROTTIE_TERMINAL_NOT_FOUND'}}, 3) : json(shownState('unknown'));
+    if (args[1] === 'remove') { removed.add(id); return json({ok: true}); }
     if (args[1] === 'create') {
       const key = args[args.indexOf('--idempotency-key') + 1]; keys.push(key);
-      if (retained.has(key)) return json({ok: false, error: {code: 'ROTTIE_IDEMPOTENCY_CONFLICT'}}, 2);
-      const id2 = `tab-${++made}`; tabKey.set(id2, key);
+      if (keyToTab.has(key)) {
+        const saved = keyToTab.get(key);
+        return removed.has(saved) ? json({ok: false, error: {code: 'ROTTIE_IDEMPOTENCY_CONFLICT'}}, 2)
+          : json({ok: true, result: {created: false, terminal: {id: saved, pid: 1}}});
+      }
+      const id2 = `tab-${created.length + 1}`; keyToTab.set(key, id2); created.push(id2);
+      if (lose) { lose = false; return {status: null, stdout: '', error: Object.assign(new Error('spawnSync ETIMEDOUT'), {code: 'ETIMEDOUT'})}; }
       return json({ok: true, result: {created: true, terminal: {id: id2, pid: 1}}});
     }
     return {status: 1, stdout: ''};
   };
-  return {run, keys};
+  return {run, keys, created};
 }
 const hiddenWith = tab => [{kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30', window: 'hidden', rottieTerminalId: tab}];
+const DEFAULT_KEY = 'kadan-kadan-비서-30';
 
-test('X3: same pane PID after an app-only restart — the removed old tab\'s key conflicts, so the retry key is new every time (never exhausted)', async () => {
-  const DEFAULT_KEY = 'kadan-kadan-비서-30';
+test('X3: same pane PID after an app-only restart — the retry key is decided by the old tab being replaced, so each restart opens its own tab', async () => {
   const fake = rottieRememberingKeys({old: DEFAULT_KEY});            // 옛 탭은 기본 키로 만들어졌다(같은 pane PID)
   const first = await runCycle({run: fake.run}, {entries: hiddenWith('old')});
   assert.deepEqual([first.result.attached, first.result.rottieTerminalId], [true, 'tab-1']);
-  assert.equal(fake.keys[0], DEFAULT_KEY);                           // 기본 키는 충돌(옛 탭 제거로 기억됨)
-  assert.match(fake.keys[1], /^kadan-kadan-비서-30-secretary-[0-9a-z]+-[0-9a-z]+$/);
-  // 앱을 또 다시 띄웠다(여전히 같은 pane PID): 방금 만든 탭도 unknown이 되어 같은 길을 다시 간다. 고정 재시도 키였다면 여기서 막힌다.
+  assert.deepEqual(fake.keys, [DEFAULT_KEY, `${DEFAULT_KEY}-after-old`]);   // 기본 키는 충돌(옛 탭 제거), 재시도 키는 옛 탭 ID에서 정해진다
+  // 앱을 또 다시 띄웠다(여전히 같은 pane PID): 방금 만든 탭이 옛 탭이 되어 같은 길을 다시 간다. 고정 재시도 키였다면 여기서 막힌다.
   const second = await runCycle({run: fake.run}, {entries: hiddenWith('tab-1')});
   assert.deepEqual([second.result.attached, second.result.rottieTerminalId], [true, 'tab-2']);
-  assert.equal(fake.keys.length, 4);
-  assert.equal(new Set(fake.keys.filter(key => key.includes('-secretary-'))).size, 2, '재시도 키는 호출마다 다르다');
+  assert.deepEqual(fake.keys.slice(2), [DEFAULT_KEY, `${DEFAULT_KEY}-after-tab-1`]);   // 다른 옛 탭이면 다른 키
+  assert.equal(new Set(fake.keys.filter(key => key.includes('-after-'))).size, 2, '옛 탭마다 키가 다르다');
   // 재부팅이면 pane PID가 달라 기본 키부터 비어 있다: 충돌도 재시도도 없이 한 번에 만든다.
   const fresh = rottieRememberingKeys({old: DEFAULT_KEY});
-  const entries = [{kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30', window: 'hidden', rottieTerminalId: 'old'}];
+  const entries = hiddenWith('old').map(e => ({...e, panePid: '31'}));
   const open = await realOpen();
-  const reboot = attachHiddenSecretary({home: 'h', floor: {pid: () => '31'}, session: 'kadan-비서', readEntries: () => entries.map(e => ({...e, panePid: '31'})),
+  const reboot = attachHiddenSecretary({home: 'h', floor: {pid: () => '31'}, session: 'kadan-비서', readEntries: () => entries,
     record: () => {}, readSetting: () => SETTING,
     open: c => openSecretaryTab({...c, env: {KADAN_WINDOW: 'rottie'}, platform: 'darwin', readSetting: () => SETTING, run: fresh.run, open, readClients: zeroScreens})});
   assert.equal(reboot.attached, true);
   assert.deepEqual(fresh.keys, ['kadan-kadan-비서-31']);
+});
+
+test('X6: create applied but the reply was lost — the next cycle asks with the same key, gets that tab back (created:false, another id), records it once, leaves one tab', async () => {
+  const fake = rottieRememberingKeys({old: DEFAULT_KEY}, {loseReplyOnce: true});
+  const entries = hiddenWith('old');
+  const a = await runCycle({run: fake.run}, {entries});
+  assert.deepEqual([a.result.attached, a.result.reason, a.recorded.length], [false, 'open-failed', 0]);   // 응답을 놓쳤으니 기록할 탭 ID가 없다
+  assert.deepEqual(fake.created, ['tab-1']);                                                              // 그래도 탭은 하나 만들어졌다
+  // 다음 주기: 옛 탭은 이미 지워져 NOT_FOUND 경로(tmux 화면 수 확인 없음). 같은 옛 탭 ID에서 같은 재시도 키가 만들어진다.
+  const b = await runCycle({run: fake.run}, {entries, clients: () => { throw new Error('NOT_FOUND 경로는 tmux에 묻지 않는다'); }});
+  assert.deepEqual(fake.keys, [DEFAULT_KEY, `${DEFAULT_KEY}-after-old`, DEFAULT_KEY, `${DEFAULT_KEY}-after-old`]);
+  assert.deepEqual(fake.created, ['tab-1'], '탭을 하나 더 만들지 않았다');
+  assert.deepEqual([b.result.attached, b.result.rottieTerminalId, b.result.oldState], [true, 'tab-1', '없음']);
+  assert.deepEqual(b.recorded.map(e => [e.rottieTerminalId, e.restoredFrom, e.oldState]), swapped('tab-1', 'old', '없음'));
+  const c = await runCycle({run: fake.run}, {entries});
+  assert.equal(c.result.reason, 'has-tab');
+  assert.equal(fake.created.length, 1);
 });
 
 test('X4: remove refused in consecutive cycles creates nothing; once the API recovers the next cycle opens exactly one tab', async () => {

@@ -154,3 +154,67 @@ test('비서 탭(실제 격리 tmux 화면 수): 화면이 붙어 있거나 옛 
     tmux('kill-session', '-t', `=${name}`);
   }
 });
+
+// 3차 검수(2026-11-21): 앱만 재시작해 pane PID가 같으면 옛 탭 제거 직후 기본 키가 충돌한다. 충돌 재시도 키가 호출마다 달랐을 때는
+// create가 적용됐는데 응답을 놓치면 다음 주기가 다른 키로 탭을 하나 더 만들었다. 재시도 키는 교체 대상 옛 탭 ID에서 정해져야 한다.
+// 로티는 가짜(키 기억·응답 유실 흉내), 새 탭의 tmux client는 실제 격리 tmux의 제어 client로 만든다.
+test('비서 탭(실제 격리 tmux): create가 적용됐는데 응답을 놓쳐도 다음 주기가 같은 키로 그 탭을 돌려받아 탭 하나·기록 1개로 끝난다', {skip: !socket.startsWith('kadan-test-')}, () => {
+  const name = `kadan-lost-${process.pid}`;
+  const setting = {version: 1, window: 'rottie', rottieBin: '/fixture/rottie'};
+  const readers = [];
+  const screens = () => sessionClientCount(name);
+  const attachControl = expected => {
+    const child = spawn('tmux', ['-L', socket, '-C', 'attach', '-t', `=${name}`], {stdio: ['pipe', 'ignore', 'ignore']});
+    child.stdin.on('error', () => {});
+    readers.push(child);
+    for (let i = 0; i < 250 && screens().count !== expected; i++) sleep(20);
+    assert.equal(screens().count, expected);
+  };
+  const json = (value, status = 0) => ({status, stdout: JSON.stringify(value), stderr: ''});
+  const defaultKey = `kadan-${name}-321`;
+  const keyToTab = new Map([[defaultKey, 'old-tab']]);       // 옛 탭은 기본 키로 만들어졌다(같은 pane PID)
+  const removed = new Set(); const made = []; const keys = []; let lose = true;
+  const run = (bin, args) => {
+    const id = args.includes('--terminal') ? args[args.indexOf('--terminal') + 1] : null;
+    if (args[0] === 'status') return json({ok: true});
+    if (args[1] === 'show') return removed.has(id) ? json({ok: false, error: {code: 'ROTTIE_TERMINAL_NOT_FOUND'}}, 3) : json({ok: true, result: {terminal: {state: 'unknown'}}});
+    if (args[1] === 'remove') { removed.add(id); return json({ok: true}); }
+    if (args[1] === 'create') {
+      const key = args[args.indexOf('--idempotency-key') + 1]; keys.push(key);
+      if (keyToTab.has(key)) {
+        const saved = keyToTab.get(key);
+        return removed.has(saved) ? json({ok: false, error: {code: 'ROTTIE_IDEMPOTENCY_CONFLICT'}}, 2)
+          : json({ok: true, result: {created: false, terminal: {id: saved, pid: 1}}});     // 같은 키·같은 인자: 살아 있는 그 탭을 돌려준다
+      }
+      const id2 = `tab-${made.length + 1}`; keyToTab.set(key, id2); made.push(id2);
+      attachControl(made.length);                                                            // 새 탭의 client(적용됨)
+      if (lose) { lose = false; return {status: null, stdout: '', stderr: '', error: Object.assign(new Error('timeout'), {code: 'ETIMEDOUT'})}; }
+      return json({ok: true, result: {created: true, terminal: {id: id2, pid: 1}}});
+    }
+    return json({ok: true});
+  };
+  const entries = [{kind: 'start', role: '비서', session: name, cwd: process.cwd(), window: 'hidden', panePid: '321', rottieTerminalId: 'old-tab'}];
+  const recorded = [];
+  const cycle = () => attachHiddenSecretary({home: process.env.KADAN_HOME, floor: {pid: () => '321'}, session: name,
+    readEntries: () => entries, record: entry => { recorded.push(entry); entries.push(entry); },
+    env: {KADAN_WINDOW: 'rottie'}, readSetting: () => setting,
+    open: opts => openSecretaryTab({...opts, platform: 'darwin', readSetting: () => setting, run})});
+  try {
+    assert.equal(tmux('new-session', '-d', '-s', name, '-x', '100', '-y', '30', 'cat').status, 0);
+    const first = cycle();                                    // 옛 탭 제거 성공 → 기본 키 충돌 → 재시도 키로 적용됐지만 응답 유실
+    assert.deepEqual([first.attached, first.reason, recorded.length], [false, 'open-failed', 0]);
+    assert.deepEqual(made, ['tab-1']);
+    assert.equal(screens().count, 1);
+    const second = cycle();                                   // 다음 주기: 옛 탭은 NOT_FOUND, 같은 옛 탭 ID라 같은 재시도 키
+    assert.deepEqual([second.attached, second.rottieTerminalId], [true, 'tab-1']);
+    assert.deepEqual(keys, [defaultKey, `${defaultKey}-after-old-tab`, defaultKey, `${defaultKey}-after-old-tab`]);
+    assert.deepEqual(made, ['tab-1'], '탭을 하나 더 만들지 않았다');
+    assert.equal(screens().count, 1, 'client도 1개');
+    assert.deepEqual(recorded.map(e => [e.kind, e.rottieTerminalId, e.restoredFrom, e.oldState]), [['window', 'tab-1', 'old-tab', '없음']]);
+    assert.equal(cycle().reason, 'has-tab');
+    assert.equal(made.length, 1);
+  } finally {
+    for (const child of readers.splice(0)) child.kill();
+    tmux('kill-session', '-t', `=${name}`);
+  }
+});

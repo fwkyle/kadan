@@ -79,7 +79,6 @@ export function planSecretaryTab({env = process.env, auto = false, setting, entr
 
 const NOT_FOUND = 'ROTTIE_TERMINAL_NOT_FOUND';
 const text = value => cleanWindowMessage(value) || '(없음)';
-let keySequence = 0; // 재시도 키가 같은 프로세스에서 시각이 같아도 겹치지 않게 한다(주기마다 새 프로세스라 시각이 다르다).
 
 // unknown 교체는 "옛 탭 remove 먼저 → 성공일 때만 create" 순서다. 로티 remove는 데몬 목록에 있거나 살아 있을 수 있는 저장 PID,
 // 엔진 미확인(조회 실패)이면 스스로 거부한다(Rottie cli/terminal/removal.rs). 그 거절이 show로는 못 얻는 "아직 살아 있을 수 있다"는 로티 자신의 답이다.
@@ -112,17 +111,21 @@ export function openSecretaryTab({home, env = process.env, auto = false, quiet =
     const notes = [];
     // conflictKeySuffix: 로티는 제거한 탭의 키를 기억해 같은 키를 다시 쓰면 인자가 같아도 ROTTIE_IDEMPOTENCY_CONFLICT를 준다
     // (Rottie cli/memory.rs resolve_idempotency). 앱만 다시 떠 pane PID가 같으면 옛 탭 제거 직후 기본 키가 충돌하므로 새 키로 한 번만
-    // 다시 연다. 키는 매번 새로 만들어 같은 세대에서 여러 번 지워도 고정 재시도 키가 소진되지 않게 한다.
+    // 다시 연다. 이 키는 "교체 대상 옛 탭 ID"에서 정해진다(`after-<옛 탭 ID>`): 같은 옛 탭을 바꾸려는 시도는 몇 번이든 같은 키라,
+    // create가 적용됐는데 응답을 놓쳐도 다음 주기(옛 탭은 이미 지워져 NOT_FOUND 경로, 원장의 현재 탭 ID = 지운 옛 탭)가 같은 키로
+    // 다시 요청해 로티가 앞 주기에 만든 탭을 돌려준다. 다른 옛 탭(앱 재시작이 두 번이면 두 번째 옛 탭은 첫 번째에 만든 탭)이면
+    // 다른 키라 고정 재시도 키처럼 소진되지도 않는다.
     const opened = open(session, platform, {choice: {kind: 'rottie'}, rottieBin: setting.rottieBin, spawnFn,
-      role, cwd, panePid, conflictKeySuffix: `secretary-${Date.now().toString(36)}-${(keySequence++).toString(36)}`,
+      role, cwd, panePid, ...(oldId ? {conflictKeySuffix: `after-${String(oldId).slice(0, 36)}`} : {}),
       ...(quiet ? {warn: message => notes.push(String(message))} : {})});
     if (!opened?.rottieTerminalId) {
       return {window: 'hidden', reason: 'open-failed', ...(notes.length ? {detail: notes.join('; ')} : {})};
     }
     if (swapsUnknown) {
-      // 로티가 기존 탭을 돌려줬으면(created:false 또는 옛 탭과 같은 ID) 우리가 연 탭이 아니다: 열지 않은 것으로 보고
-      // 아무것도 닫거나 지우지 않으며 window 기록도 쓰지 않는다.
-      if (opened.created === false || opened.rottieTerminalId === oldId) {
+      // 로티가 방금 지운 옛 탭과 같은 ID를 돌려줬으면 우리가 연 탭이 아니다: 열지 않은 것으로 보고 아무것도 닫거나 지우지 않으며
+      // window 기록도 쓰지 않는다. 옛 탭과 다른 ID면 created:false여도(기본 키·재시도 키 모두) 앞 주기에 우리가 같은 키로 만든 탭이므로
+      // 열린 것으로 본다(openWindow가 그 세션에 client가 붙은 것까지 확인했고, 닫지 않는다).
+      if (opened.rottieTerminalId === oldId) {
         return {window: 'hidden', reason: 'open-failed', detail: `탭 ${String(oldId).slice(0, 8)}: 로티가 기존 탭 ${String(opened.rottieTerminalId).slice(0, 8)}`
           + `을 돌려줌(created=${opened.created === false ? 'false' : '없음'}${opened.rottieTerminalId === oldId ? ', 옛 탭과 같은 ID' : ''}) — 새 탭으로 보지 않고 닫거나 지우지 않음`};
       }
