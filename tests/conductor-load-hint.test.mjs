@@ -317,7 +317,8 @@ test('CLI: limit set은 0 이상의 정수만 받고 그 밖은 종료 코드 2,
   assert.deepEqual(JSON.parse(set.stdout), {conductorOpenWorks: 4});
   const status = JSON.parse(run('status').stdout);
   assert.equal(status.conductorOpenWorks, 4);
-  assert.deepEqual(status.limits, {rust: 1, install: 2, build: 2});
+  assert.equal(status.heavy, 1);
+  assert.equal('limits' in status, false);
   const ran = run('run', 'build', '--', process.execPath, '-e', 'console.log("ran")');
   assert.equal(ran.status, 0, ran.stderr);
   assert.match(ran.stdout, /ran/);

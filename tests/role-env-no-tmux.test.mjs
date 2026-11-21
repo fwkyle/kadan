@@ -44,6 +44,7 @@ test('원장 start 사건의 cmd·harness·model은 감싸기 전 원문 기준�
 test('TMUX_CLIENT_ENV_STRIP에 KADAN_PANE_SOCKET이 있고 tmuxClientEnv가 뺀다', () => {
   assert.ok(TMUX_CLIENT_ENV_STRIP.includes('KADAN_PANE_SOCKET'));
   assert.deepEqual(tmuxClientEnv({KADAN_PANE_SOCKET: 's', PATH: '/p'}), {PATH: '/p'});
+  assert.deepEqual(tmuxClientEnv({KADAN_MEMORY_CHECK: 'off', PATH: '/p'}), {PATH: '/p'}); // 시험 실행기의 끄기가 역할 세션에 새지 않는다
 });
 
 test('카단 pane 판정: 새 표시만, 옛 TMUX만 있어도 안, 둘 다 다른 소켓이면 밖', () => {

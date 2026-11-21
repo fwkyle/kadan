@@ -214,7 +214,7 @@ export function makeHerdrFloor({ env = process.env, rpc = herdrRpc, entries = re
       } catch (error) { throw redactReason(error); }
       try {
         const inherited = Object.fromEntries(Object.entries(env).filter(([k, v]) =>
-          (k.startsWith("KADAN_") || ["PATH", "CLAUDE_CONFIG_DIR", "CODEX_HOME"].includes(k)) && typeof v === "string"));
+          (k.startsWith("KADAN_") || ["PATH", "CLAUDE_CONFIG_DIR", "CODEX_HOME"].includes(k)) && k !== "KADAN_MEMORY_CHECK" && typeof v === "string"));
         inherited.KADAN_ROLE = session.startsWith("kadan-") ? session.slice(6) : role;
         // AI 도구의 로그인 셸이 PATH를 다시 만들 수 있다. 설치본과 시험 브랜치를 혼동하지 않는다.
         inherited.KADAN_CLI = fileURLToPath(new URL("./cli.mjs", import.meta.url));

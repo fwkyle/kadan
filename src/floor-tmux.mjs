@@ -46,7 +46,9 @@ export function ensureTmuxConf(home = ledgerHome()) {
 // tmux 서버를 처음 만든 클라이언트의 환경이 서버 전역 환경으로 복사된다. 창 선택 값이 그 뒤 모든 세션에 새지 않게
 // 클라이언트로 넘기는 환경에서 뺀다(2026-11-02). 이 프로세스 자신의 판단(effectiveWindow)은 process.env를 그대로 쓴다.
 export const TMUX_CLIENT_ENV_STRIP = ["KADAN_WINDOW", "KADAN_ROTTIE_BIN", "KADAN_WINDOW_FORCE",
-  "KADAN_PANE_SOCKET", "KADAN_SERVER_RESTORE_ID", "KADAN_SERVER_RESTORE_OF"];
+  "KADAN_PANE_SOCKET", "KADAN_SERVER_RESTORE_ID", "KADAN_SERVER_RESTORE_OF",
+  // 시험 실행기(tests/run.mjs)가 켜 둔 메모리 확인 끄기가 역할 세션에 새면 그 역할의 무거운 작업이 메모리를 안 잰다(2026-11-21). 끄려면 $KADAN_HOME/memory-check.off.
+  "KADAN_MEMORY_CHECK"];
 export function tmuxClientEnv(env = process.env) {
   const clean = { ...env };
   for (const name of TMUX_CLIENT_ENV_STRIP) delete clean[name];
