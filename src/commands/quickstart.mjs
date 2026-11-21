@@ -171,7 +171,10 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
       const attached = withRecoveryLock(home, "kadan-비서", () => attachHiddenSecretary({
         home, floor, session: sessionOfSecretary, readEntries: () => readSystemLedger(home),
         record: entry => appendLedger(entry, home) }));
-      if (attached.attached) lines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}`);
+      if (attached.attached) {
+        lines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}${attached.restoredFrom
+          ? ` (옛 탭 ${String(attached.restoredFrom).slice(0, 8)} ${attached.oldState}를 바꿈)` : ""}`);
+      }
       else { const failure = attachFailureLine(attached); if (failure) lines.push(failure); } // 같은 줄은 changedOutput이 한 번만 남긴다
     } catch { /* 복원이 진행 중이면 다음 주기에 다시 본다 */ }
   }

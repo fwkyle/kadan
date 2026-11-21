@@ -4,7 +4,7 @@
 // 로티 호출은 status·terminal show/create/remove뿐이라 앱을 앞으로 가져오지 않는다(assertRottieArgv).
 import {spawnSync} from 'node:child_process';
 import {readWindowSetting} from './window-setting.mjs';
-import {rottieConnectivity, showRottieWindow, removeRottieWindow, openWindow} from './floor-tmux.mjs';
+import {rottieConnectivity, showRottieWindow, removeRottieWindow, openWindow, sessionClientCount} from './floor-tmux.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {cleanWindowMessage} from './cli-start-support.mjs';
 
@@ -12,16 +12,24 @@ const ALIVE_STATES = new Set(['running', 'created']);
 // 로티가 "이 탭은 끝났다"고 확정해 주는 상태만 교체한다. unknown·빈 값·처음 보는 값은 모르는 것이라 열지 않는다.
 // 로티 문서(Rottie docs/rottie-cli.md)상 unknown은 종료 확정이 아니라 "지금 데몬 목록에 없는 기록"이고, `terminal show`는 엔진 일부가
 // 응답하지 못한 경우에도 같은 unknown을 준다(Rottie cli/terminal/query.rs current_record). 응답에 둘을 가르는 필드가 없어 상태만으로는 못 가른다.
+// 그래서 unknown은 로티 답만으로는 열지 않고, 우리 바닥(tmux)에 이 세션을 보는 화면이 확실히 0일 때만 옛 탭을 바꾼다(아래 UNKNOWN_STATE).
+// 로티 탭도 제어 client로 붙으므로 살아 있는 로티 탭이면 1 이상이다.
 const DEAD_STATES = new Set(['exited']);
+const UNKNOWN_STATE = 'unknown';
 export const TAB_CALL_TIMEOUT_MS = 5000; // 로티 호출 한 번의 상한. 1분마다 도는 길이라 짧게 둔다.
 
 const bounded = (run = spawnSync) => (bin, args, options) => run(bin, args, {...options, timeout: TAB_CALL_TIMEOUT_MS});
 
 // 탭 상태를 몰라 열지 않을 때 로티가 준 값을 남긴다: show가 성공했으면 state, 실패했으면 code·message(짧게, 제어 문자 정리).
 // 같은 값이면 같은 글자라 autostart.log에는 처음 한 번만 남고, 값이 바뀌면(탭 ID·state·code) 다시 한 번 남는다.
-export function tabUnknownDetail(terminalId, shown) {
+// seen: unknown일 때 tmux에서 읽은 붙은 화면 수 {ok, count|code}. 읽었으면 그 결과를 뒤에 붙인다.
+export function tabUnknownDetail(terminalId, shown, seen = null) {
   const tab = String(terminalId ?? '').slice(0, 8);
-  if (shown.ok) return `탭 ${tab} show 응답 state=${cleanWindowMessage(shown.state) || '(빈 값)'}`;
+  if (shown.ok) {
+    const state = `탭 ${tab} show 응답 state=${cleanWindowMessage(shown.state) || '(빈 값)'}`;
+    if (!seen) return state;
+    return `${state} · ${seen.ok ? `tmux 붙은 화면 ${seen.count}개` : `tmux 화면 수 확인 못함 code=${cleanWindowMessage(seen.code) || '(없음)'}`}`;
+  }
   const message = cleanWindowMessage(shown.message);
   return `탭 ${tab} show 실패 code=${cleanWindowMessage(shown.code) || '(없음)'}${message ? ` message=${message}` : ''}`;
 }
@@ -29,7 +37,8 @@ export function tabUnknownDetail(terminalId, shown) {
 // 열지 말지만 정한다(읽기 전용). 이유 낱말은 시험·로그용이다.
 // auto: `kadan up --auto`로 불렸다(launchd 전용 인자). 이때만 KADAN_WINDOW=none(FORCE 유무 무관)을 "로티가 없을 수 있다"로 읽는다.
 // `--auto` 없이 사람이 셸에서 정한 KADAN_WINDOW=none은 FORCE가 있어도 존중한다. 사람이 셸에서 `kadan up --auto`를 직접 치면 launchd와 구별되지 않아 같은 취급이다.
-export function planSecretaryTab({env = process.env, auto = false, setting, entries, session, connect, show}) {
+// clients(session): tmux에서 그 세션에 붙은 client 수를 {ok: true, count} | {ok: false, code}로 읽는다. 없으면 unknown은 열지 않는다.
+export function planSecretaryTab({env = process.env, auto = false, setting, entries, session, connect, show, clients}) {
   if (setting?.window !== 'rottie' || !setting.rottieBin) return {open: false, reason: 'setting-not-rottie'};
   // `up --auto`는 launchd만 부른다. 운영에 깔린 옛 plist는 KADAN_WINDOW=none만 있고 FORCE가 없으므로 FORCE는 보지 않는다
   // (2026-11-13 실측: FORCE를 요구해 보조 경로가 운영에서 한 번도 안 돌았다). `--auto` 없는 사람의 none은 그대로 존중한다.
@@ -43,28 +52,41 @@ export function planSecretaryTab({env = process.env, auto = false, setting, entr
   if (!current) return {open: true, connection};
   // 이을 탭이 있으면 그 탭이 살아 있는지 로티에 묻는다. 모르면 열지 않는다(탭 둘이 되는 쪽이 틀린 방향).
   const shown = show(current.rottieTerminalId);
-  const unknown = {open: false, reason: 'tab-unknown', connection, detail: tabUnknownDetail(current.rottieTerminalId, shown)};
+  const unknown = seen => ({open: false, reason: 'tab-unknown', connection,
+    detail: tabUnknownDetail(current.rottieTerminalId, shown, seen)});
   if (shown.ok) {
     if (ALIVE_STATES.has(shown.state)) return {open: false, reason: 'tab-alive', connection};
-    return DEAD_STATES.has(shown.state)
-      ? {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: shown.state}}
-      : unknown;
+    if (DEAD_STATES.has(shown.state)) {
+      return {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: shown.state}};
+    }
+    if (shown.state !== UNKNOWN_STATE || !clients) return unknown(null);
+    // 로티 unknown: 종료 확정이 아니다. tmux에서 이 세션을 보는 화면이 확실히 0일 때만 바꾼다. 1 이상이거나 못 읽었으면 열지 않는다.
+    let seen;
+    try { seen = clients(session); } catch (error) { seen = {ok: false, code: error?.code || 'tmux-error'}; }
+    const read = seen?.ok === true && Number.isInteger(seen.count) && seen.count >= 0 ? seen
+      : seen?.ok === false ? seen : {ok: false, code: 'tmux-unreadable'};
+    if (read.ok && read.count === 0) {
+      return {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: shown.state}};
+    }
+    return unknown(read);
   }
   return shown.code === 'ROTTIE_TERMINAL_NOT_FOUND'
     ? {open: true, connection, replace: {terminalId: current.rottieTerminalId, state: '없음'}}
-    : unknown;
+    : unknown(null);
 }
 
 // 탭 하나를 열고 결과를 돌려준다. 던지지 않는다. 열지 않았거나 실패하면 {window: 'hidden'}이다.
 export function openSecretaryTab({home, env = process.env, auto = false, quiet = false, entries, session, role, cwd, panePid,
-  platform = process.platform, run = spawnSync, readSetting = readWindowSetting, open = openWindow}) {
+  platform = process.platform, run = spawnSync, readSetting = readWindowSetting, open = openWindow,
+  readClients = sessionClientCount}) {
   try {
     if (platform !== 'darwin') return {window: 'hidden', reason: 'not-darwin'};
     const spawnFn = bounded(run);
     const setting = readSetting(home);
     const plan = planSecretaryTab({env, auto, setting, entries, session,
       connect: bin => rottieConnectivity({bin, spawnFn}),
-      show: terminalId => showRottieWindow({bin: setting.rottieBin, terminalId, spawnFn})});
+      show: terminalId => showRottieWindow({bin: setting.rottieBin, terminalId, spawnFn}),
+      clients: readClients});
     if (!plan.open) return {window: 'hidden', reason: plan.reason, ...(plan.detail ? {detail: plan.detail} : {})};
     // 조용한 호출(자동 주기)은 화면에 찍지 않고 열기 함수의 구체 이유(로티 오류 코드)만 모아 돌려준다.
     const notes = [];
@@ -112,9 +134,11 @@ export function attachHiddenSecretary({home, floor, session, readEntries, record
     if (result.window !== 'rottie') {
       return {attached: false, reason: result.reason, ...(result.detail ? {detail: result.detail} : {})};
     }
+    // 옛 탭을 바꿨으면 어느 탭을 어떤 상태에서 바꿨는지 남긴다(restore가 남기는 window 기록과 같은 칸).
+    const replaced = result.restoredFrom ? {restoredFrom: result.restoredFrom, oldState: result.oldState} : {};
     record({kind: 'window', role: start.role, session, rottieTerminalId: result.rottieTerminalId,
-      panePid: start.panePid, by: 'autostart'});
-    return {attached: true, rottieTerminalId: result.rottieTerminalId};
+      panePid: start.panePid, ...replaced, by: 'autostart'});
+    return {attached: true, rottieTerminalId: result.rottieTerminalId, ...replaced};
   } catch (error) {
     return {attached: false, reason: `error: ${error.message}`};
   }
