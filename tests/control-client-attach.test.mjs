@@ -78,10 +78,10 @@ test('sessionClientCount: 화면이 없으면 0, 제어 client가 붙으면 1, �
   assert.match(String(missing.code), /^tmux-exit-\d+$/);
 });
 
-// 검수 재현 3형태(2026-11-21): 화면 0개를 읽고 새 탭을 만드는 사이에 옛 탭 client가 늦게 붙는 경합.
-// openWindow는 "그 세션에 client가 하나라도 있나"만 보므로 옛 탭의 연결을 새 탭의 성공으로 오인했다.
-// 로티는 가짜(호출 순서 기록), 화면 수는 실제 격리 tmux의 제어 client로 만든다.
-test('비서 탭 경합: 옛 탭만 늦게 붙음·둘 다 붙음은 새 탭을 치우고 성공으로 기록하지 않고, 정상은 탭 하나만 기록한다', {skip: !socket.startsWith('kadan-test-')}, () => {
+// 재검수(2026-11-21) 뒤 순서: 화면 0개 확인 → 옛 탭 remove 먼저 → 성공·NOT_FOUND일 때만 create. 사후 되돌리기는 없다.
+// 화면 수는 실제 격리 tmux의 제어 client로 만들고 로티만 가짜(호출 순서 기록). 옛 탭이 0개 확인 뒤 늦게 붙는 경합은
+// 로티 remove가 살아 있는 탭을 거부하는 것(ROTTIE_TERMINAL_RUNNING)으로 잡히고, 그러면 새 탭을 만들지 않는다.
+test('비서 탭(실제 격리 tmux 화면 수): 화면이 붙어 있거나 옛 탭 remove가 거절되면 만들지 않고, 정상이면 새 탭 하나만 기록한다', {skip: !socket.startsWith('kadan-test-')}, () => {
   const name = `kadan-race-${process.pid}`;
   const setting = {version: 1, window: 'rottie', rottieBin: '/fixture/rottie'};
   const readers = [];
@@ -99,18 +99,17 @@ test('비서 탭 경합: 옛 탭만 늦게 붙음·둘 다 붙음은 새 탭을 
     assert.deepEqual(screens(), {ok: true, count: 0});
   };
   const json = (value, status = 0) => ({status, stdout: JSON.stringify(value), stderr: ''});
-  const cycle = ({onCreate, oldRemoval}) => {
-    const entries = [{kind: 'start', role: '비서', session: name, cwd: process.cwd(), window: 'hidden', panePid: '321',
-      rottieTerminalId: 'old-tab'}];
+  const cycle = ({onRemove = () => {}, onCreate = () => {}, oldRemoval = json({ok: true}), entries = null} = {}) => {
+    entries ??= [{kind: 'start', role: '비서', session: name, cwd: process.cwd(), window: 'hidden', panePid: '321', rottieTerminalId: 'old-tab'}];
     const calls = []; const recorded = [];
     const run = (bin, args) => {
       const id = args.includes('--terminal') ? args[args.indexOf('--terminal') + 1] : null;
       calls.push(args[0] === 'status' ? 'status' : `${args[1]}${id ? ` ${id}` : ''}`);
       if (args[0] === 'status') return json({ok: true});
-      if (args[1] === 'show') return json({ok: true, result: {terminal: {state: 'unknown'}}}); // 로티는 계속 unknown이라 답한다
-      if (args[1] === 'create') { onCreate(); return json({ok: true, result: {terminal: {id: 'new-tab', pid: 1}}}); }
-      if (args[1] === 'remove' && id === 'old-tab') return oldRemoval;                           // 살아 있을 수 있는 탭은 로티가 거부한다
-      return json({ok: true});                                                                    // 새 탭 close·remove
+      if (args[1] === 'show') return json({ok: true, result: {terminal: {state: 'unknown'}}});   // 로티는 계속 unknown이라 답한다
+      if (args[1] === 'remove') { onRemove(); return oldRemoval; }
+      if (args[1] === 'create') { onCreate(); return json({ok: true, result: {created: true, terminal: {id: 'new-tab', pid: 1}}}); }
+      return json({ok: true});
     };
     const result = attachHiddenSecretary({home: process.env.KADAN_HOME, floor: {pid: () => '321'}, session: name,
       readEntries: () => entries, record: entry => { recorded.push(entry); entries.push(entry); },
@@ -118,34 +117,38 @@ test('비서 탭 경합: 옛 탭만 늦게 붙음·둘 다 붙음은 새 탭을 
       open: opts => openSecretaryTab({...opts, platform: 'darwin', readSetting: () => setting, run})});
     return {result, calls, recorded, entries};
   };
-  const refused = json({ok: false, error: {code: 'ROTTIE_TERMINAL_RUNNING'}}, 3);
-  const cleaned = ['status', 'show old-tab', 'create', 'show old-tab', 'remove old-tab', 'close new-tab', 'remove new-tab'];
+  const refused = json({ok: false, error: {code: 'ROTTIE_TERMINAL_RUNNING'}}, 5);
   try {
     assert.equal(tmux('new-session', '-d', '-s', name, '-x', '100', '-y', '30', 'cat').status, 0);
     assert.deepEqual(screens(), {ok: true, count: 0});
 
-    // (1) 0개를 읽은 뒤 옛 탭만 붙음(새 탭 client는 시작 전): 새 탭을 치우고 성공 기록·has-tab 없음.
-    const oldOnly = cycle({onCreate: () => attachControl(1), oldRemoval: refused});
-    assert.deepEqual([oldOnly.result.attached, oldOnly.result.reason], [false, 'tab-raced']);
-    assert.deepEqual(oldOnly.calls, cleaned);
-    assert.equal(oldOnly.recorded.length, 0);
-    assert.equal(screens().count, 1, '옛 탭 client는 그대로(우리는 tmux client를 건드리지 않는다)');
-    assert.equal(oldOnly.entries.some(e => e.kind === 'window'), false);
+    // (1) 화면이 이미 붙어 있다(살아 있는 로티 탭은 제어 client로 붙는다): show까지만 하고 remove·create 0회.
+    attachControl(1);
+    const attached = cycle();
+    assert.deepEqual([attached.result.attached, attached.result.reason], [false, 'tab-unknown']);
+    assert.deepEqual(attached.calls, ['status', 'show old-tab']);
+    assert.match(attached.result.detail, /tmux 붙은 화면 1개$/);
+    assert.equal(attached.recorded.length, 0);
     detachAll();
 
-    // (2) 옛 탭과 새 탭이 둘 다 붙음: 같은 결과(탭을 둘 남기지 않는다).
-    const both = cycle({onCreate: () => { attachControl(1); attachControl(2); }, oldRemoval: refused});
-    assert.deepEqual([both.result.attached, both.result.reason], [false, 'tab-raced']);
-    assert.deepEqual(both.calls, cleaned);
-    assert.equal(both.recorded.length, 0);
+    // (2) 0개를 읽은 뒤 remove 직전에 옛 탭이 늦게 붙는다: 로티가 살아 있는 탭이라 remove를 거부 → 새 탭을 만들지 않는다.
+    //     우리는 아무것도 닫거나 지우지 않는다(옛 탭 client는 그대로 1개).
+    const late = cycle({onRemove: () => attachControl(1), oldRemoval: refused});
+    assert.deepEqual([late.result.attached, late.result.reason], [false, 'tab-unknown']);
+    assert.deepEqual(late.calls, ['status', 'show old-tab', 'remove old-tab']);
+    assert.match(late.result.detail, /tmux 붙은 화면 0개 · 옛 탭 제거 거절 code=ROTTIE_TERMINAL_RUNNING$/);
+    assert.equal(late.recorded.length, 0);
+    assert.equal(screens().count, 1);
     detachAll();
 
-    // (3) 정상: 새 탭 client만 붙고 옛 탭 제거는 성공 → 성공 기록 1개, 새 탭 정리 없음, 다음 주기 has-tab.
-    const normal = cycle({onCreate: () => attachControl(1), oldRemoval: json({ok: true})});
+    // (3) 정상: 화면 0, remove 성공, create 때 새 탭 client만 붙음 → 성공 기록 1개(restoredFrom 포함), 다음 주기 has-tab.
+    const normal = cycle({onCreate: () => attachControl(1)});
     assert.deepEqual([normal.result.attached, normal.result.rottieTerminalId], [true, 'new-tab']);
-    assert.deepEqual(normal.calls, ['status', 'show old-tab', 'create', 'show old-tab', 'remove old-tab']);
+    assert.deepEqual(normal.calls, ['status', 'show old-tab', 'remove old-tab', 'create']);
     assert.deepEqual(normal.recorded.map(e => [e.kind, e.rottieTerminalId, e.restoredFrom, e.oldState]), [['window', 'new-tab', 'old-tab', 'unknown']]);
     assert.equal(screens().count, 1);
+    const next = cycle({entries: normal.entries});
+    assert.deepEqual([next.result.reason, next.calls.length], ['has-tab', 0]);
   } finally {
     for (const child of readers.splice(0)) child.kill();
     tmux('kill-session', '-t', `=${name}`);

@@ -168,6 +168,8 @@ export function parseRottieCreateResult(stdoutText) {
         ok: true,
         id: value.result.terminal.id,
         pid: value.result.terminal.pid,
+        // 로티는 같은 멱등 키·같은 인자에 기존 탭을 돌려주며 created:false를 준다. 이번 호출이 만든 탭이 아니라는 표시만 더한다.
+        ...(value.result.created === false ? { created: false } : {}),
       };
     }
     return { ok: false, code: value?.error?.code || "ROTTIE_UNKNOWN" };
@@ -401,7 +403,7 @@ export function openWindow(session, platform = process.platform, deps = {}) {
       warn("창 rottie: 패널은 만들어졌으나 tmux 클라이언트 미접속");
       return null;
     }
-    return { method: "rottie", rottieTerminalId: result.id };
+    return { method: "rottie", rottieTerminalId: result.id, ...(result.created === false ? { created: false } : {}) };
   }
 
   const result = orcaWindowCreate({
