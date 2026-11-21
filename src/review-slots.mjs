@@ -8,6 +8,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {CardStore} from './card-store.mjs';
 import {createExclusive, readResourceConfig, reclaim, runLimited, sleep} from './heavy-limit.mjs';
+import {MEMORY_WAIT_EXIT} from './memory-check.mjs';
 
 export const SLOT_USAGE = 'kadan slot acquire <저장소 경로|저장소 이름> --for <카드|역할> [--ref <SHA|브랜치>] [--no-wait] [--wait-timeout 1800] [--temporary --reason <이유>] | deps <자리경로> [--cmd "<설치 명령>"] | release <자리경로> | release --for <카드|역할> | status [<저장소 경로|저장소 이름>]. `/`가 없고 `.`·`~`로 시작하지 않는 인자는 항상 카드 원장의 저장소 이름이다(경로는 ./이름). 저장소·worktree 꼭대기만 받는다. 위치 인자를 옵션보다 앞에 둔다. 상세: docs/review-slots.md';
 const BUSY_EXIT = 3;
@@ -243,6 +244,7 @@ async function deps(target, flags, ctx) {
   const command = typeof flags.cmd === 'string' ? ['/bin/sh', '-c', flags.cmd] : defaultCommand;
   // 설치 출력은 표준 오류로 보낸다. 표준 출력은 이 명령의 JSON 결과만 둔다.
   const code = await runLimited(ctx.home, 'install', command, {cwd: dir, env: ctx.env, log: ctx.log, stdio: ['ignore', 2, 2]});
+  if (code === MEMORY_WAIT_EXIT) throw Object.assign(new Error(`메모리 부족으로 설치를 시작하지 않음(종료 ${code}): 설치 명령은 돌리지 않았다. 메모리가 풀린 뒤 다시 한다`), {exitCode: code});
   if (code !== 0) throw Object.assign(new Error(`설치 실패(종료 ${code}): ${command.join(' ')}`), {exitCode: code});
   writeJson(metaFile(pool, lease.slot), {lockfile, hash, command, installedAt: new Date().toISOString()});
   return {path: dir, installed: true, reason: meta ? '잠금 파일 바뀜 또는 node_modules 없음' : '첫 설치', lockfile};

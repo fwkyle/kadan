@@ -1,5 +1,7 @@
-// 무거운 명령 동시 실행 제한. 카단 폴더의 잠금 파일로 기계 전체에서 종류별 동시 개수를 막는다.
+// 무거운 명령 동시 실행 제한. 카단 폴더의 잠금 파일로 기계 전체에서 무거운 명령을 한 줄(기본 동시 1개)로 세운다.
 // 왜: 병렬 에이전트가 설치·빌드·러스트 빌드를 한꺼번에 돌려 부하 75·스왑 25GB까지 갔다 (2026-10-02 [kyle]).
+// 종류별 상한은 종류가 다르면 셋이 겹쳐 돌아, 2026-11-21 커널 패닉 재부팅 2회 뒤 종류와 상관없는 한 줄로 합쳤다.
+// 자리를 잡은 뒤 명령을 띄우기 직전에 메모리를 재서 모자라면 자리를 쥔 채 기다린다(src/memory-check.mjs).
 // 데몬·서비스 없이 잠금 파일만 쓴다. 죽은 PID의 잠금과, PID를 다른 프로세스가 다시 받은 잠금은 다음 사람이 회수한다.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,10 +9,13 @@ import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {isRoleName} from './role-name.mjs';
+import {MEMORY_WAIT_EXIT, MEMORY_WAIT_MS, judgeMemory, memoryCheckEnabled, readMemory} from './memory-check.mjs';
 
-export const DEFAULT_LIMITS = {rust: 1, install: 2, build: 2};
-export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, limits: DEFAULT_LIMITS};
-export const LIMIT_USAGE = 'kadan limit run <rust|install|build> -- <명령...> | status | set conductor-works <0 이상의 정수>. 종류별 동시 개수는 기본 rust 1·install 2·build 2이고 $KADAN_HOME/resource-limits.json의 limits로 바꾼다. rust는 CARGO_BUILD_JOBS=2를 붙인다(이미 지정·-j/--jobs가 있으면 그대로). set conductor-works는 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수(기본 3, 0이면 안내 문장 끔)를 같은 파일에 적는다. 상세: docs/review-slots.md';
+// 종류는 대기 줄·status 표시와 rust의 CARGO_BUILD_JOBS에만 쓴다. 자리 묶음은 종류와 상관없이 하나다.
+// 시험·브라우저·vite·playwright·내장 Postgres는 build로 돌린다.
+export const HEAVY_KINDS = ['rust', 'install', 'build'];
+export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, heavy: 1};
+export const LIMIT_USAGE = 'kadan limit run <rust|install|build> -- <명령...> | status | set conductor-works <0 이상의 정수>. 무거운 명령은 종류와 상관없이 맥 전체에서 한 줄이다(기본 동시 1개, $KADAN_HOME/resource-limits.json의 heavy로 바꾼다. 옛 limits는 더 쓰지 않는다). 자리를 잡은 뒤 명령을 띄우기 직전에 메모리 여유가 30% 미만이거나 스왑 used가 0보다 크면 자리를 쥔 채 최대 5분 기다리고, 그래도 풀리지 않으면 명령을 돌리지 않고 자리를 풀고 종료 코드 75로 끝난다($KADAN_HOME/memory-check.off 파일이나 환경 변수 KADAN_MEMORY_CHECK=off면 확인하지 않는다). rust는 CARGO_BUILD_JOBS=2를 붙인다(이미 지정·-j/--jobs가 있으면 그대로). limit run 안에서 limit run·slot deps를 다시 부르지 않는다(같은 자리를 기다려 멈춘다). set conductor-works는 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수(기본 3, 0이면 안내 문장 끔)를 같은 파일에 적는다. 상세: docs/review-slots.md';
 const CARGO_JOBS = '2';
 
 // 설정 파일은 선택이다. 없으면 기본값을 쓴다 (2026-10-02 [kyle]: 손잡이를 늘리지 않는다).
@@ -18,7 +23,7 @@ export function readResourceConfig(home) {
   const file = path.join(home, 'resource-limits.json');
   if (!fs.existsSync(file)) return DEFAULT_CONFIG;
   const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-  return {...DEFAULT_CONFIG, ...value, limits: {...DEFAULT_LIMITS, ...(value.limits ?? {})}};
+  return {...DEFAULT_CONFIG, ...value};
 }
 
 // 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수. 슈퍼감독이 맡기는 순간의 안내 한 줄이 쓴다(conductor-load-hint.mjs).
@@ -126,15 +131,17 @@ export function createExclusive(file, value) {
 }
 
 const limitDir = home => path.join(home, 'limits');
-const lockFile = (home, kind, n) => path.join(limitDir(home), `${kind}-${n}.lock`);
+const lockFile = (home, n) => path.join(limitDir(home), `heavy-${n}.lock`);
 
-function capOf(home, kind) {
-  const limits = readResourceConfig(home).limits;
-  if (!Object.hasOwn(limits, kind)) throw new Error(`알 수 없는 종류: ${kind} (${Object.keys(limits).join('|')})`);
-  const cap = Number(limits[kind]);
-  if (!Number.isInteger(cap) || cap < 1) throw new Error(`잘못된 동시 개수: ${kind}=${limits[kind]}`);
+function capOf(home) {
+  const heavy = readResourceConfig(home).heavy;
+  const cap = Number(heavy);
+  if (!Number.isInteger(cap) || cap < 1) throw new Error(`잘못된 동시 개수: heavy=${heavy}`);
   return cap;
 }
+const checkKind = kind => {
+  if (!HEAVY_KINDS.includes(kind)) throw new Error(`알 수 없는 종류: ${kind} (${HEAVY_KINDS.join('|')})`);
+};
 
 // 잠금 파일에는 주인 명령의 인자·cwd를 적지 않는다: 명령줄에 토큰이 실리면 남의 세션 기록에 비밀이 남는다(2026-11-18).
 // 잠금에는 아래 모양의 값만 적고, 읽어 내보낼 때도 같은 허용 목록만 통과시킨다(옛 형식 잠금의 command·cwd, 모르는 필드는 버린다).
@@ -152,18 +159,19 @@ function lockRecord(holder) {
 }
 
 // alive는 잠금이 살아 있는지(state가 alive)다. state는 alive·dead·pid-reused 중 하나다. 돌려주는 값은 허용 목록 필드만이다.
-export function limitHolders(home, kind, deps) {
+// 새 코드의 자리는 heavy-N.lock뿐이다. 옛 코드가 남긴 <종류>-N.lock은 세지도 회수하지도 않는다(머지 직후 잠깐 겹칠 수 있다).
+export function limitHolders(home, deps) {
   const dir = limitDir(home);
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter(name => /\.lock$/.test(name) && (!kind || name.startsWith(`${kind}-`)))
+  return fs.readdirSync(dir).filter(name => /^heavy-\d+\.lock$/.test(name))
     .map(name => { const raw = readJson(path.join(dir, name)); return publicHolder(name, lockOwnerState(raw, deps), raw); });
 }
 
 // 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금은 회수한다. 못 잡으면 null.
-export function tryAcquireLimit(home, kind, holder, deps) {
-  const cap = capOf(home, kind);
+export function tryAcquireLimit(home, holder, deps) {
+  const cap = capOf(home);
   for (let n = 1; n <= cap; n++) {
-    const file = lockFile(home, kind, n);
+    const file = lockFile(home, n);
     if (createExclusive(file, lockRecord(holder))) return file;
     const current = readJson(file);
     const stale = current && lockOwnerState(current, deps) !== 'alive';
@@ -181,14 +189,41 @@ export function limitEnv(kind, command, env = process.env) {
 }
 
 const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 시작 표지 다름)'};
-// 대기 줄에는 누가 쥐었는지(잠금 이름·PID·상태·시작 시각·역할)만 쓴다. 명령 인자·cwd는 남의 세션 기록에 남지 않게 뺀다.
+// 대기 줄에는 누가 쥐었는지(잠금 이름·PID·상태·시작 시각·종류·역할)만 쓴다. 명령 인자·cwd는 남의 세션 기록에 남지 않게 뺀다.
 const describe = holders => holders
-  .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''}${h.role ? ` 역할 ${h.role}` : ''}`.trim()).join('; ');
+  .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''}${h.kind ? ` 종류 ${h.kind}` : ''}${h.role ? ` 역할 ${h.role}` : ''}`.trim()).join('; ');
 
-// 자리가 날 때까지 기다렸다가 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다. 종료 코드는 명령의 것을 돌려준다.
-export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit'} = {}) {
+const spanText = ms => (ms >= 60_000 ? `${Math.round(ms / 60_000)}분` : `${Math.round(ms / 1000)}초`);
+
+// 자리를 쥔 채 메모리가 풀리길 기다린다(그동안 다른 무거운 작업도 시작하지 못한다). 시작해도 되면 null,
+// 기다림이 상한을 넘으면 잰 값 한 줄을 돌려준다. 값이 바뀔 때만 대기 줄을 다시 낸다.
+// 못 읽거나 맥이 아니면 막지 않고 이유만 한 줄 남긴다. 대기 줄과 건너뜀 줄은 문구를 달리한다.
+async function waitForMemory(home, env, {measure = readMemory, waitMs = MEMORY_WAIT_MS, pollMs = 5000,
+  now = Date.now, sleepFn = sleep, enabled, log}) {
+  // 넘겨받은 환경(env)이 비어 있어도 이 프로세스의 환경에 끄는 스위치가 있으면 끈다(tests/run.mjs 아래의 시험이 맥을 재지 않게).
+  if (!(enabled ?? (memoryCheckEnabled(home, env) && memoryCheckEnabled(home, process.env)))) return null;
+  const started = now();
+  let shown = '';
+  for (;;) {
+    let verdict;
+    try { verdict = judgeMemory(measure()); } catch (error) { verdict = {ok: true, skip: `측정 실패: ${error.message}`}; }
+    if (verdict.skip) { log(`메모리 확인 건너뜀: ${verdict.skip}`); return null; }
+    if (verdict.ok) return null;
+    if (now() - started >= waitMs) return verdict.line;
+    if (verdict.line !== shown) {
+      log(`대기: 메모리 부족 — ${verdict.line}. 자리는 쥔 채 기다림(최대 ${spanText(waitMs)})`);
+      shown = verdict.line;
+    }
+    await sleepFn(pollMs);
+  }
+}
+
+// 자리가 날 때까지 기다렸다가 메모리를 확인하고 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다.
+// 종료 코드는 명령의 것을 돌려준다. 메모리가 끝내 모자라면 명령을 돌리지 않고 MEMORY_WAIT_EXIT(75)를 돌려준다.
+export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit', memory = {}} = {}) {
   if (!command.length) throw new Error('실행할 명령 필요: kadan limit run <종류> -- <명령...>');
-  capOf(home, kind);
+  checkKind(kind);
+  capOf(home);
   const token = processStartToken(process.pid);
   const holder = {pid: process.pid, kind, since: new Date().toISOString(),
     ...(token ? {startToken: token} : {}), ...(env.KADAN_ROLE ? {role: env.KADAN_ROLE} : {})};
@@ -209,14 +244,19 @@ export async function runLimited(home, kind, command, {cwd = process.cwd(), env 
       return {startToken: pid => { if (!seen.has(pid)) seen.set(pid, processStartToken(pid)); return seen.get(pid); }};
     };
     let lookup = oncePerPid();
-    file = tryAcquireLimit(home, kind, holder, lookup);
+    file = tryAcquireLimit(home, holder, lookup);
     let shown = '';
     while (!file) {
-      const now = describe(limitHolders(home, kind, lookup));
-      if (now !== shown) { log(`대기: ${kind} 자리 모두 사용 중 — ${now}`); shown = now; }
+      const now = describe(limitHolders(home, lookup));
+      if (now !== shown) { log(`대기: ${kind} 자리 모두 사용 중(맥 전체 한 줄) — ${now}`); shown = now; }
       await sleep(pollMs);
       lookup = oncePerPid();
-      file = tryAcquireLimit(home, kind, holder, lookup);
+      file = tryAcquireLimit(home, holder, lookup);
+    }
+    const short = await waitForMemory(home, env, {...memory, log});
+    if (short) {
+      log(`메모리 부족으로 시작하지 않음(종료 ${MEMORY_WAIT_EXIT}): ${short}. ${spanText(memory.waitMs ?? MEMORY_WAIT_MS)} 기다렸지만 풀리지 않아 명령은 돌리지 않고 자리를 풀었다`);
+      return MEMORY_WAIT_EXIT;
     }
     child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio});
     return await new Promise(resolve => {
@@ -234,8 +274,10 @@ export async function limitCommand(args, {home, env = process.env}) {
   const [action, kind] = args;
   if (!action || action === '--help') return LIMIT_USAGE;
   if (action === 'status') {
-    const limits = readResourceConfig(home).limits;
-    return {limits, holders: limitHolders(home), conductorOpenWorks: readConductorOpenWorks(home)};
+    const config = readResourceConfig(home);
+    return {heavy: config.heavy, holders: limitHolders(home), conductorOpenWorks: readConductorOpenWorks(home),
+      memoryCheck: memoryCheckEnabled(home, env) && memoryCheckEnabled(home, process.env) ? '켜짐' : '꺼짐',
+      ...(config.limits !== undefined ? {notice: 'resource-limits.json의 limits(종류별 동시 개수)는 더 이상 쓰지 않음: 종류와 상관없이 맥 전체 한 줄(heavy)이다'} : {})};
   }
   if (action === 'set') {
     if (kind !== 'conductor-works' || args.length !== 3) { const error = new Error(LIMIT_USAGE); error.exitCode = 2; throw error; }

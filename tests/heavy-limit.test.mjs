@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {limitEnv, limitHolders, lockOwnerState, processStartToken, tryAcquireLimit} from '../src/heavy-limit.mjs';
+import {limitEnv, limitHolders, lockOwnerState, processStartToken, runLimited, tryAcquireLimit} from '../src/heavy-limit.mjs';
+import {MEMORY_OFF_ENV, MEMORY_WAIT_EXIT, judgeMemory, memoryCheckEnabled, parseFreePercent, parseSwapUsedMb, readMemory} from '../src/memory-check.mjs';
 import {processStartedAt} from '../src/process-tree.mjs';
 import {stopChild} from './helpers/child-cleanup.mjs';
 
@@ -58,16 +59,53 @@ test('rust는 동시에 하나만: 두 번째는 기다렸다가 첫 번째가 �
   assert.equal(ra.code, 0); assert.equal(rb.code, 0);
   const at = Object.fromEntries(fs.readFileSync(marks, 'utf8').trim().split('\n').map(l => l.split(' ')).map(([k, v]) => [k, Number(v)]));
   assert.ok(at['b-start'] >= at['a-end'], JSON.stringify(at));
-  assert.match(rb.stderr, /대기: rust 자리 모두 사용 중 — rust-1\.lock pid \d+/);
+  assert.match(rb.stderr, /대기: rust 자리 모두 사용 중\(맥 전체 한 줄\) — heavy-1\.lock pid \d+ \S+ 종류 rust/);
   assert.equal(lockCount(home), 0);
 });
 
-test('install은 동시에 둘까지 바로 돈다', async () => {
+// 맥 전체 한 줄: 종류가 달라도(build·install·rust) 같은 자리 하나를 나눠 쓴다. 둘째는 첫째가 끝나야 시작한다.
+test('종류가 달라도 한 줄이다: build가 쥐고 있으면 install은 기다렸다가 첫째가 끝난 뒤 시작한다', async () => {
+  const home = freshHome(), marks = path.join(home, 'marks.txt'), release = path.join(home, 'release');
+  const job = name => node(`
+    const fs = require('fs');
+    const mark = phase => fs.appendFileSync(${JSON.stringify(marks)}, '${name}-' + phase + ' ' + Date.now() + '\\n');
+    mark('start');
+    if ('${name}' === 'a') {
+      const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); mark('end'); } }, 25);
+    } else mark('end');
+  `);
+  const a = start(home, 'build', job('a'));
+  await until(() => fs.existsSync(marks));
+  const b = start(home, 'install', job('b'));
+  try { await until(() => /대기: install 자리 모두 사용 중/.test(b.out.stderr)); }
+  finally { fs.writeFileSync(release, 'release'); }
+  const [ra, rb] = await Promise.all([a.done, b.done]);
+  assert.equal(ra.code, 0); assert.equal(rb.code, 0);
+  const at = Object.fromEntries(fs.readFileSync(marks, 'utf8').trim().split('\n').map(l => l.split(' ')).map(([k, v]) => [k, Number(v)]));
+  assert.ok(at['b-start'] >= at['a-end'], JSON.stringify(at));
+  assert.match(rb.stderr, /heavy-1\.lock pid \d+ \S+ 종류 build/);
+  assert.equal(lockCount(home), 0);
+});
+
+test('같은 종류도 기본은 하나이고, 설정 heavy를 올리면 그 개수만큼 동시에 돈다', async () => {
   const home = freshHome();
-  const jobs = [1, 2].map(() => start(home, 'install', node('setTimeout(()=>{},2000)')));
+  fs.writeFileSync(path.join(home, 'resource-limits.json'), JSON.stringify({heavy: 2, limits: {install: 9}}));
+  const jobs = ['install', 'build'].map(kind => start(home, kind, node('setTimeout(()=>{},2000)')));
   await until(() => lockCount(home) === 2);
   const results = await Promise.all(jobs.map(j => j.done));
   assert.deepEqual(results.map(r => [r.code, /대기/.test(r.stderr)]), [[0, false], [0, false]]);
+  // 옛 limits는 더 쓰지 않는다: status가 한 줄로 알린다.
+  const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
+  const parsed = JSON.parse(status.stdout);
+  assert.equal(parsed.heavy, 2);
+  assert.match(parsed.notice, /limits.*더 이상 쓰지 않음/);
+  assert.equal('limits' in parsed, false);
+  const clean = freshHome();
+  assert.equal(JSON.parse(spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: clean}, encoding: 'utf8'}).stdout).heavy, 1);
+  fs.writeFileSync(path.join(clean, 'resource-limits.json'), JSON.stringify({heavy: 0}));
+  const bad = await start(clean, 'build', node('0')).done;
+  assert.equal(bad.code, 1);
+  assert.match(bad.stderr, /잘못된 동시 개수: heavy=0/);
 });
 
 test('명령이 실패해도, 중단돼도 잠금을 풀고 종료 코드를 돌려준다', async () => {
@@ -87,8 +125,8 @@ test('죽은 PID의 잠금은 회수한다', async () => {
   const home = freshHome();
   const dead = spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], {encoding: 'utf8'});
   fs.mkdirSync(path.join(home, 'limits'));
-  fs.writeFileSync(path.join(home, 'limits', 'rust-1.lock'), JSON.stringify({pid: Number(dead.stdout.trim()), command: ['cargo', 'build']}));
-  assert.equal(limitHolders(home, 'rust')[0].alive, false);
+  fs.writeFileSync(path.join(home, 'limits', 'heavy-1.lock'), JSON.stringify({pid: Number(dead.stdout.trim()), command: ['cargo', 'build']}));
+  assert.equal(limitHolders(home)[0].alive, false);
   const result = await start(home, 'rust', node('process.exit(0)')).done;
   assert.equal(result.code, 0);
   assert.doesNotMatch(result.stderr, /대기/);
@@ -146,10 +184,10 @@ test('시작 표지: 실제 limit run이 잠금에 자기 표지를 적고, 다�
     const wait = () => fs.existsSync(${JSON.stringify(release)}) ? process.exit(0) : setTimeout(wait, 25);
     wait();`));
   await until(() => lockCount(home) === 1);
-  const [held] = limitHolders(home, 'rust');
+  const [held] = limitHolders(home);
   assert.equal(held.pid, job.child.pid);
   // startToken은 출력 허용 목록에 없다. 잠금 파일에 적힌 값을 직접 본다.
-  const saved = JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8'));
+  const saved = JSON.parse(fs.readFileSync(path.join(home, 'limits', 'heavy-1.lock'), 'utf8'));
   assert.equal(saved.startToken, processStartToken(job.child.pid));
   assert.equal(held.state, 'alive');
   fs.writeFileSync(release, '');
@@ -158,8 +196,8 @@ test('시작 표지: 실제 limit run이 잠금에 자기 표지를 적고, 다�
 
 test('PID 재사용: 주인 PID가 살아 있어도 시작 표지가 다르면 회수해 자리를 잡는다', async () => {
   const home = freshHome();
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now()), startToken: otherToken(myToken)});
-  const [seen] = limitHolders(home, 'rust');
+  writeLock(home, 'heavy-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now()), startToken: otherToken(myToken)});
+  const [seen] = limitHolders(home);
   assert.equal(seen.state, 'pid-reused'); assert.equal(seen.alive, false);
   const result = await start(home, 'rust', node('process.exit(0)')).done;
   assert.equal(result.code, 0, result.stderr);
@@ -169,14 +207,14 @@ test('PID 재사용: 주인 PID가 살아 있어도 시작 표지가 다르면 �
 
 test('시작 표지가 같으면 살아 있는 주인이다: 잡지 못하고 기다린다', async () => {
   const home = freshHome(), mark = path.join(home, 'ran');
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now()), startToken: myToken});
-  assert.equal(limitHolders(home, 'rust')[0].state, 'alive');
+  writeLock(home, 'heavy-1.lock', {pid: process.pid, kind: 'rust', command: ['cargo', 'build'], since: iso(Date.now()), startToken: myToken});
+  assert.equal(limitHolders(home)[0].state, 'alive');
   const waiting = start(home, 'rust', node(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x')`));
   await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
   assert.doesNotMatch(waiting.out.stderr, /죽음|PID 재사용/);
   assert.equal(fs.existsSync(mark), false);
   // 시험이 만든 격리 홈의 잠금을 치워 자리를 내준다(주인이 일을 끝낸 것과 같다).
-  fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
+  fs.renameSync(path.join(home, 'limits', 'heavy-1.lock'), path.join(home, 'released.lock'));
   assert.equal((await waiting.done).code, 0);
   assert.equal(fs.existsSync(mark), true);
 });
@@ -185,9 +223,9 @@ test('시계 보정: 판정은 잠금 시각(since)과 벽시계를 보지 않�
   const home = freshHome(), started = processStartedAt(process.pid);
   // 잠금을 잡은 뒤 시계가 앞으로 5초·1시간 보정된 것처럼 since가 프로세스 시작보다 이르게 보여도 회수하지 않는다.
   for (const since of [iso(started - 5000), iso(started - 3600_000), iso(Date.now() + 3600_000), undefined]) {
-    writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since, startToken: myToken});
-    assert.equal(limitHolders(home, 'rust')[0].state, 'alive', String(since));
-    assert.equal(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust'}), null);
+    writeLock(home, 'heavy-1.lock', {pid: process.pid, kind: 'rust', since, startToken: myToken});
+    assert.equal(limitHolders(home)[0].state, 'alive', String(since));
+    assert.equal(tryAcquireLimit(home, {pid: process.pid, kind: 'rust'}), null);
   }
   // Linux: 표지는 부팅 식별값과 부팅 뒤 틱뿐이라, 벽시계가 바뀌어 ps의 시작 시각이 밀려도 그대로다(ps를 부르지 않는다).
   const recorded = linuxToken(procFiles());
@@ -240,21 +278,21 @@ test('시작 표지 읽기: 실패·이상한 출력은 null이고, 명령 이�
 
 test('표시: status와 대기 줄이 죽은 PID와 PID 재사용을 구분해 보인다', async () => {
   const home = freshHome(), dead = deadPid();
-  // rust는 자리가 하나다. 2·3번 잠금 파일은 자리 밖이라 회수되지 않고 표시만 된다.
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: myToken});
-  writeLock(home, 'rust-2.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: otherToken(myToken)});
-  writeLock(home, 'rust-3.lock', {pid: dead, kind: 'rust', since: iso(Date.now()), startToken: myToken});
+  // 자리는 하나(heavy-1)다. 2·3번 잠금 파일은 자리 밖이라 회수되지 않고 표시만 된다.
+  writeLock(home, 'heavy-1.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: myToken});
+  writeLock(home, 'heavy-2.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: otherToken(myToken)});
+  writeLock(home, 'heavy-3.lock', {pid: dead, kind: 'rust', since: iso(Date.now()), startToken: myToken});
   const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
   assert.equal(status.status, 0, status.stderr);
   const holders = Object.fromEntries(JSON.parse(status.stdout).holders.map(h => [h.lock, h]));
-  assert.deepEqual(['rust-1.lock', 'rust-2.lock', 'rust-3.lock'].map(name => [holders[name].state, holders[name].alive]),
+  assert.deepEqual(['heavy-1.lock', 'heavy-2.lock', 'heavy-3.lock'].map(name => [holders[name].state, holders[name].alive]),
     [['alive', true], ['pid-reused', false], ['dead', false]]);
   const waiting = start(home, 'rust', node('process.exit(0)'));
   await until(() => /대기/.test(waiting.out.stderr));
-  assert.match(waiting.out.stderr, new RegExp(`rust-1\\.lock pid ${process.pid} `));
-  assert.match(waiting.out.stderr, new RegExp(`rust-2\\.lock pid ${process.pid}\\(PID 재사용: 시작 표지 다름\\)`));
-  assert.match(waiting.out.stderr, new RegExp(`rust-3\\.lock pid ${dead}\\(죽음\\)`));
-  fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
+  assert.match(waiting.out.stderr, new RegExp(`heavy-1\\.lock pid ${process.pid} `));
+  assert.match(waiting.out.stderr, new RegExp(`heavy-2\\.lock pid ${process.pid}\\(PID 재사용: 시작 표지 다름\\)`));
+  assert.match(waiting.out.stderr, new RegExp(`heavy-3\\.lock pid ${dead}\\(죽음\\)`));
+  fs.renameSync(path.join(home, 'limits', 'heavy-1.lock'), path.join(home, 'released.lock'));
   assert.equal((await waiting.done).code, 0);
 });
 
@@ -263,8 +301,9 @@ test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽�
   const home = freshHome(), bin = path.join(home, 'bin'), calls = path.join(home, 'ps-calls.txt');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'ps'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nexec /bin/ps "$@"\n`, {mode: 0o755});
-  // 같은 주인이 자리 둘을 다 쥔 모양: 한 바퀴에 잠금 둘을 보지만 PID는 하나다.
-  for (const name of ['build-1.lock', 'build-2.lock']) writeLock(home, name, {pid: process.pid, kind: 'build', since: iso(Date.now()), startToken: myToken});
+  // 같은 주인이 자리 둘을 다 쥔 모양(heavy 2): 한 바퀴에 잠금 둘을 보지만 PID는 하나다.
+  fs.writeFileSync(path.join(home, 'resource-limits.json'), JSON.stringify({heavy: 2}));
+  for (const name of ['heavy-1.lock', 'heavy-2.lock']) writeLock(home, name, {pid: process.pid, kind: 'build', since: iso(Date.now()), startToken: myToken});
   const child = spawn(process.execPath, [cli, 'limit', 'run', 'build', '--', ...node('process.exit(0)')],
     {env: {...process.env, KADAN_HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`}});
   children.add(child);
@@ -276,7 +315,7 @@ test('대기 한 바퀴에서 주인 하나의 시작 표지는 한 번만 읽�
   // 시험 프로세스가 느려 다음 바퀴(2초 뒤)를 한두 번 넘겨 봐도 3번을 넘지 않는다.
   const asked = fs.readFileSync(calls, 'utf8').split('\n').filter(line => line.endsWith(`-p ${process.pid}`));
   assert.ok(asked.length >= 1 && asked.length <= 3, fs.readFileSync(calls, 'utf8'));
-  for (const name of ['build-1.lock', 'build-2.lock']) fs.renameSync(path.join(home, 'limits', name), path.join(home, `released-${name}`));
+  for (const name of ['heavy-1.lock', 'heavy-2.lock']) fs.renameSync(path.join(home, 'limits', name), path.join(home, `released-${name}`));
   assert.equal(await done, 0);
 });
 
@@ -287,19 +326,19 @@ const noLeak = (text, label) => { for (const word of LEAK) assert.ok(!text.inclu
 
 test('옛 형식 잠금: 대기 안내 줄과 status(JSON)에 명령 인자·cwd·모르는 필드가 나오지 않고 이름·PID·시작 시각은 나온다', async () => {
   const home = freshHome(), since = iso(Date.now());
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since, startToken: myToken,
+  writeLock(home, 'heavy-1.lock', {pid: process.pid, kind: 'rust', since, startToken: myToken,
     command: ['env', '-i', 'PATH=/x', 'TOKEN=가짜값', 'pnpm', 'smoke'], cwd: '/secret/cwd', extra: 'SECRET=extra-field', role: 'TOKEN=가짜값'});
   const status = spawnSync(process.execPath, [cli, 'limit', 'status'], {env: {...process.env, KADAN_HOME: home}, encoding: 'utf8'});
   assert.equal(status.status, 0, status.stderr);
   noLeak(status.stdout, 'status');
   const [held] = JSON.parse(status.stdout).holders;
   assert.deepEqual(Object.keys(held).sort(), ['alive', 'kind', 'lock', 'pid', 'since', 'state']);
-  assert.deepEqual([held.lock, held.pid, held.kind, held.since, held.state], ['rust-1.lock', process.pid, 'rust', since, 'alive']);
+  assert.deepEqual([held.lock, held.pid, held.kind, held.since, held.state], ['heavy-1.lock', process.pid, 'rust', since, 'alive']);
   const waiting = start(home, 'rust', node('process.exit(0)'));
   await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
   noLeak(waiting.out.stderr, '대기 줄');
-  assert.match(waiting.out.stderr, new RegExp(`rust-1\\.lock pid ${process.pid} ${since}`));
-  fs.renameSync(path.join(home, 'limits', 'rust-1.lock'), path.join(home, 'released.lock'));
+  assert.match(waiting.out.stderr, new RegExp(`heavy-1\\.lock pid ${process.pid} ${since}`));
+  fs.renameSync(path.join(home, 'limits', 'heavy-1.lock'), path.join(home, 'released.lock'));
   assert.equal((await waiting.done).code, 0);
 });
 
@@ -315,13 +354,13 @@ test('새 잠금: command·cwd를 저장하지 않고, KADAN_ROLE이 있으면 �
     children.add(child);
     const done = new Promise(resolve => child.on('close', resolve));
     await until(() => lockCount(home) === 1);
-    const file = path.join(home, 'limits', 'build-1.lock');
+    const file = path.join(home, 'limits', 'heavy-1.lock');
     const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
     assert.deepEqual(Object.keys(saved).sort(), ['kind', 'pid', 'since', 'startToken', ...(role ? ['role'] : [])].filter(k => k !== 'startToken' || saved.startToken).sort());
     assert.equal(saved.role, role);
     assert.ok(!('command' in saved) && !('cwd' in saved), JSON.stringify(saved));
     noLeak(fs.readFileSync(file, 'utf8'), '잠금 파일');
-    const [seen] = limitHolders(home, 'build');
+    const [seen] = limitHolders(home);
     assert.equal(seen.role, role);
     fs.writeFileSync(release, '');
     assert.equal(await done, 0);
@@ -330,17 +369,17 @@ test('새 잠금: command·cwd를 저장하지 않고, KADAN_ROLE이 있으면 �
 
 test('허용 목록: 모양이 다른 값(PID·시각·역할·종류)은 버린다', () => {
   const home = freshHome();
-  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'TOKEN=가짜값', since: 'TOKEN=가짜값', role: 'a b', startToken: myToken});
-  writeLock(home, 'rust-2.lock', {pid: '123', kind: 'rust', role: 'a=b'});
-  const holders = limitHolders(home, 'rust');
+  writeLock(home, 'heavy-1.lock', {pid: process.pid, kind: 'TOKEN=가짜값', since: 'TOKEN=가짜값', role: 'a b', startToken: myToken});
+  writeLock(home, 'heavy-2.lock', {pid: '123', kind: 'rust', role: 'a=b'});
+  const holders = limitHolders(home);
   noLeak(JSON.stringify(holders), 'holders');
   assert.deepEqual(holders.map(h => Object.keys(h).sort()), [['alive', 'lock', 'pid', 'state'], ['alive', 'kind', 'lock', 'state']]);
 });
 
 // 역할 이름은 카단이 역할 설정(role-instructions)에서 받는 범위와 같다: 유니코드 문자·숫자·밑줄·하이픈, 길이 제한 없음.
 const lockRecordOf = (home, role) => {
-  assert.ok(tryAcquireLimit(home, 'rust', {pid: process.pid, kind: 'rust', since: iso(Date.now()), role}));
-  return JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8'));
+  assert.ok(tryAcquireLimit(home, {pid: process.pid, kind: 'rust', since: iso(Date.now()), role}));
+  return JSON.parse(fs.readFileSync(path.join(home, 'limits', 'heavy-1.lock'), 'utf8'));
 };
 
 test('역할 이름: 유니코드·긴 이름은 저장·표시하고, 명령줄 조각이 될 수 있는 값은 버린다', () => {
@@ -349,13 +388,13 @@ test('역할 이름: 유니코드·긴 이름은 저장·표시하고, 명령줄
   for (const role of good) {
     const home = freshHome();
     assert.equal(lockRecordOf(home, role).role, role);
-    assert.equal(limitHolders(home, 'rust')[0].role, role);
+    assert.equal(limitHolders(home)[0].role, role);
   }
   for (const role of bad) {
     const home = freshHome();
     assert.equal(lockRecordOf(home, role).role, undefined, JSON.stringify(role));
-    writeLock(home, 'rust-2.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), role});
-    assert.equal(limitHolders(home, 'rust').find(h => h.lock === 'rust-2.lock').role, undefined, JSON.stringify(role));
+    writeLock(home, 'heavy-2.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), role});
+    assert.equal(limitHolders(home).find(h => h.lock === 'heavy-2.lock').role, undefined, JSON.stringify(role));
   }
 });
 
@@ -369,7 +408,7 @@ test('역할 이름: 실제 limit run이 유니코드 KADAN_ROLE을 잠금에 �
   children.add(holder);
   const holderDone = new Promise(resolve => holder.on('close', resolve));
   await until(() => lockCount(home) === 1);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'limits', 'rust-1.lock'), 'utf8')).role, role);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'limits', 'heavy-1.lock'), 'utf8')).role, role);
   const waiting = start(home, 'rust', node('process.exit(0)'));
   await until(() => /대기: rust 자리 모두 사용 중/.test(waiting.out.stderr));
   assert.match(waiting.out.stderr, new RegExp(`역할 ${role}`, 'u'));
@@ -378,4 +417,141 @@ test('역할 이름: 실제 limit run이 유니코드 KADAN_ROLE을 잠금에 �
   fs.writeFileSync(release, '');
   assert.equal(await holderDone, 0);
   assert.equal((await waiting.done).code, 0);
+});
+
+// ---- 시작 직전 메모리 확인: 실제 memory_pressure·sysctl은 부르지 않는다. 측정·시계·대기는 인자로 넣는다 ----
+// 모양은 이 맥의 실제 출력에서 가져왔다(2026-11-21).
+const PRESSURE = free => `The system has 17179869184 (1048576 pages with a page size of 16384).\n\nPageouts: 21960 \nSwapins: 0 \nSwapouts: 0 \n\nSystem-wide memory free percentage: ${free}%\n`;
+const SWAP = used => `vm.swapusage: total = 2048.00M  used = ${used}  free = 2048.00M  (encrypted)\n`;
+const fakeRun = ({free = 58, swap = '0.00M'} = {}) => (cmd) => ({status: 0, stdout: cmd === 'memory_pressure' ? PRESSURE(free) : SWAP(swap)});
+
+test('메모리 파싱: 여유 비율은 마지막 줄 값, 스왑 used는 단위(K·M·G)를 MB로 바꾼다', () => {
+  assert.equal(parseFreePercent(PRESSURE(58)), 58);
+  assert.equal(parseFreePercent('System-wide memory free percentage: 12%\nSystem-wide memory free percentage: 31%\n'), 31);
+  assert.equal(parseSwapUsedMb(SWAP('0.00M')), 0);
+  assert.equal(parseSwapUsedMb(SWAP('0.25M')), 0.25);
+  assert.equal(parseSwapUsedMb(SWAP('1.50G')), 1536);
+  assert.equal(parseSwapUsedMb(SWAP('512.00K')), 0.5);
+  for (const bad of ['', 'garbage', undefined, null, 'System-wide memory free percentage: ?%']) assert.equal(parseFreePercent(bad), null);
+  for (const bad of ['', 'garbage', undefined, null, 'vm.swapusage: total = 1M']) assert.equal(parseSwapUsedMb(bad), null);
+});
+
+test('메모리 판정: 여유 29%는 대기, 30%는 시작; 스왑 used 0.00M은 시작, 0.25M은 대기', () => {
+  const judge = (free, swap) => judgeMemory(readMemory({platform: 'darwin', run: fakeRun({free, swap})}));
+  assert.equal(judge(29, '0.00M').ok, false);
+  assert.equal(judge(30, '0.00M').ok, true);
+  assert.equal(judge(58, '0.00M').ok, true);
+  assert.equal(judge(58, '0.25M').ok, false);
+  assert.equal(judge(29, '0.25M').ok, false);
+  assert.match(judge(29, '0.25M').line, /여유 29%\(30% 이상 필요\)·스왑 used 0\.25M\(0이어야 함\)/);
+});
+
+test('메모리 읽기: 맥이 아니거나 값을 못 읽으면 막지 않고 이유만 낸다(여유·스왑 어느 쪽이든)', () => {
+  assert.deepEqual(readMemory({platform: 'linux', run: () => assert.fail('리눅스에서는 부르지 않는다')}), {skip: '맥이 아님(linux)'});
+  const outcomes = [
+    ['memory_pressure 없음', () => ({status: null, error: new Error('ENOENT')})],
+    ['여유 비율 못 읽음', () => ({status: 0, stdout: 'garbage'})],
+    ['실행 예외', () => { throw new Error('boom'); }],
+    ['스왑 못 읽음', cmd => ({status: 0, stdout: cmd === 'memory_pressure' ? PRESSURE(10) : 'garbage'})],
+  ];
+  for (const [label, run] of outcomes) {
+    const memory = readMemory({platform: 'darwin', run});
+    assert.ok(memory.skip, label);
+    assert.deepEqual(judgeMemory(memory), {ok: true, skip: memory.skip}, label);
+  }
+});
+
+const memoryHome = () => {
+  const home = freshHome();
+  return {home, mark: path.join(home, 'ran.txt'), command: node(`require('fs').writeFileSync(${JSON.stringify(path.join(home, 'ran.txt'))}, 'x')`)};
+};
+// 가짜 시계: 대기(sleep)가 시계를 앞으로 보낸다.
+const clock = () => { let t = 0; return {now: () => t, sleepFn: async ms => { t += ms; }}; };
+
+test('메모리가 모자라면 자리를 쥔 채 기다리다가 풀리면 명령을 돌린다; 같은 값은 대기 줄을 다시 내지 않는다', async () => {
+  const {home, mark, command} = memoryHome(), logs = [], seen = [];
+  const readings = [{freePercent: 20, swapUsedMb: 0}, {freePercent: 20, swapUsedMb: 0}, {freePercent: 25, swapUsedMb: 0}, {freePercent: 40, swapUsedMb: 0}];
+  const c = clock();
+  const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
+    memory: {enabled: true, ...c, pollMs: 1000, waitMs: 60_000, measure: () => {
+      seen.push(lockCount(home)); // 재는 동안에도 자리는 쥐고 있다
+      return readings.shift();
+    }}});
+  assert.equal(code, 0);
+  assert.deepEqual(seen, [1, 1, 1, 1]);
+  assert.ok(fs.existsSync(mark));
+  const waits = logs.filter(m => /^대기: 메모리 부족/.test(m));
+  assert.equal(waits.length, 2, logs.join('\n')); // 20% 한 번(두 번째 같은 값은 생략), 25% 한 번
+  assert.match(waits[0], /여유 20%\(30% 이상 필요\)·스왑 used 0M\(0이어야 함\)\. 자리는 쥔 채 기다림\(최대 1분\)/);
+  assert.equal(lockCount(home), 0);
+});
+
+test('대기 상한을 넘으면 명령을 돌리지 않고 자리를 풀고 종료 코드 75와 잰 값을 낸다', async () => {
+  const {home, mark, command} = memoryHome(), logs = [];
+  const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
+    memory: {enabled: true, ...clock(), pollMs: 1000, waitMs: 3000, measure: () => ({freePercent: 12, swapUsedMb: 300})}});
+  assert.equal(code, MEMORY_WAIT_EXIT);
+  assert.equal(MEMORY_WAIT_EXIT, 75);
+  assert.equal(fs.existsSync(mark), false); // 부작용 없음
+  assert.equal(lockCount(home), 0); // 자리를 풀었다
+  assert.match(logs.at(-1), /^메모리 부족으로 시작하지 않음\(종료 75\): 여유 12%\(30% 이상 필요\)·스왑 used 300M\(0이어야 함\)\. 3초 기다렸지만/);
+  // 시험 실패(1)와 구별된다: 같은 자리에서 다음 명령은 그대로 돈다.
+  assert.equal(await runLimited(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore',
+    memory: {enabled: true, measure: () => ({freePercent: 80, swapUsedMb: 0})}}), 0);
+  assert.ok(fs.existsSync(mark));
+});
+
+test('메모리를 기다리는 동안 자리를 쥐고 있어 다른 무거운 작업은 시작하지 않는다', async () => {
+  const {home, mark, command} = memoryHome();
+  let enough = false;
+  const holder = runLimited(home, 'rust', command, {env: {}, log: () => {}, stdio: 'ignore', pollMs: 10,
+    memory: {enabled: true, pollMs: 20, waitMs: 60_000, measure: () => ({freePercent: enough ? 80 : 5, swapUsedMb: 0})}});
+  try {
+    await until(() => lockCount(home) === 1);
+    const other = start(home, 'install', node('0'));
+    await until(() => /대기: install 자리 모두 사용 중\(맥 전체 한 줄\) — heavy-1\.lock pid \d+ \S+ 종류 rust/.test(other.out.stderr));
+    assert.equal(fs.existsSync(mark), false);
+    assert.equal(lockCount(home), 1);
+    enough = true; // 메모리가 풀리면 기다리던 쪽이 돌고 끝나서 자리를 내주고, 그제야 둘째가 돈다
+    assert.equal(await holder, 0);
+    assert.equal((await other.done).code, 0);
+  } finally { enough = true; }
+  assert.equal(lockCount(home), 0);
+});
+
+test('못 읽거나 맥이 아니면 건너뛰고 한 줄만 남긴다(대기 아님); 끄는 스위치 파일이 있으면 재지도 않는다', async () => {
+  const {home, mark, command} = memoryHome(), logs = [];
+  const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
+    memory: {enabled: true, measure: () => readMemory({platform: 'linux'})}});
+  assert.equal(code, 0);
+  assert.deepEqual(logs, ['메모리 확인 건너뜀: 맥이 아님(linux)']);
+  assert.ok(!logs.some(m => /대기/.test(m)));
+  fs.rmSync(mark);
+  // 스위치 파일: measure가 불리면 안 된다.
+  fs.writeFileSync(path.join(home, 'memory-check.off'), '');
+  const quiet = [];
+  assert.equal(await runLimited(home, 'build', command, {env: {}, log: m => quiet.push(m), stdio: 'ignore',
+    memory: {measure: () => assert.fail('스위치가 있으면 재지 않는다')}}), 0);
+  assert.deepEqual(quiet, []);
+  assert.ok(fs.existsSync(mark));
+  // 환경 변수 스위치(env 인자가 비어 있어도 이 프로세스의 환경을 본다는 것은 아래 기본값 시험이 따로 확인한다).
+  assert.equal(memoryCheckEnabled(home, {}), false);
+  assert.equal(memoryCheckEnabled(freshHome(), {[MEMORY_OFF_ENV]: 'off'}), false);
+});
+
+test('운영 기본은 켜짐이고, tests/run.mjs 아래(KADAN_MEMORY_CHECK=off)는 꺼짐이다', () => {
+  assert.equal(memoryCheckEnabled(freshHome(), {}), true);
+  assert.equal(memoryCheckEnabled(freshHome(), {[MEMORY_OFF_ENV]: 'on'}), true);
+  assert.equal(memoryCheckEnabled(freshHome(), process.env), false, 'npm test(tests/run.mjs)로 돌려야 한다');
+  assert.match(fs.readFileSync(fileURLToPath(new URL('./run.mjs', import.meta.url)), 'utf8'), /env\.KADAN_MEMORY_CHECK = 'off'/);
+});
+
+test('옛 <종류>-N.lock은 세지도 회수하지도 않는다(머지 직후 잠깐 겹침을 막는 장치는 없다)', async () => {
+  const home = freshHome();
+  writeLock(home, 'rust-1.lock', {pid: process.pid, kind: 'rust', since: iso(Date.now()), startToken: myToken});
+  assert.deepEqual(limitHolders(home), []);
+  const result = await start(home, 'build', node('process.exit(0)')).done;
+  assert.equal(result.code, 0);
+  assert.doesNotMatch(result.stderr, /대기/);
+  assert.ok(fs.existsSync(path.join(home, 'limits', 'rust-1.lock')));
 });
