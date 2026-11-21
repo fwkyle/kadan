@@ -428,7 +428,9 @@ test('U3: unknown + 0 screens opens exactly one tab, tries to remove the old one
   const result = await attachWith(entries, fake, e => { recorded.push(e); entries.push(e); }, () => ({ok: true, count: 0}));
   assert.equal(result.attached, true); assert.equal(result.rottieTerminalId, 'new-tab');
   assert.deepEqual([result.restoredFrom, result.oldState], ['old', 'unknown']);
-  assert.deepEqual(fake.calls.map(c => c.args.slice(0, 2).join(' ')), ['status --json', 'terminal show', 'terminal create', 'terminal remove']);
+  // 만든 뒤 옛 탭을 다시 확인(show)하고, 옛 탭이 안 살아 있으면 제거한다(fix2).
+  assert.deepEqual(fake.calls.map(c => c.args.slice(0, 2).join(' ')),
+    ['status --json', 'terminal show', 'terminal create', 'terminal show', 'terminal remove']);
   const removal = fake.calls.find(c => c.args[1] === 'remove');
   assert.equal(removal.args[removal.args.indexOf('--terminal') + 1], 'old'); // 지우는 것은 옛 탭 하나뿐
   assert.equal(attachFailureLine(result), null);
@@ -448,7 +450,7 @@ test('U3: unknown + 0 screens opens exactly one tab, tries to remove the old one
   assert.deepEqual(alive.calls.map(c => c.args.slice(0, 2).join(' ')), ['status --json', 'terminal show']);
 });
 
-test('U4: unknown + screens attached or unreadable never creates or removes a tab; a failing old-tab removal does not fail the attach', async () => {
+test('U4: unknown + screens attached or unreadable never creates or removes a tab', async () => {
   for (const seen of [{ok: true, count: 1}, {ok: true, count: 2}, {ok: false, code: 'tmux-exit-1'}]) {
     const entries = inheritedHidden(); const recorded = [];
     const fake = fakeRottie({create: 'x', show: shownState('unknown')});
@@ -457,15 +459,6 @@ test('U4: unknown + screens attached or unreadable never creates or removes a ta
     assert.deepEqual(fake.calls.map(c => c.args.slice(0, 2).join(' ')), ['status --json', 'terminal show'], 'create·remove 0회');
     assert.equal(recorded.length, 0);
   }
-  // 옛 탭 제거 실패(로티가 살아 있는 탭이라 거부 등)는 알리기만 하고 새 탭 붙이기는 성공으로 둔다.
-  const base2 = fakeRottie({create: 'new-tab', show: shownState('unknown')});
-  const refusing = {calls: base2.calls, run: (bin, args, options) => (args[1] === 'remove'
-    ? (base2.calls.push({bin, args, options}), {status: 1, stdout: JSON.stringify({ok: false, error: {code: 'ROTTIE_TERMINAL_RUNNING'}})})
-    : base2.run(bin, args, options))};
-  const entries = inheritedHidden();
-  const result = await attachWith(entries, refusing, e => entries.push(e), () => ({ok: true, count: 0}));
-  assert.deepEqual([result.attached, result.rottieTerminalId], [true, 'new-tab']);
-  assert.equal(refusing.calls.filter(c => c.args[1] === 'remove').length, 1, '제거는 한 번만 시도한다');
 });
 
 test('U5: sessionClientCount reads 0 / N / unreadable as three separate answers (list-clients failure is not "0")', async () => {
@@ -482,4 +475,141 @@ test('U5: sessionClientCount reads 0 / N / unreadable as three separate answers 
   assert.deepEqual(sessionClientCount('s', {run: run({status: 0, stdout: 'garbage\n'})}), {ok: false, code: 'tmux-output-unreadable'});
   assert.deepEqual(sessionClientCount('s', {run: () => { throw Object.assign(new Error('x'), {code: 'EX'}); }}), {ok: false, code: 'EX'});
   assert.deepEqual(sessionClientCount('s', {run: () => { throw new Error('no code'); }}), {ok: false, code: 'tmux-error'});
+});
+
+// ---- fix2: 0개를 읽은 뒤 옛 탭이 늦게 붙는 경합 (2026-11-21 검수 changes) ----
+// 가짜 로티: show는 호출 차례대로 답하고(마지막 답을 반복), create는 차례대로 답하며, remove·close는 대상 ID별로 정한다.
+// calls는 'status' · 'show <id>' · 'create' · 'remove <id>' · 'close <id>' 순서 기록이다.
+function scriptedRottie({shows = [shownState('unknown')], creates = [{id: 'new-tab'}], remove = {}, close = {}} = {}) {
+  const calls = []; const createArgs = [];
+  let shown = 0, made = 0;
+  const json = (value, status = 0) => ({status, stdout: JSON.stringify(value)});
+  const verdict = (table, id) => { const r = table[id] ?? {ok: true}; return r.ok === false ? json({ok: false, error: {code: r.code}}, 3) : json({ok: true}); };
+  const run = (bin, args) => {
+    const at = args.indexOf('--terminal');
+    const id = at >= 0 ? args[at + 1] : null;
+    calls.push(args[0] === 'status' ? 'status' : `${args[1]}${id ? ` ${id}` : ''}`);
+    if (args[0] === 'status') return json({ok: true, runtime: {bundleId: 'dev.fixture'}});
+    if (args[1] === 'show') return json(shows[Math.min(shown++, shows.length - 1)]);
+    if (args[1] === 'create') {
+      createArgs.push(args);
+      const made_ = creates[Math.min(made++, creates.length - 1)];
+      return made_.id ? json({ok: true, result: {terminal: {id: made_.id, pid: 1}}}) : json({ok: false, error: {code: made_.code}});
+    }
+    if (args[1] === 'remove') return verdict(remove, id);
+    if (args[1] === 'close') return verdict(close, id);
+    return {status: 1, stdout: ''};
+  };
+  return {calls, createArgs, run};
+}
+const zeroScreens = () => ({ok: true, count: 0});
+const runCycle = async (fake, {entries = inheritedHidden(), clients = zeroScreens} = {}) => {
+  const recorded = [];
+  const result = await attachWith(entries, fake, e => { recorded.push(e); entries.push(e); }, clients);
+  return {result, recorded, entries};
+};
+const RACED_LINE = detail => `비서 로티 탭 붙이기 실패: tab-raced (${detail})`;
+
+test('W1: the old tab comes back after the 0-screen read — the new tab is closed and removed, nothing is recorded as attached', async () => {
+  const {attachFailureLine} = await import('../src/secretary-tab.mjs');
+  const fake = scriptedRottie({shows: [shownState('unknown'), shownState('running')]});
+  const {result, recorded, entries} = await runCycle(fake);
+  assert.deepEqual([result.attached, result.reason], [false, 'tab-raced']);
+  assert.deepEqual(fake.calls, ['status', 'show old', 'create', 'show old', 'close new-tab', 'remove new-tab']); // 옛 탭은 건드리지 않는다
+  assert.equal(recorded.length, 0);
+  const detail = '옛 탭 old · 새 탭 new-tab: 옛 탭이 다시 running; 새 탭 닫고 제거함';
+  assert.equal(result.detail, detail);
+  assert.equal(attachFailureLine(result), RACED_LINE(detail));
+  // 다음 주기: 옛 탭이 running이니 아무것도 열지 않는다(탭 하나, 옛 탭).
+  const next = scriptedRottie({shows: [shownState('running')]});
+  const again = await runCycle(next, {entries});
+  assert.deepEqual([again.result.reason, next.calls], ['tab-alive', ['status', 'show old']]);
+  assert.equal(attachFailureLine(again.result), null);
+});
+
+test('W2: a refused old-tab removal means the old tab may be alive — the new tab is cleaned up and nothing is recorded', async () => {
+  const {attachFailureLine} = await import('../src/secretary-tab.mjs');
+  for (const code of ['ROTTIE_TERMINAL_RUNNING', 'ROTTIE_TERMINAL_QUERY_FAILED']) {   // 어떤 거절이든 성공으로 보지 않는다
+    const fake = scriptedRottie({remove: {old: {ok: false, code}}});
+    const {result, recorded} = await runCycle(fake);
+    assert.deepEqual([result.attached, result.reason], [false, 'tab-raced'], code);
+    assert.deepEqual(fake.calls, ['status', 'show old', 'create', 'show old', 'remove old', 'close new-tab', 'remove new-tab'], code);
+    assert.equal(recorded.length, 0, code);
+    assert.equal(attachFailureLine(result), RACED_LINE(`옛 탭 old · 새 탭 new-tab: 옛 탭 제거 거절 code=${code}; 새 탭 닫고 제거함`));
+  }
+});
+
+test('W3: normal swap — the old tab is gone after the re-check (removed or NOT_FOUND): one record, one tab, next cycle opens nothing', async () => {
+  for (const remove of [{}, {old: {ok: false, code: 'ROTTIE_TERMINAL_NOT_FOUND'}}]) {
+    const fake = scriptedRottie({remove});
+    const {result, recorded, entries} = await runCycle(fake);
+    assert.deepEqual([result.attached, result.rottieTerminalId, result.restoredFrom, result.oldState], [true, 'new-tab', 'old', 'unknown']);
+    assert.deepEqual(fake.calls, ['status', 'show old', 'create', 'show old', 'remove old']);          // 새 탭은 건드리지 않는다
+    assert.deepEqual(recorded.map(e => [e.kind, e.rottieTerminalId, e.restoredFrom, e.oldState]), [['window', 'new-tab', 'old', 'unknown']]);
+    const next = scriptedRottie();
+    assert.equal((await runCycle(next, {entries})).result.reason, 'has-tab');
+    assert.equal(next.calls.length, 0);
+  }
+});
+
+test('W4: when the new tab cannot be cleaned up either, nothing is recorded and both ids and codes are in the log line', async () => {
+  const {attachFailureLine} = await import('../src/secretary-tab.mjs');
+  const closeFails = scriptedRottie({shows: [shownState('unknown'), shownState('running')], close: {'new-tab': {ok: false, code: 'ROTTIE_CLOSE_FAILED'}}});
+  const a = await runCycle(closeFails);
+  assert.deepEqual([a.result.attached, a.result.reason, a.recorded.length], [false, 'tab-raced', 0]);
+  assert.deepEqual(closeFails.calls, ['status', 'show old', 'create', 'show old', 'close new-tab']);     // 닫지 못했으면 remove는 시도하지 않는다
+  assert.equal(attachFailureLine(a.result),
+    RACED_LINE('옛 탭 old · 새 탭 new-tab: 옛 탭이 다시 running; 새 탭 닫기 실패 code=ROTTIE_CLOSE_FAILED (새 탭이 남아 있을 수 있어 사람 확인 필요)'));
+  const removeFails = scriptedRottie({shows: [shownState('unknown'), shownState('created')], remove: {'new-tab': {ok: false, code: 'ROTTIE_TERMINAL_RUNNING'}}});
+  const b = await runCycle(removeFails);
+  assert.deepEqual([b.result.attached, b.result.reason, b.recorded.length], [false, 'tab-raced', 0]);
+  assert.equal(attachFailureLine(b.result),
+    RACED_LINE('옛 탭 old · 새 탭 new-tab: 옛 탭이 다시 created; 새 탭 닫음, 제거 실패 code=ROTTIE_TERMINAL_RUNNING (종료됨으로 남음)'));
+  // 같은 원인은 비서 줄 칸에서 한 번만 남는다.
+  const {changedOutput} = await import('../src/revive.mjs');
+  const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'w4-'));
+  const line = attachFailureLine(b.result);
+  assert.deepEqual(changedOutput(home, [line], 'lastSecretaryOutput'), [line]);
+  assert.deepEqual(changedOutput(home, [line], 'lastSecretaryOutput'), []);
+});
+
+test('W5: exited and gone tabs keep their old behaviour (no second show, old removal result not judged)', async () => {
+  const exited = scriptedRottie({shows: [shownState('exited')], remove: {old: {ok: false, code: 'ROTTIE_TERMINAL_RUNNING'}}});
+  const a = await runCycle(exited, {clients: () => { throw new Error('exited는 tmux에 묻지 않는다'); }});
+  assert.deepEqual([a.result.attached, a.result.rottieTerminalId, a.result.oldState], [true, 'new-tab', 'exited']);
+  assert.deepEqual(exited.calls, ['status', 'show old', 'create', 'remove old']);
+  const gone = scriptedRottie({shows: [{ok: false, error: {code: 'ROTTIE_TERMINAL_NOT_FOUND'}}]});
+  const b = await runCycle(gone, {clients: () => { throw new Error('없는 탭은 tmux에 묻지 않는다'); }});
+  assert.deepEqual([b.result.attached, b.result.oldState], [true, '없음']);
+  assert.deepEqual(gone.calls, ['status', 'show old', 'create']);
+});
+
+test('W6: after a raced cleanup the same generation may open again — an idempotency-key conflict is retried once with a new key', async () => {
+  const fake = scriptedRottie({creates: [{code: 'ROTTIE_IDEMPOTENCY_CONFLICT'}, {id: 'new-tab'}]});
+  const {result} = await runCycle(fake);
+  assert.deepEqual([result.attached, result.rottieTerminalId], [true, 'new-tab']);
+  const keys = fake.createArgs.map(args => args[args.indexOf('--idempotency-key') + 1]);
+  assert.deepEqual(keys, ['kadan-kadan-비서-30', 'kadan-kadan-비서-30-secretary-retry']);
+});
+
+test('W7: the secretary line is deduplicated on its own, not together with the rest of the cycle output', async () => {
+  const {changedOutput, readReviveState} = await import('../src/revive.mjs');
+  const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'w7-'));
+  const S = '비서 로티 탭 붙이기 실패: tab-unknown (탭 old show 응답 state=unknown · tmux 붙은 화면 1개)';
+  const W = '감시기: 다시 띄움(이번 1시간 1번째)';
+  const cycle = (block, secretary) => [...changedOutput(home, block), ...changedOutput(home, secretary, 'lastSecretaryOutput')];
+  assert.deepEqual(cycle([W], [S]), [W, S]);        // 처음
+  assert.deepEqual(cycle([], [S]), []);             // 감시기 줄이 빠져도 같은 비서 줄은 다시 나오지 않는다
+  assert.deepEqual(cycle([W], [S]), [W]);           // 감시기 줄이 다시 끼어도 비서 줄은 나오지 않는다
+  assert.deepEqual(cycle([], []), []);              // 조용한 주기는 비서 칸을 비운다
+  assert.deepEqual(cycle([], [S]), [S]);            // 그 뒤 같은 원인이 다시 오면 한 번 더
+  const state = readReviveState(home);
+  assert.equal(state.corrupt, undefined); assert.equal(state.lastSecretaryOutput, S);
+  // 옛 방식(한 묶음)은 두 번째 주기에 같은 비서 줄을 다시 낸다: 이 시험이 막는 회귀.
+  const joined = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'w7b-'));
+  assert.deepEqual(changedOutput(joined, [W, S]), [W, S]);
+  assert.deepEqual(changedOutput(joined, [S]), [S]);
+  // 새 칸의 모양이 틀리면 손상으로 본다(다른 칸과 같은 기준).
+  fs.writeFileSync(path.join(home, 'revive-state.json'), JSON.stringify({lastSecretaryOutput: 5}));
+  assert.equal(readReviveState(home).corrupt, true);
 });

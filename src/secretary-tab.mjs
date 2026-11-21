@@ -1,10 +1,10 @@
 // 비서가 다시 뜰 때(재개·자동 시작·restart) 로티 탭을 하나만 붙인다 (2026-11-13 [kyle]).
 // 판정은 하나다: 기계 설정이 rottie이고 로티가 실제로 살아 있을 때만 연다. 폴백 체인이 아니다.
 // 실패·시간 초과·로티 없음·모름은 모두 "열지 않음"이고 비서 시작은 그대로 성공이다(숨김으로 기록).
-// 로티 호출은 status·terminal show/create/remove뿐이라 앱을 앞으로 가져오지 않는다(assertRottieArgv).
+// 로티 호출은 status·terminal show/create/remove(와 방금 만든 새 탭을 치우는 close)뿐이라 앱을 앞으로 가져오지 않는다(assertRottieArgv).
 import {spawnSync} from 'node:child_process';
 import {readWindowSetting} from './window-setting.mjs';
-import {rottieConnectivity, showRottieWindow, removeRottieWindow, openWindow, sessionClientCount} from './floor-tmux.mjs';
+import {rottieConnectivity, showRottieWindow, removeRottieWindow, closeRottieWindow, openWindow, sessionClientCount} from './floor-tmux.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {cleanWindowMessage} from './cli-start-support.mjs';
 
@@ -75,6 +75,33 @@ export function planSecretaryTab({env = process.env, auto = false, setting, entr
     : unknown(null);
 }
 
+const NOT_FOUND = 'ROTTIE_TERMINAL_NOT_FOUND';
+const text = value => cleanWindowMessage(value) || '(없음)';
+
+// unknown 교체로 새 탭을 만든 "뒤" 확인한다. 0개를 읽은 뒤 새 탭을 만드는 사이에 옛 탭이 늦게 붙으면 openWindow는
+// "그 세션에 client가 하나라도 있나"만 봐서 옛 탭의 연결을 새 탭의 성공으로 오인한다(검수 재현 3형태).
+// 옛 탭이 다시 running·created이거나, 옛 탭 제거가 NOT_FOUND 아닌 이유로 거절되면(로티는 살아 있을 수 있는 탭을 스스로 거부한다)
+// 방금 만든 새 탭만 치우고(close 뒤 remove: 살아 있는 탭은 remove가 거부한다) 성공으로 기록하지 않는다.
+// 옛 탭 제거가 성공하거나 NOT_FOUND면 남은 client는 새 탭 것이다. 반환: null = 이상 없음, {detail} = 경합. 던지지 않는다.
+function checkReplacedUnknown({bin, oldId, newId, spawnFn}) {
+  const again = showRottieWindow({bin, terminalId: oldId, spawnFn});
+  let problem = null;
+  if (again.ok && ALIVE_STATES.has(again.state)) problem = `옛 탭이 다시 ${text(again.state)}`;
+  else {
+    const removal = removeRottieWindow({bin, terminalId: oldId, spawnFn});
+    if (!removal.removed && removal.code !== NOT_FOUND) problem = `옛 탭 제거 거절 code=${text(removal.code)}`;
+  }
+  if (!problem) return null;
+  let cleanup;
+  const closed = closeRottieWindow({bin, terminalId: newId, spawnFn});
+  if (!closed.closed) cleanup = `새 탭 닫기 실패 code=${text(closed.code)} (새 탭이 남아 있을 수 있어 사람 확인 필요)`;
+  else {
+    const removed = removeRottieWindow({bin, terminalId: newId, spawnFn});
+    cleanup = removed.removed ? '새 탭 닫고 제거함' : `새 탭 닫음, 제거 실패 code=${text(removed.code)} (종료됨으로 남음)`;
+  }
+  return {detail: `옛 탭 ${String(oldId).slice(0, 8)} · 새 탭 ${String(newId).slice(0, 8)}: ${problem}; ${cleanup}`};
+}
+
 // 탭 하나를 열고 결과를 돌려준다. 던지지 않는다. 열지 않았거나 실패하면 {window: 'hidden'}이다.
 export function openSecretaryTab({home, env = process.env, auto = false, quiet = false, entries, session, role, cwd, panePid,
   platform = process.platform, run = spawnSync, readSetting = readWindowSetting, open = openWindow,
@@ -90,12 +117,18 @@ export function openSecretaryTab({home, env = process.env, auto = false, quiet =
     if (!plan.open) return {window: 'hidden', reason: plan.reason, ...(plan.detail ? {detail: plan.detail} : {})};
     // 조용한 호출(자동 주기)은 화면에 찍지 않고 열기 함수의 구체 이유(로티 오류 코드)만 모아 돌려준다.
     const notes = [];
+    // conflictKeySuffix: 경합으로 새 탭을 치운 뒤 같은 세대에서 다시 열 때 로티가 기억하는 옛 키와 충돌하면 새 키로 한 번만 다시 연다.
     const opened = open(session, platform, {choice: {kind: 'rottie'}, rottieBin: setting.rottieBin, spawnFn,
-      role, cwd, panePid, ...(quiet ? {warn: message => notes.push(String(message))} : {})});
+      role, cwd, panePid, conflictKeySuffix: 'secretary-retry', ...(quiet ? {warn: message => notes.push(String(message))} : {})});
     if (!opened?.rottieTerminalId) {
       return {window: 'hidden', reason: 'open-failed', ...(notes.length ? {detail: notes.join('; ')} : {})};
     }
-    if (plan.replace && plan.replace.state !== '없음') {
+    if (plan.replace?.state === UNKNOWN_STATE) {
+      // unknown은 종료 확정이 아니었다: 만든 뒤 옛 탭을 다시 확인하고 제거 결과도 따진다.
+      const raced = checkReplacedUnknown({bin: setting.rottieBin, oldId: plan.replace.terminalId,
+        newId: opened.rottieTerminalId, spawnFn});
+      if (raced) return {window: 'hidden', reason: 'tab-raced', detail: raced.detail};
+    } else if (plan.replace && plan.replace.state !== '없음') {
       // 죽은 옛 탭은 한 번 지워 본다. 실패해도 알리기만 한다(restore와 같다).
       try { removeRottieWindow({bin: setting.rottieBin, terminalId: plan.replace.terminalId, spawnFn}); } catch { /* 목록에 종료됨으로 남을 뿐 */ }
     }
@@ -145,7 +178,7 @@ export function attachHiddenSecretary({home, floor, session, readEntries, record
 }
 
 // 자동 주기에서 사람이 알아야 하는 실패·건너뜀만 한 줄로 만든다. 정상 건너뜀(탭 있음·로티 없음·설정 none 등)은 null.
-// 이 줄은 `up --auto`의 changedOutput(revive-state.json의 lastOutput)을 지나므로 같은 원인은 처음 한 번만 autostart.log에 남고,
+// 이 줄은 `up --auto`의 changedOutput(revive-state.json의 lastSecretaryOutput, 주기의 다른 출력과 따로)을 지나므로 같은 원인은 처음 한 번만 autostart.log에 남고,
 // 성공이나 다른 원인이 오면 다시 한 번 남는다. 상태가 파일이라 감시기·up 재시작·launchd 새 프로세스에도 유지된다.
 export function attachFailureLine(result) {
   if (!result || result.attached) return null;
@@ -155,6 +188,7 @@ export function attachFailureLine(result) {
   }
   if (reason === 'rottie-unavailable') return '비서 로티 탭 붙이기 건너뜀: 로티가 응답하지 않음(켜지면 자동으로 붙임)';
   if (reason === 'tab-unknown') return `비서 로티 탭 붙이기 실패: tab-unknown${result.detail ? ` (${result.detail})` : ''}`;
+  if (reason === 'tab-raced') return `비서 로티 탭 붙이기 실패: tab-raced${result.detail ? ` (${result.detail})` : ''}`;
   const reportable = reason === 'open-failed' || reason === 'tab-unknown' || reason.startsWith('error:');
   return reportable ? `비서 로티 탭 붙이기 실패: ${result.detail ?? result.reason}` : null;
 }
