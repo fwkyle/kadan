@@ -161,6 +161,7 @@ test("생성 응답의 교체된 tab/pane ID를 사용하고 자식에게 시험
     if (method === "pane.process_info") return { process_info: { shell_pid: 789 } };
     throw new Error(method);
   };
+  f.env.KADAN_MEMORY_CHECK = "off"; // 시험 실행기가 켜 둔 값이 역할 세션으로 새지 않는다
   const floor = makeHerdrFloor({ env: f.env, rpc, entries: () => [] });
   const e = floor.create({ session: "kadan-판-작업자", role: "판-작업자", cwd: "/tmp/project", cmd: 'codex --model "fixture-model"' });
   assert.equal(e.herdrPaneId, "new-pane");
@@ -170,6 +171,7 @@ test("생성 응답의 교체된 tab/pane ID를 사용하고 자식에게 시험
   assert.equal(applied.focus, false);
   assert.equal(applied.root.env.KADAN_ROLE, "판-작업자");
   assert.equal(applied.root.env.KADAN_HOME, f.env.KADAN_HOME);
+  assert.equal("KADAN_MEMORY_CHECK" in applied.root.env, false);
   assert(path.isAbsolute(applied.root.env.KADAN_CLI));
   assert.equal(path.basename(applied.root.env.KADAN_CLI), "cli.mjs");
   assert.deepEqual(applied.root.command, ["codex", "--model", "fixture-model"]);

@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {limitEnv, limitHolders, lockOwnerState, processStartToken, runLimited, tryAcquireLimit} from '../src/heavy-limit.mjs';
+import {createExclusive, limitEnv, limitHolders, lockOwnerState, ORPHAN_LOCK_MS, processStartToken, runLimited, runLimitedResult,
+  tryAcquireLimit} from '../src/heavy-limit.mjs';
 import {MEMORY_OFF_ENV, MEMORY_WAIT_EXIT, judgeMemory, memoryCheckEnabled, parseFreePercent, parseSwapUsedMb, readMemory} from '../src/memory-check.mjs';
 import {processStartedAt} from '../src/process-tree.mjs';
 import {stopChild} from './helpers/child-cleanup.mjs';
@@ -554,4 +555,115 @@ test('옛 <종류>-N.lock은 세지도 회수하지도 않는다(머지 직후 �
   assert.equal(result.code, 0);
   assert.doesNotMatch(result.stderr, /대기/);
   assert.ok(fs.existsSync(path.join(home, 'limits', 'rust-1.lock')));
+});
+
+// ---- 2026-11-21 검수 중요 4건: 검수자의 재현 순서를 기대 동작으로 옮긴 시험 ----
+const aged = (file, ms = ORPHAN_LOCK_MS + 5000) => { const t = new Date(Date.now() - ms); fs.utimesSync(file, t, t); };
+const holderOf = (pid, kind) => ({pid, kind, since: new Date(0).toISOString()});
+
+test('잠금 생성은 내용과 함께 한 번에 만들어진다: 내용 없는 잠금이 보이지 않고 임시 파일도 남지 않는다', () => {
+  const home = freshHome(), file = path.join(home, 'limits', 'heavy-1.lock');
+  assert.equal(createExclusive(file, {pid: 1, kind: 'build'}), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {pid: 1, kind: 'build'});
+  assert.equal(createExclusive(file, {pid: 2}), false); // 이미 있으면 거절, 내용은 그대로
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).pid, 1);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)), ['heavy-1.lock']);
+});
+
+test('내용 없음·깨진 JSON·pid 없음 잠금: 오래되면 세 종류 모두 회수하고, 막 생긴 것은 바로 회수하지 않는다', () => {
+  for (const [label, content] of [['빈 파일', ''], ['깨진 JSON', '{"pid": 12'], ['JSON 아님', 'garbage'], ['pid 없음', '{"kind":"build"}']]) {
+    for (const kind of ['build', 'install', 'rust']) {
+      const home = freshHome();
+      writeLock(home, 'heavy-1.lock', content);
+      const lock = path.join(home, 'limits', 'heavy-1.lock');
+      fs.writeFileSync(lock, content);
+      assert.equal(tryAcquireLimit(home, holderOf(process.pid, kind)), null, `${label}: 막 생긴 잠금은 두고 기다린다`);
+      assert.equal(fs.readFileSync(lock, 'utf8'), content, `${label}: 그대로`);
+      aged(lock);
+      assert.equal(tryAcquireLimit(home, holderOf(process.pid, kind)), lock, `${label}/${kind}: 오래되면 회수`);
+      assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).kind, kind);
+    }
+  }
+});
+
+test('빈 잠금이 오래되면 실제 limit run도 기다리지 않고 자리를 잡는다', async () => {
+  const home = freshHome(), lock = path.join(home, 'limits', 'heavy-1.lock');
+  fs.mkdirSync(path.dirname(lock)); fs.writeFileSync(lock, ''); aged(lock);
+  const result = await start(home, 'rust', node('process.exit(0)')).done;
+  assert.equal(result.code, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /대기/);
+  assert.equal(lockCount(home), 0);
+});
+
+test('동시 회수: 둘째 회수자가 옛 주인을 읽은 직후 첫째가 회수하고 새로 잡아도, 둘째는 자리를 얻지 못하고 기다린다', () => {
+  const home = freshHome();
+  const original = {...holderOf(process.ppid, 'rust'), startToken: 'linux:deadbeef:1'};
+  const lock = tryAcquireLimit(home, original);
+  const fresh = () => 'linux:deadbeef:2'; // 표지가 달라 옛 주인은 pid-reused(죽은 잠금)
+  let resultA = null, stateA = null, injected = false;
+  const resultB = tryAcquireLimit(home, holderOf(process.pid, 'build'), {
+    startToken() {
+      if (!injected) { // 둘째의 첫 판정 직후, 첫째가 먼저 회수하고 새 잠금을 잡는다
+        injected = true;
+        resultA = tryAcquireLimit(home, holderOf(process.ppid, 'install'), {startToken: fresh});
+        stateA = limitHolders(home)[0];
+      }
+      return fresh();
+    },
+  });
+  assert.equal(resultA, lock);
+  assert.equal(stateA.state, 'alive');
+  assert.equal(stateA.kind, 'install');
+  assert.equal(resultB, null, '둘째는 살아 있는 새 주인의 잠금을 치우지 않는다');
+  const [now] = limitHolders(home);
+  assert.deepEqual([now.kind, now.pid, now.state], ['install', process.ppid, 'alive']);
+  assert.deepEqual(fs.readdirSync(path.join(home, 'limits')), ['heavy-1.lock']); // 회수 표지·옛 잠금 조각이 남지 않는다
+});
+
+test('회수 표지: 다른 회수자가 쥐고 있으면 회수하지 않고, 오래 남은 표지(회수하다 죽음)는 치운 뒤 다음에 회수한다', () => {
+  const home = freshHome(), dir = path.join(home, 'limits');
+  writeLock(home, 'heavy-1.lock', {pid: deadPid(), kind: 'rust', since: iso(Date.now())});
+  const guard = path.join(dir, 'heavy-1.lock.reclaim');
+  fs.writeFileSync(guard, '{}');
+  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), null);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'heavy-1.lock'), 'utf8')).kind, 'rust');
+  aged(guard, 60_000);
+  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), null); // 이번엔 표지만 치운다
+  assert.equal(fs.existsSync(guard), false);
+  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), path.join(dir, 'heavy-1.lock'));
+});
+
+test('5분 상한: 상한을 넘은 뒤의 측정이 통과여도 시작하지 않는다(종료 75·명령 미실행·자리 해제)', async () => {
+  for (const finalFree of [29, 30]) {
+    const {home, mark, command} = memoryHome();
+    let clock = 0;
+    const logs = [];
+    const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
+      memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 300_001; }, // MEMORY_WAIT_MS(300000) 직후
+        measure: () => ({freePercent: clock === 0 ? 29 : finalFree, swapUsedMb: 0})}});
+    assert.equal(code, MEMORY_WAIT_EXIT, `두 번째 측정 ${finalFree}%`);
+    assert.equal(fs.existsSync(mark), false);
+    assert.equal(lockCount(home), 0);
+    assert.match(logs.at(-1), /여유 29%.*5분 기다렸지만/);
+  }
+  // 상한 직전(299,999ms)의 측정이 통과하면 시작한다.
+  const {home, mark, command} = memoryHome();
+  let clock = 0;
+  assert.equal(await runLimited(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore',
+    memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 299_999; },
+      measure: () => ({freePercent: clock === 0 ? 29 : 30, swapUsedMb: 0})}}), 0);
+  assert.ok(fs.existsSync(mark));
+});
+
+test('runLimitedResult: 메모리로 못 시작하면 started false, 명령이 돌고 75로 끝나면 started true', async () => {
+  const {home, command} = memoryHome();
+  let clock = 0;
+  const memory = {enabled: true, now: () => clock, sleepFn: async ms => { clock += ms; }, pollMs: 1000, waitMs: 2000,
+    measure: () => ({freePercent: 1, swapUsedMb: 0})};
+  assert.deepEqual(await runLimitedResult(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore', memory}),
+    {code: MEMORY_WAIT_EXIT, started: false});
+  assert.deepEqual(await runLimitedResult(home, 'build', node('process.exit(75)'), {env: {}, log: () => {}, stdio: 'ignore',
+    memory: {enabled: true, measure: () => ({freePercent: 90, swapUsedMb: 0})}}), {code: 75, started: true});
+  assert.equal(await runLimited(home, 'build', node('process.exit(75)'), {env: {}, log: () => {}, stdio: 'ignore',
+    memory: {enabled: true, measure: () => ({freePercent: 90, swapUsedMb: 0})}}), 75);
 });

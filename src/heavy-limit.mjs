@@ -120,14 +120,16 @@ export function reclaim(file) {
   return true;
 }
 
-// 원자적 생성('wx')이 곧 잠금이다. 성공하면 true, 이미 있으면 false.
+// 원자적 생성이 곧 잠금이다. 성공하면 true, 이미 있으면 false.
+// 내용을 임시 파일에 먼저 다 쓰고 hard link로 한 번에 잠금 이름을 만든다(이미 있으면 EEXIST).
+// 'wx'로 먼저 만들고 나중에 쓰면 그 사이에 죽을 때 내용 없는 잠금이 남아 모든 무거운 작업이 멈춘다(2026-11-21 검수).
 export function createExclusive(file, value) {
   fs.mkdirSync(path.dirname(file), {recursive: true, mode: 0o700});
-  let fd;
-  try { fd = fs.openSync(file, 'wx', 0o600); }
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value) + '\n', {mode: 0o600, flag: 'wx'});
+  try { fs.linkSync(tmp, file); return true; }
   catch (error) { if (error.code === 'EEXIST') return false; throw error; }
-  try { fs.writeSync(fd, JSON.stringify(value) + '\n'); } finally { fs.closeSync(fd); }
-  return true;
+  finally { fs.rmSync(tmp, {force: true}); }
 }
 
 const limitDir = home => path.join(home, 'limits');
@@ -167,15 +169,38 @@ export function limitHolders(home, deps) {
     .map(name => { const raw = readJson(path.join(dir, name)); return publicHolder(name, lockOwnerState(raw, deps), raw); });
 }
 
-// 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금은 회수한다. 못 잡으면 null.
+// 못 읽거나(내용 없음·JSON 아님) pid가 없는 잠금은 주인을 알 수 없다. 막 만든 것은 쓰는 중일 수 있어 두고,
+// 파일 수정 시각이 이 시간을 넘으면 죽은 잠금처럼 회수한다(영원히 막지 않는다).
+export const ORPHAN_LOCK_MS = 60_000;
+// 회수 표지는 회수하는 몇 ms 동안만 있다. 이보다 오래 남았으면 회수하다 죽은 것으로 보고 치운다.
+export const RECLAIM_GUARD_MS = 10_000;
+const ageMs = file => { try { return Date.now() - fs.statSync(file).mtimeMs; } catch { return 0; } };
+function staleLock(file, deps) {
+  const current = readJson(file);
+  if (current && Number.isSafeInteger(current.pid)) return lockOwnerState(current, deps) !== 'alive';
+  return fs.existsSync(file) && ageMs(file) > ORPHAN_LOCK_MS;
+}
+
+// 죽은 잠금을 치우고 새로 잡는다. 두 회수자가 같은 죽은 잠금을 보고 한쪽이 새로 잡은 살아 있는 잠금을 다른 쪽이 치우지 않게,
+// 자리마다 회수 표지(<잠금>.reclaim)를 잡은 쪽만 회수하고, 표지 안에서 잠금을 다시 읽어 아직 죽은 것일 때만 치운다.
+// 표지를 못 잡으면 회수하지 않고 다음 바퀴에 다시 본다(그 자리는 아직 쓸 수 없는 것으로 본다).
+function takeOver(file, deps, create) {
+  const guard = `${file}.reclaim`;
+  if (!createExclusive(guard, {pid: process.pid, since: new Date().toISOString()})) {
+    if (ageMs(guard) > RECLAIM_GUARD_MS) fs.rmSync(guard, {force: true});
+    return false;
+  }
+  try { return staleLock(file, deps) && reclaim(file) && create(); }
+  finally { fs.rmSync(guard, {force: true}); }
+}
+
+// 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금, 오래된 깨진 잠금은 회수한다. 못 잡으면 null.
 export function tryAcquireLimit(home, holder, deps) {
   const cap = capOf(home);
   for (let n = 1; n <= cap; n++) {
     const file = lockFile(home, n);
     if (createExclusive(file, lockRecord(holder))) return file;
-    const current = readJson(file);
-    const stale = current && lockOwnerState(current, deps) !== 'alive';
-    if (stale && reclaim(file) && createExclusive(file, lockRecord(holder))) return file;
+    if (staleLock(file, deps) && takeOver(file, deps, () => createExclusive(file, lockRecord(holder)))) return file;
   }
   return null;
 }
@@ -199,17 +224,19 @@ const spanText = ms => (ms >= 60_000 ? `${Math.round(ms / 60_000)}분` : `${Math
 // 기다림이 상한을 넘으면 잰 값 한 줄을 돌려준다. 값이 바뀔 때만 대기 줄을 다시 낸다.
 // 못 읽거나 맥이 아니면 막지 않고 이유만 한 줄 남긴다. 대기 줄과 건너뜀 줄은 문구를 달리한다.
 async function waitForMemory(home, env, {measure = readMemory, waitMs = MEMORY_WAIT_MS, pollMs = 5000,
-  now = Date.now, sleepFn = sleep, enabled, log}) {
+  now = () => performance.now(), sleepFn = sleep, enabled, log}) {
   // 넘겨받은 환경(env)이 비어 있어도 이 프로세스의 환경에 끄는 스위치가 있으면 끈다(tests/run.mjs 아래의 시험이 맥을 재지 않게).
   if (!(enabled ?? (memoryCheckEnabled(home, env) && memoryCheckEnabled(home, process.env)))) return null;
   const started = now();
-  let shown = '';
+  let shown = '', last = null;
   for (;;) {
+    // 상한을 넘었으면 새 측정이 통과여도 시작하지 않는다. 경과는 단조 시계(performance.now)로 잰다: 벽시계 변경에 안 흔들린다.
+    if (last && now() - started >= waitMs) return last;
     let verdict;
     try { verdict = judgeMemory(measure()); } catch (error) { verdict = {ok: true, skip: `측정 실패: ${error.message}`}; }
     if (verdict.skip) { log(`메모리 확인 건너뜀: ${verdict.skip}`); return null; }
     if (verdict.ok) return null;
-    if (now() - started >= waitMs) return verdict.line;
+    last = verdict.line;
     if (verdict.line !== shown) {
       log(`대기: 메모리 부족 — ${verdict.line}. 자리는 쥔 채 기다림(최대 ${spanText(waitMs)})`);
       shown = verdict.line;
@@ -220,7 +247,9 @@ async function waitForMemory(home, env, {measure = readMemory, waitMs = MEMORY_W
 
 // 자리가 날 때까지 기다렸다가 메모리를 확인하고 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다.
 // 종료 코드는 명령의 것을 돌려준다. 메모리가 끝내 모자라면 명령을 돌리지 않고 MEMORY_WAIT_EXIT(75)를 돌려준다.
-export async function runLimited(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit', memory = {}} = {}) {
+// 명령 자신이 75로 끝난 경우와 구별해야 하면 runLimitedResult의 started(명령을 띄웠는지)를 본다.
+export async function runLimited(...args) { return (await runLimitedResult(...args)).code; }
+export async function runLimitedResult(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit', memory = {}} = {}) {
   if (!command.length) throw new Error('실행할 명령 필요: kadan limit run <종류> -- <명령...>');
   checkKind(kind);
   capOf(home);
@@ -256,13 +285,14 @@ export async function runLimited(home, kind, command, {cwd = process.cwd(), env 
     const short = await waitForMemory(home, env, {...memory, log});
     if (short) {
       log(`메모리 부족으로 시작하지 않음(종료 ${MEMORY_WAIT_EXIT}): ${short}. ${spanText(memory.waitMs ?? MEMORY_WAIT_MS)} 기다렸지만 풀리지 않아 명령은 돌리지 않고 자리를 풀었다`);
-      return MEMORY_WAIT_EXIT;
+      return {code: MEMORY_WAIT_EXIT, started: false};
     }
     child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio});
-    return await new Promise(resolve => {
+    const code = await new Promise(resolve => {
       child.once('error', error => { log(`실행 실패: ${error.message}`); resolve(127); });
       child.once('exit', (code, signal) => resolve(code ?? 128 + (os.constants.signals[signal] ?? 1)));
     });
+    return {code, started: true};
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
     process.off('exit', release);
