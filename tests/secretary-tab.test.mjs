@@ -310,3 +310,57 @@ test('skips on this path are no longer silent: the first cause is logged once th
   assert.equal(down.length, 1); assert.match(down[0], /로티/);                // 원인이 바뀌면 다시 한 번
   assert.deepEqual(await cycle({KADAN_WINDOW: 'none'}, fakeRottie({status: false})), []);
 });
+
+// ---- tab-unknown 이유 기록 (2026-11-21: 재부팅 뒤 비서 탭이 tab-unknown으로 안 붙었는데 로티가 뭐라 답했는지 버려졌다) ----
+test('T1: plan keeps what Rottie said when the tab state is unknown (state when show worked, code/message when it failed)', () => {
+  const state = planSecretaryTab({...withTab, entries: [{kind: 'start', session: 'kadan-비서', role: '비서',
+    rottieTerminalId: 'aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb'}], show: () => ({ok: true, state: 'unknown'})});
+  assert.equal(state.open, false); assert.equal(state.reason, 'tab-unknown');
+  assert.equal(state.detail, '탭 aaaaaaaa show 응답 state=unknown');       // 탭 ID는 앞 8자만 남긴다
+  const failed = planSecretaryTab({...withTab, show: () => ({ok: false, code: 'ROTTIE_QUERY_FAILED', message: 'daemon\u0007 busy\n(retry)'})});
+  assert.equal(failed.reason, 'tab-unknown');
+  assert.equal(failed.detail, '탭 old show 실패 code=ROTTIE_QUERY_FAILED message=daemon busy (retry)'); // 제어 문자·줄바꿈 정리
+  const empty = planSecretaryTab({...withTab, show: () => ({ok: true, state: ''})});
+  assert.equal(empty.detail, '탭 old show 응답 state=(빈 값)');
+  const long = planSecretaryTab({...withTab, show: () => ({ok: false, code: 7, message: 'x'.repeat(500)})});
+  assert.match(long.detail, /code=7 message=x{200}…$/);                                              // message는 200자에서 자른다
+  // 판정은 그대로다: 살아 있음·종료 확정·없음은 detail이 없고 열기/건너뜀 결정도 바뀌지 않는다.
+  assert.equal(planSecretaryTab(withTab).detail, undefined);
+  assert.equal(planSecretaryTab({...withTab, show: () => ({ok: true, state: 'exited'})}).detail, undefined);
+  assert.equal(planSecretaryTab({...withTab, show: () => ({ok: false, code: 'ROTTIE_TERMINAL_NOT_FOUND'})}).detail, undefined);
+});
+
+test('T2: the open result and the autostart.log line carry the Rottie answer; the same answer logs once, a new answer logs again', async () => {
+  const {attachFailureLine} = await import('../src/secretary-tab.mjs');
+  const {changedOutput} = await import('../src/revive.mjs');
+  const home = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 't2-'));
+  const cycle = async fake => {
+    const entries = inheritedHidden();
+    const result = await attachWith(entries, fake, e => entries.push(e));
+    const line = attachFailureLine(result);
+    return {result, line, logged: changedOutput(home, line ? [line] : [])};
+  };
+  const unknown = await cycle(fakeRottie({show: shownState('unknown')}));
+  assert.equal(unknown.result.attached, false); assert.equal(unknown.result.reason, 'tab-unknown');
+  assert.equal(unknown.result.detail, '탭 old show 응답 state=unknown');
+  assert.equal(unknown.line, '비서 로티 탭 붙이기 실패: tab-unknown (탭 old show 응답 state=unknown)');
+  assert.deepEqual(unknown.logged, [unknown.line]);
+  for (let i = 0; i < 2; i++) assert.deepEqual((await cycle(fakeRottie({show: shownState('unknown')}))).logged, []); // 같은 답은 매분 반복하지 않는다
+  const other = await cycle(fakeRottie({show: shownState('lost')}));                  // 답이 바뀌면 다시 한 번
+  assert.deepEqual(other.logged, ['비서 로티 탭 붙이기 실패: tab-unknown (탭 old show 응답 state=lost)']);
+  const errorCode = await cycle(fakeRottie({show: {ok: false, error: {code: 'ROTTIE_TERMINAL_QUERY_FAILED', message: '데몬 조회 실패'}}}));
+  assert.deepEqual(errorCode.logged,
+    ['비서 로티 탭 붙이기 실패: tab-unknown (탭 old show 실패 code=ROTTIE_TERMINAL_QUERY_FAILED message=데몬 조회 실패)']);
+  // 5초 시간 초과: 로티가 답하지 못한 호출도 code가 남는다. 이때도 create·remove는 0회다.
+  const calls = [];
+  const timedOut = {calls, run: (bin, args) => {
+    calls.push(args.slice(0, 2).join(' '));
+    if (args[0] === 'status') return {status: 0, stdout: JSON.stringify({ok: true, runtime: {bundleId: 'dev.fixture'}})};
+    return {status: null, stdout: null, error: Object.assign(new Error('spawnSync ETIMEDOUT'), {code: 'ETIMEDOUT'})};
+  }};
+  const slow = await cycle(timedOut);
+  assert.match(slow.line, /tab-unknown \(탭 old show 실패 code=ETIMEDOUT message=spawnSync ETIMEDOUT\)$/);
+  assert.deepEqual(calls, ['status --json', 'terminal show']);
+  // 상세가 없는 옛 결과의 줄 모양은 그대로다.
+  assert.equal(attachFailureLine({attached: false, reason: 'tab-unknown'}), '비서 로티 탭 붙이기 실패: tab-unknown');
+});
