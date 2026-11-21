@@ -620,17 +620,57 @@ test('동시 회수: 둘째 회수자가 옛 주인을 읽은 직후 첫째가 �
   assert.deepEqual(fs.readdirSync(path.join(home, 'limits')), ['heavy-1.lock']); // 회수 표지·옛 잠금 조각이 남지 않는다
 });
 
-test('회수 표지: 다른 회수자가 쥐고 있으면 회수하지 않고, 오래 남은 표지(회수하다 죽음)는 치운 뒤 다음에 회수한다', () => {
-  const home = freshHome(), dir = path.join(home, 'limits');
-  writeLock(home, 'heavy-1.lock', {pid: deadPid(), kind: 'rust', since: iso(Date.now())});
-  const guard = path.join(dir, 'heavy-1.lock.reclaim');
-  fs.writeFileSync(guard, '{}');
-  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), null);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'heavy-1.lock'), 'utf8')).kind, 'rust');
-  aged(guard, 60_000);
-  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), null); // 이번엔 표지만 치운다
-  assert.equal(fs.existsSync(guard), false);
-  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), path.join(dir, 'heavy-1.lock'));
+const readLock = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+const deadLock = home => { writeLock(home, 'heavy-1.lock', {pid: deadPid(), kind: 'rust', since: iso(Date.now())}); return path.join(home, 'limits', 'heavy-1.lock'); };
+
+test('회수 표지 1: 살아 있는 회수자가 rename 직전에 멈춰 표지가 오래돼도(11초) 둘째는 표지를 치우지 않고 기다린다', () => {
+  const home = freshHome();
+  const lock = tryAcquireLimit(home, {...holderOf(process.ppid, 'rust'), startToken: 'linux:deadbeef:1'});
+  const guard = `${lock}.reclaim`;
+  const mineToken = processStartToken(process.pid);
+  // 옛 주인(ppid)의 표지만 다른 값으로 속이고, 회수자(이 프로세스)는 실제 표지를 돌려준다.
+  const deps = {startToken: pid => (pid === process.pid ? mineToken : 'linux:deadbeef:2')};
+  const rename = fs.renameSync;
+  let paused = false, first, second, owner;
+  fs.renameSync = (from, to) => {
+    if (from === lock && !paused) {
+      paused = true;
+      aged(guard, 11_000); // 표지 수정 시각만 11초 전
+      first = tryAcquireLimit(home, holderOf(process.ppid, 'install'), deps);
+      second = tryAcquireLimit(home, holderOf(process.ppid, 'install'), deps);
+      owner = fs.existsSync(guard) ? readLock(guard).pid : null;
+    }
+    return rename(from, to);
+  };
+  let resultA;
+  try { resultA = tryAcquireLimit(home, holderOf(process.pid, 'build'), deps); } finally { fs.renameSync = rename; }
+  assert.ok(paused);
+  assert.equal(first, null);
+  assert.equal(second, null);
+  assert.equal(owner, process.pid, '둘째가 표지를 치우지 않았다');
+  assert.equal(resultA, lock); // 첫째가 이어서 정상 회수·획득
+  assert.deepEqual([readLock(lock).kind, readLock(lock).pid], ['build', process.pid]);
+  assert.deepEqual(fs.readdirSync(path.dirname(lock)), ['heavy-1.lock']);
+});
+
+test('회수 표지 1b: 회수자가 표지를 쥔 채 죽었으면(PID 없음) 다음 사람이 표지를 치우고 회수·획득한다', () => {
+  const home = freshHome(), lock = deadLock(home), guard = `${lock}.reclaim`;
+  fs.writeFileSync(guard, JSON.stringify({pid: deadPid(), since: iso(Date.now()), nonce: 'gone'}));
+  assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), lock);
+  assert.equal(readLock(lock).pid, process.pid);
+  assert.deepEqual(fs.readdirSync(path.dirname(lock)), ['heavy-1.lock']);
+});
+
+test('회수 표지 1c: 내용 없음·깨진 표지는 잠금과 같은 고아 규칙이다(60초 넘으면 치움, 막 생긴 것은 둠)', () => {
+  for (const body of ['', 'garbage', '{"pid": 12']) {
+    const home = freshHome(), lock = deadLock(home), guard = `${lock}.reclaim`;
+    fs.writeFileSync(guard, body);
+    assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), null, `막 생긴 표지(${JSON.stringify(body)})는 둔다`);
+    assert.equal(fs.existsSync(guard), true);
+    aged(guard);
+    assert.equal(tryAcquireLimit(home, holderOf(process.pid, 'build')), lock, '오래된 표지는 치우고 회수');
+    assert.equal(readLock(lock).pid, process.pid);
+  }
 });
 
 test('5분 상한: 상한을 넘은 뒤의 측정이 통과여도 시작하지 않는다(종료 75·명령 미실행·자리 해제)', async () => {
@@ -653,6 +693,29 @@ test('5분 상한: 상한을 넘은 뒤의 측정이 통과여도 시작하지 �
     memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 299_999; },
       measure: () => ({freePercent: clock === 0 ? 29 : 30, swapUsedMb: 0})}}), 0);
   assert.ok(fs.existsSync(mark));
+});
+
+test('5분 상한 2: 측정 중에 시계가 상한을 넘으면 통과여도 시작하지 않고, 299,999ms에 끝난 통과 측정은 시작한다', async () => {
+  for (const [endsAt, code] of [[300_001, 75], [299_999, 0]]) {
+    const {home, mark, command} = memoryHome();
+    let clock = 0, calls = 0;
+    const outcome = await runLimitedResult(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore',
+      memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 299_999; },
+        measure: () => { if (++calls === 1) return {freePercent: 29, swapUsedMb: 0}; clock = endsAt; return {freePercent: 30, swapUsedMb: 0}; }}});
+    assert.deepEqual(outcome, {code, started: code === 0}, `측정 종료 ${endsAt}ms`);
+    assert.equal(calls, 2);
+    assert.equal(fs.existsSync(mark), code === 0);
+    assert.equal(lockCount(home), 0);
+  }
+});
+
+test('실행 파일이 없으면 started false·코드 127이다', async () => {
+  const home = freshHome(), logs = [];
+  const outcome = await runLimitedResult(home, 'build', [path.join(home, '없는-실행-파일')], {env: {}, log: m => logs.push(m), stdio: 'ignore',
+    memory: {enabled: false}});
+  assert.deepEqual(outcome, {code: 127, started: false});
+  assert.match(logs.at(-1), /^실행 실패:/);
+  assert.equal(lockCount(home), 0);
 });
 
 test('runLimitedResult: 메모리로 못 시작하면 started false, 명령이 돌고 75로 끝나면 started true', async () => {

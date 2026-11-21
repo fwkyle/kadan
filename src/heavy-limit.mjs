@@ -172,8 +172,6 @@ export function limitHolders(home, deps) {
 // 못 읽거나(내용 없음·JSON 아님) pid가 없는 잠금은 주인을 알 수 없다. 막 만든 것은 쓰는 중일 수 있어 두고,
 // 파일 수정 시각이 이 시간을 넘으면 죽은 잠금처럼 회수한다(영원히 막지 않는다).
 export const ORPHAN_LOCK_MS = 60_000;
-// 회수 표지는 회수하는 몇 ms 동안만 있다. 이보다 오래 남았으면 회수하다 죽은 것으로 보고 치운다.
-export const RECLAIM_GUARD_MS = 10_000;
 const ageMs = file => { try { return Date.now() - fs.statSync(file).mtimeMs; } catch { return 0; } };
 function staleLock(file, deps) {
   const current = readJson(file);
@@ -183,15 +181,19 @@ function staleLock(file, deps) {
 
 // 죽은 잠금을 치우고 새로 잡는다. 두 회수자가 같은 죽은 잠금을 보고 한쪽이 새로 잡은 살아 있는 잠금을 다른 쪽이 치우지 않게,
 // 자리마다 회수 표지(<잠금>.reclaim)를 잡은 쪽만 회수하고, 표지 안에서 잠금을 다시 읽어 아직 죽은 것일 때만 치운다.
-// 표지를 못 잡으면 회수하지 않고 다음 바퀴에 다시 본다(그 자리는 아직 쓸 수 없는 것으로 본다).
+// 표지에는 주인(pid·시작 표지)을 적고 잠금과 같은 주인 판정으로 본다: 주인이 살아 있으면 오래 걸려도 치우지 않고,
+// 죽었거나 PID가 재사용됐으면 치우고 한 번 다시 잡는다. 못 읽는 표지는 잠금의 고아 규칙(60초)을 따른다.
+// 표지를 못 잡으면 회수하지 않고 다음 바퀴에 다시 본다. 치우기 직전에 표지가 아직 내 것인지 확인하고, 끝날 때는 내 것일 때만 지운다.
 function takeOver(file, deps, create) {
   const guard = `${file}.reclaim`;
-  if (!createExclusive(guard, {pid: process.pid, since: new Date().toISOString()})) {
-    if (ageMs(guard) > RECLAIM_GUARD_MS) fs.rmSync(guard, {force: true});
-    return false;
+  const token = processStartToken(process.pid);
+  const mine = {pid: process.pid, ...(token ? {startToken: token} : {}), since: new Date().toISOString(), nonce: randomUUID()};
+  const ownGuard = () => readJson(guard)?.nonce === mine.nonce;
+  if (!createExclusive(guard, mine)) {
+    if (!staleLock(guard, deps) || !reclaim(guard) || !createExclusive(guard, mine)) return false;
   }
-  try { return staleLock(file, deps) && reclaim(file) && create(); }
-  finally { fs.rmSync(guard, {force: true}); }
+  try { return staleLock(file, deps) && ownGuard() && reclaim(file) && create(); }
+  finally { if (ownGuard()) fs.rmSync(guard, {force: true}); }
 }
 
 // 빈 자리 하나를 잡는다. 주인이 죽었거나 PID가 재사용된 잠금, 오래된 깨진 잠금은 회수한다. 못 잡으면 null.
@@ -235,7 +237,10 @@ async function waitForMemory(home, env, {measure = readMemory, waitMs = MEMORY_W
     let verdict;
     try { verdict = judgeMemory(measure()); } catch (error) { verdict = {ok: true, skip: `측정 실패: ${error.message}`}; }
     if (verdict.skip) { log(`메모리 확인 건너뜀: ${verdict.skip}`); return null; }
-    if (verdict.ok) return null;
+    if (verdict.ok) {
+      // 측정이 끝난 뒤에도 한 번 더 본다: 측정 중에 상한을 넘었으면 통과여도 시작하지 않는다.
+      return last && now() - started >= waitMs ? last : null;
+    }
     last = verdict.line;
     if (verdict.line !== shown) {
       log(`대기: 메모리 부족 — ${verdict.line}. 자리는 쥔 채 기다림(최대 ${spanText(waitMs)})`);
@@ -288,11 +293,12 @@ export async function runLimitedResult(home, kind, command, {cwd = process.cwd()
       return {code: MEMORY_WAIT_EXIT, started: false};
     }
     child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio});
+    const started = child.pid !== undefined; // 실행 파일이 없어 못 띄우면 pid가 없다
     const code = await new Promise(resolve => {
       child.once('error', error => { log(`실행 실패: ${error.message}`); resolve(127); });
       child.once('exit', (code, signal) => resolve(code ?? 128 + (os.constants.signals[signal] ?? 1)));
     });
-    return {code, started: true};
+    return {code, started};
   } finally {
     for (const signal of signals) process.off(signal, onSignal);
     process.off('exit', release);
