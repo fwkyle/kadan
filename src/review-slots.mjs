@@ -242,18 +242,25 @@ async function deps(target, flags, ctx) {
   if (meta?.lockfile === lockfile && meta.hash === hash && fs.existsSync(path.join(dir, 'node_modules')))
     return {path: dir, installed: false, reason: '잠금 파일 그대로', lockfile};
   const command = typeof flags.cmd === 'string' ? ['/bin/sh', '-c', flags.cmd] : defaultCommand;
-  // 설치를 맡기기 전에 이 자리의 설치 기록을 지우고, 성공한 뒤에만 다시 쓴다. 기록이 맞는 채로 node_modules만 지워져
-  // 다시 설치하다 끊기면(메모리 보호 76·강제 종료) 반쯤 깔린 node_modules와 맞는 기록이 남아 다음 deps가 건너뛰기 때문이다.
-  // 여기까지 왔으면 어차피 설치가 필요한 상태라, 시작하지 못하고 75로 끝나도 기록이 없어 더 설치하게 되는 일은 없다.
-  fs.rmSync(metaFile(pool, lease.slot), {force: true});
+  // 설치 기록 지우기와 성공 기록 쓰기는 둘 다 무거운 명령의 자리를 쥔 동안 한다: 지우기는 관문을 통과한 뒤 설치 명령을 띄우기 직전,
+  // 쓰기는 명령이 끝난 뒤 자리를 풀기 전. 기록이 맞는 채로 다시 설치하다 끊기면(메모리 보호 76·강제 종료) 반쯤 깔린 node_modules와
+  // 맞는 기록이 남아 다음 deps가 건너뛰기 때문에 지운다. 자리 밖에서 지우거나 쓰면 같은 자리의 deps가 겹칠 때 앞 설치의 성공 기록이
+  // 뒤 설치의 중단을 가린다(2026-11-22 검수). 75로 시작하지 못하면 설치 명령을 띄우지 않았으므로 기존 기록을 그대로 둔다.
+  const record = metaFile(pool, lease.slot);
   // 설치 출력은 표준 오류로 보낸다. 표준 출력은 이 명령의 JSON 결과만 둔다.
-  const {code, started, memoryStop} = await runLimitedResult(ctx.home, 'install', command,
-    {cwd: dir, env: ctx.env, log: ctx.log, stdio: ['ignore', 2, 2], memory: ctx.memory});
+  const {code, started, memoryStop} = await runLimitedResult(ctx.home, 'install', command, {
+    cwd: dir, env: ctx.env, log: ctx.log, stdio: ['ignore', 2, 2], memory: ctx.memory,
+    beforeStart: () => fs.rmSync(record, {force: true}),
+    afterExit: result => {
+      if (result.started && result.code === 0 && !result.memoryStop) {
+        writeJson(record, {lockfile, hash, command, installedAt: new Date().toISOString()});
+      }
+    },
+  });
   // 시작 못 함(75)·메모리 보호 중단(76)과 명령이 스스로 75·76으로 끝남은 종료 코드가 아니라 started·memoryStop으로 구분한다.
   if (!started && code === MEMORY_WAIT_EXIT) throw Object.assign(new Error(`메모리 보호로 설치를 시작하지 않음(종료 ${code}): 설치 명령은 돌리지 않았다. 메모리가 풀린 뒤 다시 한다`), {exitCode: code});
   if (memoryStop) throw Object.assign(new Error(`메모리 보호로 설치를 중단(종료 ${code}): 다음 deps가 다시 설치한다. 바로 다시 돌리지 않는다`), {exitCode: code});
   if (code !== 0) throw Object.assign(new Error(`설치 실패(종료 ${code}): ${command.join(' ')}`), {exitCode: code});
-  writeJson(metaFile(pool, lease.slot), {lockfile, hash, command, installedAt: new Date().toISOString()});
   return {path: dir, installed: true, reason: meta ? '잠금 파일 바뀜 또는 node_modules 없음' : '첫 설치', lockfile};
 }
 

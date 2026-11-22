@@ -8,8 +8,9 @@ import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createExclusive, limitEnv, limitHolders, lockOwnerState, ORPHAN_LOCK_MS, processStartToken, runLimited, runLimitedResult,
   tryAcquireLimit} from '../src/heavy-limit.mjs';
-import {MEMORY_KILL_GRACE_MS, MEMORY_OFF_ENV, MEMORY_POLL_MS, MEMORY_START_MAX_PCT, MEMORY_STOP_EXIT, MEMORY_STOP_PCT, MEMORY_STOP_STREAK,
-  MEMORY_WAIT_EXIT, MEMORY_WAIT_MS, compressorPct, judgeRunning, judgeStart, memoryCheckEnabled, nextStopStreak} from '../src/memory-check.mjs';
+import {MEMORY_GROUP_GONE_MS, MEMORY_KILL_GRACE_MS, MEMORY_OFF_ENV, MEMORY_POLL_MS, MEMORY_START_MAX_PCT, MEMORY_STOP_EXIT, MEMORY_STOP_PCT,
+  MEMORY_STOP_STREAK, MEMORY_WAIT_EXIT, MEMORY_WAIT_MS, NO_STOP_STREAK, compressorPct, judgeRunning, judgeStart, memoryCheckEnabled,
+  nextStopStreak, stopReason} from '../src/memory-check.mjs';
 import {readMachineMemory} from '../src/machine-memory.mjs';
 import {processStartedAt} from '../src/process-tree.mjs';
 import {stopChild} from './helpers/child-cleanup.mjs';
@@ -505,23 +506,36 @@ test('시작 판정: 압축 공간(세그먼트·보관 페이지 중 큰 값) 7
   assert.deepEqual([MEMORY_START_MAX_PCT, MEMORY_WAIT_MS, MEMORY_POLL_MS, MEMORY_WAIT_EXIT], [75, 90_000, 5000, 75]);
 });
 
-test('실행 중 판정과 연속 셈: 85%는 위험·84.99%는 아님, 압박 위급은 75%부터 위험; 내려오거나 못 읽으면 셈이 0으로 돌아간다 [표 5·6·7·8]', () => {
-  const danger = value => judgeRunning(value).danger;
-  assert.equal(danger(sample(85)), true);
-  assert.equal(danger(sample(84.99)), false);
-  assert.equal(danger(sample(10, {pagePct: 85})), true);
-  assert.equal(danger(sample(84.99, {pressure: 2})), false);
-  assert.equal(danger(sample(75, {pressure: 4})), true);
-  assert.equal(danger(sample(74.99, {pressure: 4})), false);
-  assert.equal(danger(sample(80, {pressure: null})), false);
-  assert.deepEqual(judgeRunning(UNREAD), {read: false, danger: false, line: '못 읽음'});
-  assert.deepEqual(judgeRunning(null), {read: false, danger: false, line: '못 읽음'});
-  const streaks = values => { let s = 0; return values.map(value => (s = nextStopStreak(s, judgeRunning(value)))); };
-  assert.deepEqual(streaks([sample(90), sample(90)]), [1, 2]); // 2번 연속이면 끊는다
-  assert.deepEqual(streaks([sample(90), sample(50), sample(90)]), [1, 0, 1]); // 1번 걸리고 내려옴
-  assert.deepEqual(streaks([sample(90), UNREAD, sample(90)]), [1, 0, 1]); // 못 읽음이 사이에 끼면 이어 세지 않는다
-  assert.deepEqual(streaks([UNREAD, UNREAD, UNREAD]), [0, 0, 0]); // 못 읽음은 끊는 근거가 아니다
-  assert.deepEqual(streaks([sample(90), sample(80, {pressure: 4})]), [1, 2]); // 두 조건이 섞여도 위험한 읽기의 연속이다
+test('실행 중 판정과 연속 셈: 기준 둘(85% 이상 / 위급이면서 75% 이상)을 따로 세고, 내려오거나 못 읽으면 그 셈이 0으로 돌아간다 [표 5·6·7·8]', () => {
+  const marks = value => { const {read, over, critical} = judgeRunning(value); return {read, over, critical}; };
+  assert.deepEqual(marks(sample(85)), {read: true, over: true, critical: false});
+  assert.deepEqual(marks(sample(84.99)), {read: true, over: false, critical: false});
+  assert.deepEqual(marks(sample(10, {pagePct: 85})), {read: true, over: true, critical: false});
+  assert.deepEqual(marks(sample(84.99, {pressure: 2})), {read: true, over: false, critical: false});
+  assert.deepEqual(marks(sample(75, {pressure: 4})), {read: true, over: false, critical: true});
+  assert.deepEqual(marks(sample(74.99, {pressure: 4})), {read: true, over: false, critical: false});
+  assert.deepEqual(marks(sample(85, {pressure: 4})), {read: true, over: true, critical: true}); // 한 값이 둘 다 만족
+  assert.deepEqual(marks(sample(80, {pressure: null})), {read: true, over: false, critical: false});
+  assert.deepEqual(judgeRunning(UNREAD), {read: false, over: false, critical: false, line: '못 읽음'});
+  assert.deepEqual(judgeRunning(null), {read: false, over: false, critical: false, line: '못 읽음'});
+  // 회차마다의 [(가) 셈, (나) 셈]. null은 스위치가 꺼져 재지 않은 회차다.
+  const streaks = values => {
+    let s = NO_STOP_STREAK;
+    return values.map(value => { s = nextStopStreak(s, value === null ? null : judgeRunning(value)); return [s.over, s.critical, stopReason(s) !== null]; });
+  };
+  const urgent = pct => sample(pct, {pressure: 4});
+  assert.deepEqual(streaks([sample(90), sample(90)]), [[1, 0, false], [2, 0, true]]); // (가) 2번 연속이면 끊는다
+  assert.deepEqual(streaks([urgent(80), urgent(80)]), [[0, 1, false], [0, 2, true]]); // (나) 2번 연속이면 끊는다
+  assert.deepEqual(streaks([sample(90), urgent(80)]), [[1, 0, false], [0, 1, false]]); // 섞인 순서는 끊지 않는다
+  assert.deepEqual(streaks([urgent(80), sample(90)]), [[0, 1, false], [1, 0, false]]);
+  assert.deepEqual(streaks([urgent(90), urgent(80)]), [[1, 1, false], [0, 2, true]]); // 둘 다 만족한 값은 둘 다 센다
+  assert.deepEqual(streaks([urgent(90), sample(85)]), [[1, 1, false], [2, 0, true]]);
+  assert.deepEqual(streaks([sample(90), sample(50), sample(90)]), [[1, 0, false], [0, 0, false], [1, 0, false]]); // 1번 걸리고 내려옴
+  assert.deepEqual(streaks([sample(90), UNREAD, sample(90)]), [[1, 0, false], [0, 0, false], [1, 0, false]]); // 못 읽음이 사이에 낌
+  assert.deepEqual(streaks([urgent(90), null, urgent(90)]), [[1, 1, false], [0, 0, false], [1, 1, false]]); // 꺼진 회차는 둘 다 0으로
+  assert.deepEqual(streaks([UNREAD, UNREAD, UNREAD]), [[0, 0, false], [0, 0, false], [0, 0, false]]); // 못 읽음은 끊는 근거가 아니다
+  assert.equal(stopReason({over: 2, critical: 0}), '압축 공간 85% 이상이 2번 연속');
+  assert.equal(stopReason({over: 0, critical: 2}), '압박 위급이면서 압축 공간 75% 이상이 2번 연속');
   assert.deepEqual([MEMORY_STOP_PCT, MEMORY_STOP_STREAK, MEMORY_KILL_GRACE_MS, MEMORY_STOP_EXIT], [85, 2, 10_000, 76]);
 });
 
@@ -693,7 +707,7 @@ test('실행 중 압축 공간 85% 이상이 2번 연속이면 프로세스 그�
   await until(() => !alive(grandPid()), 3000); // 손자까지 끝났다
   assert.equal(lockCount(home), 0);
   assert.deepEqual(logs.filter(m => /^메모리 보호/.test(m)).length, 1);
-  assert.match(logs.at(-1), /^메모리 보호로 명령을 끊음\(종료 76\): 압축 공간 91\.2%\(세그먼트 91\.2%·보관 페이지 10\.0%\)·압박 정상·스왑 2\.0G\(참고\)\. 압축 공간 85% 이상\(또는 압박 위급이면서 75% 이상\)이 2번 연속이라/);
+  assert.match(logs.at(-1), /^메모리 보호로 명령을 끊음\(종료 76\): 압축 공간 91\.2%\(세그먼트 91\.2%·보관 페이지 10\.0%\)·압박 정상·스왑 2\.0G\(참고\)\. 압축 공간 85% 이상이 2번 연속이라 이 명령의 프로세스 그룹을 끊는다\. 같은 명령을 바로 다시 돌리지 않는다$/);
   assert.equal(residue(), before); // 남은 타이머·신호 처리기 없음
 });
 
@@ -719,7 +733,7 @@ test('압박 위급이면서 압축 공간 75% 이상이 2번 연속이어도 �
     memory: {...MAC, pollMs: 20, graceMs: 5000, measure: () => sample(fs.existsSync(pidFile) ? 76 : 10, {pressure: fs.existsSync(pidFile) ? 4 : 1})}});
   assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
   await until(() => !alive(grandPid()), 3000);
-  assert.match(logs.at(-1), /^메모리 보호로 명령을 끊음\(종료 76\): 압축 공간 76\.0%.*압박 위급/);
+  assert.match(logs.at(-1), /^메모리 보호로 명령을 끊음\(종료 76\): 압축 공간 76\.0%.*압박 위급.*\. 압박 위급이면서 압축 공간 75% 이상이 2번 연속이라/);
   assert.equal(lockCount(home), 0);
 });
 
@@ -804,6 +818,270 @@ test('끝난 뒤 남는 것이 없다: 정상 종료·실패·실행 파일 없�
   assert.match(logs.at(-1), /^실행 실패:/);
   assert.equal(residue(), before);
   assert.equal(lockCount(home), 0);
+});
+
+// ---- 2026-11-22 검수(exec-3ab62698) 발견을 개정된 동작 표로 고정한 회귀 시험. [재현 N행]은 검수자 재현 시험의 줄 번호다 ----
+// 준비한 읽기를 실행 중 회차에 차례로 주고, 다 쓰면 명령을 스스로 끝나게 한다(끊기지 않았다면 종료 0).
+async function runReadings(readings) {
+  const home = freshHome(), release = path.join(home, 'release'), logs = [], queue = [...readings];
+  const command = node(`
+    const fs = require('fs');
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) process.exit(0); }, 10);
+    setTimeout(() => process.exit(3), 20000);
+  `);
+  let calls = 0;
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    memory: {...MAC, pollMs: 15, graceMs: 5000, measure: () => {
+      calls += 1;
+      if (calls === 1) return sample(20); // 시작 관문
+      if (!queue.length) { fs.writeFileSync(release, 'x'); return sample(20); }
+      return queue.shift();
+    }}});
+  assert.equal(lockCount(home), 0);
+  return {outcome, logs, left: queue.length};
+}
+
+test('두 기준은 따로 센다: 85%와 위급+75%를 한 번씩 번갈아 만족하면 끊지 않고, 어느 한쪽이 2번 연속이면 끊는다 [표 5·6, 재현 18행]', async () => {
+  const urgent = pct => sample(pct, {pressure: 4});
+  const kept = {code: 0, started: true}, cut = {code: 76, started: true, memoryStop: true};
+  const over = /^메모리 보호로 명령을 끊음\(종료 76\): .*\. 압축 공간 85% 이상이 2번 연속이라 이 명령의 프로세스 그룹을 끊는다/;
+  const critical = /^메모리 보호로 명령을 끊음\(종료 76\): .*\. 압박 위급이면서 압축 공간 75% 이상이 2번 연속이라 이 명령의 프로세스 그룹을 끊는다/;
+  for (const [label, readings, expected, reason] of [
+    ['85%·정상 → 80%·위급', [sample(85), urgent(80)], kept],
+    ['80%·위급 → 85%·정상', [urgent(80), sample(85)], kept],
+    ['85% → 80%·위급 → 85%', [sample(85), urgent(80), sample(85)], kept],
+    ['85% → 80%·정상', [sample(85), sample(80)], kept],
+    ['85% 두 번', [sample(85), sample(85)], cut, over],
+    ['80%·위급 두 번', [urgent(80), urgent(80)], cut, critical],
+    ['90%·위급 → 80%·위급: (나)가 2번', [urgent(90), urgent(80)], cut, critical],
+    ['80%·위급 → 90%·위급: (나)가 2번', [urgent(80), urgent(90)], cut, critical],
+    ['90%·위급 → 85%·정상: (가)가 2번', [urgent(90), sample(85)], cut, over],
+  ]) {
+    const {outcome, logs, left} = await runReadings(readings);
+    assert.deepEqual(outcome, expected, label);
+    assert.equal(left, 0, `${label}: 준비한 읽기를 모두 썼다`);
+    if (reason) assert.match(logs.at(-1), reason, label);
+    else assert.deepEqual(logs, [], label);
+  }
+});
+
+test('도는 중에 끄는 스위치 파일을 놓으면 다음 회차부터 재지 않고 셈을 0으로 돌리며, 치우면 다시 잰다 [표 4, 재현 39행]', async () => {
+  const home = freshHome(), off = path.join(home, 'memory-check.off');
+  const ready = path.join(home, 'ready'), release = path.join(home, 'release');
+  const command = node(`
+    const fs = require('fs');
+    fs.writeFileSync(${JSON.stringify(ready)}, 'x');
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) process.exit(0); }, 10);
+    setTimeout(() => process.exit(3), 20000);
+  `);
+  // enabled를 넣지 않고 실제 스위치 판정으로 본다. 시험 실행기가 깐 이 프로세스의 스위치는 잠시 치운다.
+  const inherited = process.env[MEMORY_OFF_ENV];
+  delete process.env[MEMORY_OFF_ENV];
+  try {
+    let phase = 'before', whileOff = 0, afterBack = 0;
+    const outcome = await runLimitedResult(home, 'build', command, {...quiet,
+      memory: {platform: 'darwin', pollMs: 15, graceMs: 5000, measure: () => {
+        if (fs.existsSync(off)) { whileOff += 1; return sample(91); } // 꺼져 있는데 쟀다면 여기로 온다
+        if (!fs.existsSync(ready)) return sample(20);
+        if (phase === 'before') {
+          // 위험한 읽기 1번(셈 1) 직후 스위치를 놓는다. 회차 간격의 여러 배 뒤에 치운다: 그 사이 꺼진 회차가 적어도 한 번 돈다.
+          phase = 'off';
+          fs.writeFileSync(off, '격리 시험 스위치');
+          setTimeout(() => { fs.rmSync(off); phase = 'back'; }, 200);
+          return sample(91);
+        }
+        afterBack += 1;
+        // 꺼진 회차가 셈을 0으로 돌렸으므로 이 위험한 읽기는 다시 1번째다(이어 셌다면 2번째라 끊긴다).
+        if (afterBack === 1) return sample(91);
+        fs.writeFileSync(release, 'x');
+        return sample(20);
+      }}});
+    assert.deepEqual(outcome, {code: 0, started: true});
+    assert.equal(whileOff, 0, '스위치가 놓인 동안에는 재지 않는다');
+    assert.ok(afterBack >= 2, '스위치를 치운 뒤 다시 쟀다');
+    assert.equal(phase, 'back');
+    assert.equal(lockCount(home), 0);
+  } finally { if (inherited !== undefined) process.env[MEMORY_OFF_ENV] = inherited; }
+});
+
+test('끄는 스위치가 놓인 채 시작해도 도는 중에 치우면 다음 회차부터 재서 끊는다 [표 4]', async () => {
+  const home = freshHome(), off = path.join(home, 'memory-check.off'), {pidFile, command, grandPid} = tree(home);
+  fs.writeFileSync(off, '격리 시험 스위치');
+  const inherited = process.env[MEMORY_OFF_ENV];
+  delete process.env[MEMORY_OFF_ENV];
+  try {
+    let calls = 0;
+    const logs = [];
+    const run = runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+      memory: {platform: 'darwin', pollMs: 15, graceMs: 5000, measure: () => { calls += 1; return sample(93); }}});
+    await until(() => fs.existsSync(pidFile));
+    await new Promise(resolve => setTimeout(resolve, 150)); // 꺼진 회차가 여러 번 돈다
+    assert.equal(calls, 0, '시작 관문도 꺼진 회차도 재지 않는다');
+    assert.deepEqual(logs, []);
+    fs.rmSync(off);
+    assert.deepEqual(await run, {code: 76, started: true, memoryStop: true});
+    assert.equal(calls, 2);
+    await until(() => !alive(grandPid()), 3000);
+    assert.equal(lockCount(home), 0);
+  } finally { if (inherited !== undefined) process.env[MEMORY_OFF_ENV] = inherited; }
+});
+
+test('시작 전 대기는 측정에 걸린 시간만큼 덜 쉰다: 측정이 1.1초씩 걸려도 90초에 자리를 푼다 [표 3, 재현 73행]', async () => {
+  const {home, mark, command} = memoryHome(), slept = [];
+  let now = 0, calls = 0;
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet,
+    memory: {...MAC, now: () => now, sleepFn: async ms => { slept.push(ms); now += ms; },
+      measure: () => { now += 1100; calls += 1; return sample(95); }}});
+  assert.deepEqual({now, calls, outcome}, {now: 90_000, calls: 18, outcome: {code: 75, started: false}});
+  assert.deepEqual([...new Set(slept)], [3900]); // 5초 간격에서 측정 1.1초를 뺀 만큼만 쉰다
+  assert.equal(fs.existsSync(mark), false);
+  assert.equal(lockCount(home), 0);
+  // 상한까지 남은 시간보다 오래 쉬지 않는다: 상한 12초면 5초·5초 뒤에는 2초만 쉬고 12초에 푼다.
+  const late = memoryHome(), lateSlept = [];
+  let clockMs = 0, lateCalls = 0;
+  assert.deepEqual(await runLimitedResult(late.home, 'build', late.command, {...quiet,
+    memory: {...MAC, waitMs: 12_000, now: () => clockMs, sleepFn: async ms => { lateSlept.push(ms); clockMs += ms; },
+      measure: () => { lateCalls += 1; return sample(95); }}}),
+    {code: 75, started: false});
+  assert.deepEqual({lateSlept, clockMs, lateCalls}, {lateSlept: [5000, 5000, 2000], clockMs: 12_000, lateCalls: 3});
+  // 상한은 "90초 + 측정 1회"다: 89.9초에 시작한 측정이 1.1초 걸리면 91초에 푼다.
+  const edge = memoryHome();
+  let edgeMs = 0, edgeCalls = 0;
+  assert.deepEqual(await runLimitedResult(edge.home, 'build', edge.command, {...quiet,
+    memory: {...MAC, now: () => edgeMs, sleepFn: async () => { edgeMs = 89_900; },
+      measure: () => { edgeCalls += 1; if (edgeCalls === 2) edgeMs += 1100; return sample(edgeCalls === 1 ? 95 : 10); }}}),
+    {code: 75, started: false});
+  assert.deepEqual({edgeMs, edgeCalls}, {edgeMs: 91_000, edgeCalls: 2});
+});
+
+test('명령이 정상으로 끝나면 같은 그룹에 손자가 남아 있어도 자리를 푼다(받아들인 한계: 끝날 때 그룹을 정리하지 않는다) [표 11·한계, 재현 88행]', async t => {
+  const nativeKill = process.kill.bind(process), groupSignals = [];
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid < 0 && signal !== 0) groupSignals.push(signal);
+    return nativeKill(pid, signal);
+  });
+  for (const code of [0, 7]) {
+    const home = freshHome(), pidFile = path.join(home, 'grandchild.pid');
+    const stop = path.join(home, 'stop'), heard = path.join(home, 'heard');
+    leftovers.add(pidFile);
+    const grand = `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      setInterval(() => { if (fs.existsSync(${JSON.stringify(stop)})) { fs.writeFileSync(${JSON.stringify(heard)}, 'x'); process.exit(0); } }, 10);
+      setTimeout(() => process.exit(0), 20000);`;
+    const command = node(`
+      const fs = require('fs');
+      require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grand)}], {stdio: 'ignore'}).unref();
+      setInterval(() => { if (fs.existsSync(${JSON.stringify(pidFile)})) process.exit(${code}); }, 10);
+      setTimeout(() => process.exit(111), 20000);
+    `);
+    const before = residue();
+    const outcome = await runLimitedResult(home, 'build', command, {...quiet, memory: {...MAC, pollMs: 15, measure: () => sample(20)}});
+    assert.deepEqual(outcome, {code, started: true});
+    assert.equal(lockCount(home), 0); // 손자가 남아 있어도 자리는 풀렸다
+    assert.equal(residue(), before); // 타이머·신호 처리기는 정리됐다
+    assert.deepEqual(groupSignals, []); // 그룹에 신호를 보내지 않았다
+    // 손자는 실제로 돌고 있다: 멈춤 파일에 스스로 답하고 끝난다(좀비가 아니다).
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.equal(alive(pid), true);
+    fs.writeFileSync(stop, 'x');
+    await until(() => fs.existsSync(heard), 3000);
+    await until(() => !alive(pid), 3000);
+  }
+});
+
+test('그룹 번호: 조회에서 없다고 본 뒤에는 같은 번호가 다시 보여도 조회도 신호도 하지 않는다 [표 5·한계, 재현 134행]', async t => {
+  const home = freshHome(), ready = path.join(home, 'ready'), stop = path.join(home, 'stop');
+  const nativeKill = process.kill.bind(process), calls = [];
+  let seenGone = false;
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid > 0) return nativeKill(pid, signal); // 잠금 주인 확인 등은 그대로
+    calls.push([signal, seenGone ? '없다고 본 뒤' : '원래 그룹']);
+    if (seenGone) return true; // 같은 번호의 다른 그룹이 보이는 상황. 여기로 오면 안 된다
+    if (signal === 'SIGTERM') { fs.writeFileSync(stop, 'x'); return true; } // 원래 그룹은 곧 스스로 끝난다
+    try { return nativeKill(pid, signal); }
+    catch (error) { if (error.code === 'ESRCH') seenGone = true; throw error; }
+  });
+  const command = node(`
+    const fs = require('fs');
+    fs.writeFileSync(${JSON.stringify(ready)}, 'x');
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(stop)})) process.exit(0); }, 5);
+    setTimeout(() => process.exit(99), 20000);
+  `);
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet,
+    memory: {...MAC, pollMs: 15, graceMs: 5000, goneMs: 5000, measure: () => sample(fs.existsSync(ready) ? 91 : 20)}});
+  assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
+  assert.equal(seenGone, true, '조회가 그룹 없음(ESRCH)을 봤다');
+  assert.deepEqual(calls.filter(([, when]) => when === '없다고 본 뒤'), []);
+  assert.deepEqual(calls.filter(([signal]) => signal !== 0).map(([signal]) => signal), ['SIGTERM']); // SIGKILL을 보내지 않았다
+  assert.equal(lockCount(home), 0);
+});
+
+test('SIGKILL 뒤에도 그룹이 보이면 정해진 시간만 보고 "그룹이 남았다" 한 줄을 남긴 뒤 자리를 푼다 [표 5]', async t => {
+  const home = freshHome(), ready = path.join(home, 'ready'), stop = path.join(home, 'stop'), logs = [];
+  const nativeKill = process.kill.bind(process), signals = [];
+  // 그룹이 끝내 사라지지 않는 것처럼 보이게 한다(죽지 않는 프로세스, 또는 그 번호가 다른 그룹에 다시 쓰인 경우 — 번호로만 알아보는 한계).
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid > 0) return nativeKill(pid, signal);
+    if (signal === 0) return true;
+    signals.push(signal);
+    if (signal === 'SIGTERM') fs.writeFileSync(stop, 'x'); // 실제 명령은 스스로 끝나 시험 뒤에 남지 않는다
+    return true;
+  });
+  const command = node(`
+    const fs = require('fs');
+    fs.writeFileSync(${JSON.stringify(ready)}, 'x');
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(stop)})) process.exit(0); }, 5);
+    setTimeout(() => process.exit(99), 20000);
+  `);
+  const before = residue(), graceMs = 150, goneMs = 250;
+  let stopAt = null;
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet,
+    log: m => { logs.push(m); if (/^메모리 보호로 명령을 끊음/.test(m)) stopAt = performance.now(); },
+    memory: {...MAC, pollMs: 15, graceMs, goneMs, measure: () => sample(fs.existsSync(ready) ? 91 : 20)}});
+  const took = performance.now() - stopAt;
+  assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+  assert.match(logs.at(-1), /^메모리 보호: SIGKILL 뒤 \d+초가 지나도 프로세스 그룹\(\d+\)이 남았다\. 자리는 푼다/);
+  assert.ok(took >= (graceMs + goneMs) * 0.9, `정해진 시간을 다 보지 않음: ${took}ms`);
+  assert.ok(took < 5000, `무기한 쥐지 않는다: ${took}ms`);
+  assert.equal(lockCount(home), 0);
+  assert.equal(residue(), before);
+  assert.equal(MEMORY_GROUP_GONE_MS, 10_000);
+});
+
+test('beforeStart·afterExit는 자리를 쥔 동안 부르고, 75로 시작하지 못하면 부르지 않으며, 예외가 나도 자리는 풀린다 [표 12]', async () => {
+  const {home, mark, command} = memoryHome(), order = [];
+  const fine = {...MAC, pollMs: 10, measure: () => sample(20)};
+  const hooks = {
+    beforeStart: () => order.push(['before', lockCount(home), fs.existsSync(mark)]),
+    afterExit: result => order.push(['after', lockCount(home), fs.existsSync(mark), result]),
+  };
+  assert.deepEqual(await runLimitedResult(home, 'build', command, {...quiet, memory: fine, ...hooks}), {code: 0, started: true});
+  assert.deepEqual(order, [['before', 1, false], ['after', 1, true, {code: 0, started: true}]]);
+  assert.equal(lockCount(home), 0);
+  // 시작하지 못한 75: 둘 다 부르지 않는다.
+  order.length = 0;
+  fs.rmSync(mark);
+  assert.deepEqual(await runLimitedResult(home, 'build', command, {...quiet, ...hooks,
+    memory: {...MAC, ...clock(), measure: () => sample(99)}}), {code: 75, started: false});
+  assert.deepEqual(order, []);
+  // 실패한 명령과 띄우지 못한 명령에도 afterExit는 결과와 함께 불린다.
+  await runLimitedResult(home, 'build', node('process.exit(7)'), {...quiet, memory: fine, ...hooks});
+  await runLimitedResult(home, 'build', [path.join(home, '없는-실행-파일')], {...quiet, memory: fine, ...hooks});
+  assert.deepEqual(order.filter(([name]) => name === 'after').map(entry => entry.at(-1)),
+    [{code: 7, started: true}, {code: 127, started: false}]);
+  assert.ok(order.every(([, locks]) => locks === 1));
+  // 예외: 그대로 나가고 자리·타이머·신호 처리기는 남지 않는다.
+  const before = residue();
+  await assert.rejects(runLimitedResult(home, 'build', command, {...quiet, memory: fine,
+    beforeStart: () => { throw new Error('시작 직전 처리 실패'); }}), /시작 직전 처리 실패/);
+  assert.equal(fs.existsSync(mark), false); // 명령은 띄우지 않았다
+  assert.equal(lockCount(home), 0);
+  assert.equal(residue(), before);
+  await assert.rejects(runLimitedResult(home, 'build', command, {...quiet, memory: fine,
+    afterExit: () => { throw new Error('끝난 직후 처리 실패'); }}), /끝난 직후 처리 실패/);
+  assert.equal(fs.existsSync(mark), true);
+  assert.equal(lockCount(home), 0);
+  assert.equal(residue(), before);
 });
 
 test('옛 <종류>-N.lock은 세지도 회수하지도 않는다(머지 직후 잠깐 겹침을 막는 장치는 없다)', async () => {

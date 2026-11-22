@@ -9,7 +9,8 @@ import path from 'node:path';
 
 // 시작 관문: 압축 공간이 이 값 이상이거나 압박 단계가 위급이면 시작하지 않고 기다린다.
 export const MEMORY_START_MAX_PCT = 75;
-// 실행 중 보호: 압축 공간이 이 값 이상이거나, 압박 위급이면서 MEMORY_START_MAX_PCT 이상인 읽기가 연속 MEMORY_STOP_STREAK번이면 끊는다.
+// 실행 중 보호: 기준 둘을 따로 센다. (가) 압축 공간이 이 값 이상, (나) 압박 위급이면서 MEMORY_START_MAX_PCT 이상.
+// 어느 한쪽이 연속 MEMORY_STOP_STREAK번이면 끊는다. 두 기준을 한 번씩 번갈아 만족한 것은 끊는 근거가 아니다.
 export const MEMORY_STOP_PCT = 85;
 export const MEMORY_STOP_STREAK = 2;
 export const MEMORY_PRESSURE_CRITICAL = 4;
@@ -19,6 +20,8 @@ export const MEMORY_POLL_MS = 5000;
 export const MEMORY_WAIT_MS = 90_000;
 // 실행 중 보호가 SIGTERM을 보낸 뒤 SIGKILL까지 기다리는 시간.
 export const MEMORY_KILL_GRACE_MS = 10_000;
+// SIGKILL 뒤 프로세스 그룹이 사라지는지 보는 시간. 넘으면 "그룹이 남았다" 한 줄을 남기고 자리를 푼다(하나뿐인 자리를 무기한 쥐지 않는다).
+export const MEMORY_GROUP_GONE_MS = 10_000;
 // 시험 실패(1)·사용법 오류(2)·명령 없음(127)·신호(128+)와 겹치지 않는 종료 코드. 75(EX_TEMPFAIL)는 시작하지 않음, 76은 돌던 명령을 끊음.
 export const MEMORY_WAIT_EXIT = 75;
 export const MEMORY_STOP_EXIT = 76;
@@ -50,22 +53,31 @@ export function judgeStart(sample) {
   return {ok: used < MEMORY_START_MAX_PCT && sample.pressure !== MEMORY_PRESSURE_CRITICAL, line};
 }
 
-// 도는 중의 읽기 한 번이 위험한가. 못 읽은 값은 read false이고 끊는 근거로 쓰지 않는다.
+// 도는 중의 읽기 한 번이 두 기준을 각각 만족하는가. 못 읽은 값은 read false이고 끊는 근거로 쓰지 않는다.
+// over는 (가) 압축 공간 MEMORY_STOP_PCT 이상, critical은 (나) 압박 위급이면서 MEMORY_START_MAX_PCT 이상이다.
 export function judgeRunning(sample) {
   const used = compressorPct(sample), line = describeMemory(sample);
-  if (used === null) return {read: false, danger: false, line};
-  const danger = used >= MEMORY_STOP_PCT
-    || (sample.pressure === MEMORY_PRESSURE_CRITICAL && used >= MEMORY_START_MAX_PCT);
-  return {read: true, danger, line};
+  if (used === null) return {read: false, over: false, critical: false, line};
+  return {read: true, over: used >= MEMORY_STOP_PCT,
+    critical: sample.pressure === MEMORY_PRESSURE_CRITICAL && used >= MEMORY_START_MAX_PCT, line};
 }
 
-// 연속 셈: 위험한 읽기면 +1, 위험하지 않거나 못 읽으면 0으로 되돌린다. MEMORY_STOP_STREAK에 닿으면 끊는다.
+// 연속 셈 두 개. 읽은 값이 기준을 만족하면 그 셈만 +1, 아니면 그 셈을 0으로 되돌린다(한 값이 둘 다 만족하면 둘 다 센다).
+// 못 읽은 회차와 스위치가 꺼진 회차(verdict 없음)는 둘 다 0으로 되돌린다.
+export const NO_STOP_STREAK = Object.freeze({over: 0, critical: 0});
 export function nextStopStreak(streak, verdict) {
-  return verdict.read && verdict.danger ? streak + 1 : 0;
+  if (!verdict?.read) return NO_STOP_STREAK;
+  return {over: verdict.over ? streak.over + 1 : 0, critical: verdict.critical ? streak.critical + 1 : 0};
+}
+// 끊을 때가 됐으면 어느 기준인지 한 줄, 아니면 null.
+export function stopReason(streak) {
+  if (streak.over >= MEMORY_STOP_STREAK) return `압축 공간 ${MEMORY_STOP_PCT}% 이상이 ${MEMORY_STOP_STREAK}번 연속`;
+  if (streak.critical >= MEMORY_STOP_STREAK) return `압박 위급이면서 압축 공간 ${MEMORY_START_MAX_PCT}% 이상이 ${MEMORY_STOP_STREAK}번 연속`;
+  return null;
 }
 
 // 켜짐이 운영 기본이다. 환경 변수 KADAN_MEMORY_CHECK=off(시험 실행기 tests/run.mjs가 넣는다) 또는 $KADAN_HOME/memory-check.off 파일이 있으면
-// 시작 관문과 실행 중 보호를 모두 끈다. 문턱이 실측 전 값이라 잘못 막거나 끊을 때 사람이 바로 끌 수 있게 파일 스위치를 둔다.
+// 시작 관문과 실행 중 보호를 모두 끈다(실행 중 보호는 재는 회차마다 다시 읽는다). 문턱이 실측 전 값이라 잘못 막거나 끊을 때 사람이 바로 끌 수 있게 파일 스위치를 둔다.
 export function memoryCheckEnabled(home, env = process.env) {
   if (String(env[MEMORY_OFF_ENV] ?? '').toLowerCase() === 'off') return false;
   try { return !fs.existsSync(path.join(home, MEMORY_OFF_FILE)); } catch { return true; }

@@ -179,6 +179,100 @@ test('deps: 설치 기록이 맞는 자리에서 다시 설치하다 메모리 �
   });
 });
 
+// ---- 2026-11-22 검수(exec-3ab62698) 발견: 설치 기록은 무거운 명령의 자리를 쥔 동안에만 지우고 쓴다 [표 12] ----
+const recordOf = (f, slot) => {
+  const pools = path.join(f.home, 'review-slots');
+  return path.join(pools, fs.readdirSync(pools)[0], `${slot}.meta.json`);
+};
+const heavyLocks = f => fs.existsSync(path.join(f.home, 'limits'))
+  ? fs.readdirSync(path.join(f.home, 'limits')).filter(name => name.endsWith('.lock')).length : 0;
+
+test('deps: 메모리로 시작하지 못하면(75) 기존 설치 기록을 그대로 둔다: node_modules가 돌아오면 다시 설치하지 않는다 [표 12, 재현 197행]', async () => {
+  const f = fixture();
+  const got = await run(f, ['acquire', f.repo], {for: 'card-a'});
+  const counter = path.join(f.base, 'installs.txt'), modules = path.join(got.path, 'node_modules');
+  const cmd = `echo x >> ${counter} && mkdir -p node_modules`;
+  const enough = {enabled: true, platform: 'darwin', measure: () => memorySample(20)};
+  assert.equal((await run(f, ['deps', got.path], {cmd}, {memory: enough})).installed, true);
+  const record = recordOf(f, got.slot), original = fs.readFileSync(record, 'utf8');
+  // 캐시를 잠시 다른 곳으로 옮겨 설치가 필요한 상태로 만든다.
+  const saved = path.join(f.base, 'saved-node_modules');
+  fs.renameSync(modules, saved);
+  let clock = 0;
+  const seen = [];
+  await assert.rejects(run(f, ['deps', got.path], {cmd}, {memory: {enabled: true, platform: 'darwin',
+    now: () => clock, sleepFn: async ms => { clock += ms; }, waitMs: 15_000,
+    measure: () => { seen.push(fs.existsSync(record)); return memorySample(90); }}}), e => e.exitCode === 75);
+  assert.ok(seen.length >= 2 && seen.every(Boolean), '기다리는 동안에도 기록이 있다');
+  assert.equal(fs.readFileSync(record, 'utf8'), original); // 75 뒤에도 그대로
+  assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 1); // 설치 명령은 돌지 않았다
+  // 캐시가 돌아오면 앞선 설치를 그대로 쓴다.
+  fs.renameSync(saved, modules);
+  assert.deepEqual(await run(f, ['deps', got.path], {cmd}, {memory: enough}),
+    {path: got.path, installed: false, reason: '잠금 파일 그대로', lockfile: 'package-lock.json'});
+  assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 1);
+});
+
+test('deps가 겹칠 때: 앞 설치의 성공 기록이 뒤 설치의 메모리 보호 중단(76)을 가리지 않는다 — 다음 deps가 다시 설치한다 [표 12, 재현 226행]', async () => {
+  const f = fixture();
+  const got = await run(f, ['acquire', f.repo], {for: 'card-a'});
+  const enough = {enabled: true, platform: 'darwin', pollMs: 20, measure: () => memorySample(20)};
+  const begin = path.join(f.base, 'first-started'), proceed = path.join(f.base, 'second-waiting');
+  const modules = path.join(got.path, 'node_modules'), full = path.join(modules, 'complete'), half = path.join(modules, 'partial');
+  const shell = body => ({cmd: `"${process.execPath}" -e '${body.replaceAll("'", "'\\''")}'`});
+  // 첫 deps: 자리를 쥐고 설치를 시작한 뒤, 둘째가 자리를 기다리기 시작하면 설치를 끝낸다.
+  const first = run(f, ['deps', got.path], shell(`
+    const fs = require("fs");
+    fs.writeFileSync(${JSON.stringify(begin)}, "");
+    setInterval(() => {
+      if (!fs.existsSync(${JSON.stringify(proceed)})) return;
+      fs.mkdirSync(${JSON.stringify(modules)});
+      fs.writeFileSync(${JSON.stringify(full)}, "");
+      process.exit(0);
+    }, 10);
+    setTimeout(() => process.exit(44), 20000);
+  `), {memory: enough}).catch(error => error);
+  for (let i = 0; i < 500 && !fs.existsSync(begin); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(fs.existsSync(begin));
+  // 둘째 deps: 설치가 필요하다고 판단한 뒤 자리를 기다린다. 자리를 받으면 파일을 반쯤 바꾼 채 메모리 보호로 끊긴다.
+  const second = run(f, ['deps', got.path], shell(`
+    const fs = require("fs");
+    fs.renameSync(${JSON.stringify(full)}, ${JSON.stringify(half)});
+    setTimeout(() => process.exit(55), 20000);
+  `), {memory: {enabled: true, platform: 'darwin', pollMs: 20, graceMs: 5000, measure: () => memorySample(fs.existsSync(half) ? 90 : 20)},
+    log: line => { f.logs.push(line); if (line.includes('자리 모두 사용 중')) fs.writeFileSync(proceed, ''); }}).catch(error => error);
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(a.installed, true, a.message);
+  assert.equal(b.exitCode, 76, b.message);
+  assert.match(b.message, /^메모리 보호로 설치를 중단\(종료 76\)/);
+  assert.equal(fs.existsSync(half), true); // 반쯤 바뀐 채 남았다
+  assert.equal(fs.existsSync(full), false);
+  assert.equal(fs.existsSync(recordOf(f, got.slot)), false); // 앞 설치의 성공 기록은 뒤 설치가 시작하면서 지워졌다
+  // 다음 deps는 건너뛰지 않고 다시 설치한다.
+  const next = await run(f, ['deps', got.path], {cmd: 'touch node_modules/complete'}, {memory: enough});
+  assert.equal(next.installed, true);
+  assert.equal(fs.existsSync(full), true);
+  assert.equal(heavyLocks(f), 0);
+});
+
+test('deps: 설치 기록을 지우다 오류가 나도 무거운 명령의 자리는 풀리고 설치 명령은 돌지 않는다 [표 12]', async () => {
+  const f = fixture();
+  const got = await run(f, ['acquire', f.repo], {for: 'card-a'});
+  const mark = path.join(f.base, 'ran.txt');
+  const enough = {enabled: true, platform: 'darwin', measure: () => memorySample(20)};
+  // 기록 자리에 폴더가 있으면 기록 지우기가 실패한다.
+  const pools = path.join(f.home, 'review-slots');
+  const record = path.join(pools, fs.readdirSync(pools)[0], `${got.slot}.meta.json`);
+  fs.mkdirSync(record);
+  await assert.rejects(run(f, ['deps', got.path], {cmd: `echo x > ${mark}`}, {memory: enough}), e => e.code === 'ERR_FS_EISDIR');
+  assert.equal(fs.existsSync(mark), false);
+  assert.equal(heavyLocks(f), 0);
+  // 폴더를 치우면 같은 자리에서 그대로 설치된다(자리가 남아 막히지 않는다).
+  fs.rmdirSync(record);
+  assert.equal((await run(f, ['deps', got.path], {cmd: `echo x > ${mark} && mkdir -p node_modules`}, {memory: enough})).installed, true);
+  assert.equal(heavyLocks(f), 0);
+});
+
 test('deps는 잠금 파일이 바뀌었거나 node_modules가 없을 때만 설치한다', async () => {
   const f = fixture();
   const got = await run(f, ['acquire', f.repo], {for: 'card-a'});
