@@ -1040,12 +1040,94 @@ test('SIGKILL 뒤에도 그룹이 보이면 정해진 시간만 보고 "그룹�
   const took = performance.now() - stopAt;
   assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
   assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
-  assert.match(logs.at(-1), /^메모리 보호: SIGKILL 뒤 \d+초가 지나도 프로세스 그룹\(\d+\)이 남았다\. 자리는 푼다/);
+  assert.match(logs.at(-1), /^메모리 보호: SIGKILL 뒤 \d+초가 지나도 프로세스 그룹\((\d+)\)이 남았다\. 자리는 푼다 — 남은 프로세스\(그룹 번호 \1\)는 끝내지 못했으니 직접 확인한다$/);
   assert.ok(took >= (graceMs + goneMs) * 0.9, `정해진 시간을 다 보지 않음: ${took}ms`);
   assert.ok(took < 5000, `무기한 쥐지 않는다: ${took}ms`);
   assert.equal(lockCount(home), 0);
   assert.equal(residue(), before);
   assert.equal(MEMORY_GROUP_GONE_MS, 10_000);
+});
+
+// 2026-11-22 재판정(exec-96f060df) 발견: 확인 시간이 지나도 선두가 살아 있으면 그 종료를 더 기다리지 않고 자리를 푼다.
+// 실제 그룹에는 신호를 보내지 않는다: 종료 신호를 전달할 수 없는 상태(권한 오류)만 넣는다.
+test('SIGKILL 뒤에도 선두가 살아 있으면 그 종료를 기다리지 않고 76으로 돌아오며 자리를 푼다: 남은 선두의 PID를 한 줄에 적는다 [표 5, 재판정 재현]', async t => {
+  const home = freshHome(), ready = path.join(home, 'leader.pid'), stop = path.join(home, 'stop'), logs = [];
+  leftovers.add(ready);
+  const nativeKill = process.kill.bind(process), requests = [];
+  t.mock.method(process, 'kill', (pid, signal) => {
+    if (pid > 0) return nativeKill(pid, signal);
+    if (signal === 0) return true;
+    requests.push(signal);
+    throw Object.assign(new Error('권한 오류(모의)'), {code: 'EPERM'});
+  });
+  const command = node(`
+    const fs = require('fs');
+    fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(stop)})) process.exit(0); }, 5);
+    setTimeout(() => process.exit(97), 20000);
+  `);
+  const before = residue(), startedAt = performance.now();
+  let afterExit = null;
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    afterExit: result => { afterExit = [result, lockCount(home)]; },
+    memory: {...MAC, pollMs: 15, graceMs: 40, goneMs: 70, measure: () => sample(fs.existsSync(ready) ? 91 : 20)}});
+  const took = performance.now() - startedAt;
+  const pid = Number(fs.readFileSync(ready, 'utf8'));
+  try {
+    assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
+    assert.equal(lockCount(home), 0); // 선두가 살아 있어도 자리는 풀렸다
+    assert.equal(alive(pid), true); // 선두는 남았다(받아들인 한계)
+    assert.ok(took < 5000, `선두의 종료(20초 뒤)를 기다리지 않는다: ${took}ms`);
+    assert.deepEqual(requests, ['SIGTERM', 'SIGKILL']);
+    const warnings = logs.filter(m => /남았다/.test(m));
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0], `메모리 보호: SIGKILL 뒤 0초가 지나도 프로세스 그룹(${pid})이 남았다. 자리는 푼다 — 남은 프로세스(선두 PID ${pid} 포함)는 끝내지 못했으니 직접 확인한다`);
+    assert.deepEqual(afterExit, [{code: 76, started: true, memoryStop: true}, 1]); // 끝난 직후 처리는 자리를 쥔 채 불렸다
+    assert.equal(residue(), before); // 타이머·신호 처리기는 남지 않는다
+    // 풀린 자리에서 다음 무거운 명령이 바로 돈다.
+    assert.deepEqual(await runLimitedResult(home, 'build', node('process.exit(0)'), {...quiet, memory: {enabled: false}}), {code: 0, started: true});
+  } finally {
+    fs.writeFileSync(stop, 'x'); // 시험이 스스로 정리한다: 남긴 선두를 끝낸다
+    await until(() => !alive(pid), 5000);
+  }
+});
+
+test('끝내 남은 선두를 붙들지 않는다: limit run을 부른 프로세스는 선두가 살아 있어도 끝난다 [표 5, 재판정 재현]', async () => {
+  const home = freshHome(), ready = path.join(home, 'leader.pid'), stop = path.join(home, 'stop');
+  leftovers.add(ready);
+  const script = path.join(home, 'caller.mjs');
+  // 따로 띄운 프로세스가 runLimitedResult를 부른다. 선두는 6초 뒤에야 스스로 끝난다.
+  fs.writeFileSync(script, `
+    import fs from 'node:fs';
+    import {runLimitedResult} from ${JSON.stringify(new URL('../src/heavy-limit.mjs', import.meta.url).href)};
+    const nativeKill = process.kill.bind(process);
+    process.kill = (pid, signal) => {
+      if (pid > 0) return nativeKill(pid, signal);
+      if (signal === 0) return true;
+      throw Object.assign(new Error('권한 오류(모의)'), {code: 'EPERM'});
+    };
+    const ready = ${JSON.stringify(ready)}, stop = ${JSON.stringify(stop)};
+    const leader = "const fs = require('fs'); fs.writeFileSync(" + JSON.stringify(ready) + ", String(process.pid));"
+      + "setInterval(() => { if (fs.existsSync(" + JSON.stringify(stop) + ")) process.exit(0); }, 5); setTimeout(() => process.exit(97), 6000);";
+    const sample = pct => ({known: true, segmentPct: pct, pagePct: 10, pressure: 1, swapUsedMb: 0, recoveryAllowed: true});
+    const outcome = await runLimitedResult(${JSON.stringify(home)}, 'build', [process.execPath, '-e', leader], {env: {}, log: () => {}, stdio: 'ignore',
+      memory: {enabled: true, platform: 'darwin', pollMs: 15, graceMs: 40, goneMs: 70, measure: () => sample(fs.existsSync(ready) ? 91 : 20)}});
+    console.log(JSON.stringify(outcome));
+  `);
+  const startedAt = performance.now();
+  const caller = spawnSync(process.execPath, [script], {encoding: 'utf8', timeout: 15000});
+  const took = performance.now() - startedAt;
+  const pid = Number(fs.readFileSync(ready, 'utf8'));
+  try {
+    assert.equal(caller.status, 0, caller.stderr);
+    assert.deepEqual(JSON.parse(caller.stdout), {code: 76, started: true, memoryStop: true});
+    assert.equal(alive(pid), true, '부른 프로세스가 끝난 시점에 선두는 아직 살아 있다');
+    assert.ok(took < 4500, `선두가 끝나기(6초) 전에 부른 프로세스가 끝났다: ${took}ms`);
+    assert.equal(lockCount(home), 0);
+  } finally {
+    fs.writeFileSync(stop, 'x');
+    await until(() => !alive(pid), 8000);
+  }
 });
 
 test('beforeStart·afterExit는 자리를 쥔 동안 부르고, 75로 시작하지 못하면 부르지 않으며, 예외가 나도 자리는 풀린다 [표 12]', async () => {

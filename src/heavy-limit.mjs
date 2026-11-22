@@ -274,23 +274,27 @@ async function groupGone(group, ms) {
   return true;
 }
 // 그룹을 끊는다: SIGTERM을 보내고, 유예가 지나도 남은 프로세스가 있으면 SIGKILL을 보낸 뒤 goneMs 동안 사라지는지 본다.
-// 그래도 남으면 한 줄을 남기고 돌아간다(자리를 무기한 쥐지 않는다). 사라졌으면 true.
-async function stopGroup(group, {graceMs, goneMs, log}) {
+// 그래도 남으면 남은 프로세스의 번호를 적은 한 줄을 남기고 돌아간다(자리를 무기한 쥐지 않는다). 사라졌으면 true.
+// leaderRunning()은 선두(명령 자신)가 아직 끝나지 않았는지다. 그룹 번호는 선두의 PID와 같다.
+async function stopGroup(group, {graceMs, goneMs, log, leaderRunning}) {
   group.signal('SIGTERM');
   if (await groupGone(group, graceMs)) return true;
   group.signal('SIGKILL');
   if (await groupGone(group, goneMs)) return true;
-  log(`메모리 보호: SIGKILL 뒤 ${spanText(goneMs)}가 지나도 프로세스 그룹(${group.pid})이 남았다. 자리는 푼다 — 남은 프로세스를 확인한다`);
+  const left = leaderRunning() ? `선두 PID ${group.pid} 포함` : `그룹 번호 ${group.pid}`;
+  log(`메모리 보호: SIGKILL 뒤 ${spanText(goneMs)}가 지나도 프로세스 그룹(${group.pid})이 남았다. 자리는 푼다 — 남은 프로세스(${left})는 끝내지 못했으니 직접 확인한다`);
   return false;
 }
 
 // 실행 중 보호. pollMs마다 끄는 스위치를 다시 읽고, 켜져 있으면 재서 두 기준의 연속 셈을 따로 센다.
 // 어느 한쪽이 MEMORY_STOP_STREAK번 연속이면 그 명령의 그룹을 끊는다. 스위치가 꺼진 회차는 재지 않고, 못 읽은 회차·측정 예외와 함께
 // 끊는 근거로 쓰지 않으며 두 셈을 0으로 되돌린다. 끊기로 한 뒤에는 더 재지 않는다. 회차는 예외를 밖으로 내지 않는다.
-// stopping은 끊기를 시작했을 때만 생기는 약속(그룹 종료 확인까지)이고, stop()은 타이머를 멈춘다.
-function watchMemory(group, {isOn, measure, pollMs, graceMs, goneMs, log}) {
-  let streak = NO_STOP_STREAK, timer = null;
-  const state = {stopping: null, stop() { clearTimeout(timer); timer = null; }};
+// stopping은 끊기를 시작했을 때만 생기는 약속(그룹 종료 확인까지, 사라졌으면 true)이고, stop()은 타이머를 멈춘다.
+// leftover는 확인 시간이 지나도 그룹이 남았을 때만 끝나는 약속이다: 호출한 쪽이 선두의 종료를 더 기다리지 않게 한다.
+function watchMemory(group, {isOn, measure, pollMs, graceMs, goneMs, log, leaderRunning}) {
+  let streak = NO_STOP_STREAK, timer = null, giveUp;
+  const state = {stopping: null, leftover: new Promise(resolve => { giveUp = resolve; }),
+    stop() { clearTimeout(timer); timer = null; }};
   const tick = () => {
     timer = null;
     let verdict = null;
@@ -300,7 +304,8 @@ function watchMemory(group, {isOn, measure, pollMs, graceMs, goneMs, log}) {
     if (!reason) { timer = setTimeout(tick, pollMs); return; }
     const say = line => { try { log(line); } catch { /* 알림 줄 때문에 끊기를 멈추지 않는다 */ } };
     say(`메모리 보호로 명령을 끊음(종료 ${MEMORY_STOP_EXIT}): ${verdict.line}. ${reason}이라 이 명령의 프로세스 그룹을 끊는다. 같은 명령을 바로 다시 돌리지 않는다`);
-    state.stopping = stopGroup(group, {graceMs, goneMs, log: say});
+    state.stopping = stopGroup(group, {graceMs, goneMs, log: say, leaderRunning})
+      .then(gone => { if (!gone) giveUp(); return gone; });
   };
   timer = setTimeout(tick, pollMs);
   return state;
@@ -375,12 +380,21 @@ export async function runLimitedResult(home, kind, command, {cwd = process.cwd()
       child.once('exit', (code, signal) => resolve(code ?? 128 + (os.constants.signals[signal] ?? 1)));
     });
     // 맥이면 스위치가 꺼진 채 시작했어도 회차는 돈다: 도는 중에 스위치가 켜지면 다음 회차부터 잰다.
-    if (mac && started) watch = watchMemory(group, {isOn, measure, pollMs: memoryPollMs, graceMs, goneMs, log});
-    const code = await exited;
+    const leaderRunning = () => child.exitCode === null && child.signalCode === null;
+    if (mac && started) {
+      watch = watchMemory(group, {isOn, measure, pollMs: memoryPollMs, graceMs, goneMs, log, leaderRunning});
+    }
+    // 보통은 명령(선두)이 끝나길 기다린다. 메모리 보호가 끊었는데 확인 시간이 지나도 그룹이 남았으면 선두의 종료를 더 기다리지 않는다.
+    const code = await (watch ? Promise.race([exited, watch.leftover]) : exited);
     watch?.stop();
     let result = {code, started};
     // 끊기를 시작한 뒤라면 명령이 무슨 코드로 끝났든 메모리 보호 중단이다. 그룹이 사라졌거나 확인 시간이 지난 뒤에 자리를 푼다.
-    if (watch?.stopping) { await watch.stopping; result = {code: MEMORY_STOP_EXIT, started, memoryStop: true}; }
+    if (watch?.stopping) {
+      const gone = await watch.stopping;
+      // 끝내 남은 프로세스는 붙들지 않는다: 이 프로세스가 선두의 종료를 기다리느라 끝나지 못하는 일이 없게 한다.
+      if (!gone) child.unref();
+      result = {code: MEMORY_STOP_EXIT, started, memoryStop: true};
+    }
     afterExit?.(result);
     return result;
   } finally {
