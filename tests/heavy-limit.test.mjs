@@ -8,7 +8,9 @@ import {spawn, spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createExclusive, limitEnv, limitHolders, lockOwnerState, ORPHAN_LOCK_MS, processStartToken, runLimited, runLimitedResult,
   tryAcquireLimit} from '../src/heavy-limit.mjs';
-import {MEMORY_OFF_ENV, MEMORY_WAIT_EXIT, judgeMemory, memoryCheckEnabled, parseFreePercent, parseSwapUsedMb, readMemory} from '../src/memory-check.mjs';
+import {MEMORY_KILL_GRACE_MS, MEMORY_OFF_ENV, MEMORY_POLL_MS, MEMORY_START_MAX_PCT, MEMORY_STOP_EXIT, MEMORY_STOP_PCT, MEMORY_STOP_STREAK,
+  MEMORY_WAIT_EXIT, MEMORY_WAIT_MS, compressorPct, judgeRunning, judgeStart, memoryCheckEnabled, nextStopStreak} from '../src/memory-check.mjs';
+import {readMachineMemory} from '../src/machine-memory.mjs';
 import {processStartedAt} from '../src/process-tree.mjs';
 import {stopChild} from './helpers/child-cleanup.mjs';
 
@@ -420,47 +422,24 @@ test('역할 이름: 실제 limit run이 유니코드 KADAN_ROLE을 잠금에 �
   assert.equal((await waiting.done).code, 0);
 });
 
-// ---- 시작 직전 메모리 확인: 실제 memory_pressure·sysctl은 부르지 않는다. 측정·시계·대기는 인자로 넣는다 ----
-// 모양은 이 맥의 실제 출력에서 가져왔다(2026-11-21).
-const PRESSURE = free => `The system has 17179869184 (1048576 pages with a page size of 16384).\n\nPageouts: 21960 \nSwapins: 0 \nSwapouts: 0 \n\nSystem-wide memory free percentage: ${free}%\n`;
-const SWAP = used => `vm.swapusage: total = 2048.00M  used = ${used}  free = 2048.00M  (encrypted)\n`;
-const fakeRun = ({free = 58, swap = '0.00M'} = {}) => (cmd) => ({status: 0, stdout: cmd === 'memory_pressure' ? PRESSURE(free) : SWAP(swap)});
-
-test('메모리 파싱: 여유 비율은 마지막 줄 값, 스왑 used는 단위(K·M·G)를 MB로 바꾼다', () => {
-  assert.equal(parseFreePercent(PRESSURE(58)), 58);
-  assert.equal(parseFreePercent('System-wide memory free percentage: 12%\nSystem-wide memory free percentage: 31%\n'), 31);
-  assert.equal(parseSwapUsedMb(SWAP('0.00M')), 0);
-  assert.equal(parseSwapUsedMb(SWAP('0.25M')), 0.25);
-  assert.equal(parseSwapUsedMb(SWAP('1.50G')), 1536);
-  assert.equal(parseSwapUsedMb(SWAP('512.00K')), 0.5);
-  for (const bad of ['', 'garbage', undefined, null, 'System-wide memory free percentage: ?%']) assert.equal(parseFreePercent(bad), null);
-  for (const bad of ['', 'garbage', undefined, null, 'vm.swapusage: total = 1M']) assert.equal(parseSwapUsedMb(bad), null);
-});
-
-test('메모리 판정: 여유 29%는 대기, 30%는 시작; 스왑 used 0.00M은 시작, 0.25M은 대기', () => {
-  const judge = (free, swap) => judgeMemory(readMemory({platform: 'darwin', run: fakeRun({free, swap})}));
-  assert.equal(judge(29, '0.00M').ok, false);
-  assert.equal(judge(30, '0.00M').ok, true);
-  assert.equal(judge(58, '0.00M').ok, true);
-  assert.equal(judge(58, '0.25M').ok, false);
-  assert.equal(judge(29, '0.25M').ok, false);
-  assert.match(judge(29, '0.25M').line, /여유 29%\(30% 이상 필요\)·스왑 used 0\.25M\(0이어야 함\)/);
-});
-
-test('메모리 읽기: 맥이 아니거나 값을 못 읽으면 막지 않고 이유만 낸다(여유·스왑 어느 쪽이든)', () => {
-  assert.deepEqual(readMemory({platform: 'linux', run: () => assert.fail('리눅스에서는 부르지 않는다')}), {skip: '맥이 아님(linux)'});
-  const outcomes = [
-    ['memory_pressure 없음', () => ({status: null, error: new Error('ENOENT')})],
-    ['여유 비율 못 읽음', () => ({status: 0, stdout: 'garbage'})],
-    ['실행 예외', () => { throw new Error('boom'); }],
-    ['스왑 못 읽음', cmd => ({status: 0, stdout: cmd === 'memory_pressure' ? PRESSURE(10) : 'garbage'})],
-  ];
-  for (const [label, run] of outcomes) {
-    const memory = readMemory({platform: 'darwin', run});
-    assert.ok(memory.skip, label);
-    assert.deepEqual(judgeMemory(memory), {ok: true, skip: memory.skip}, label);
-  }
-});
+// ---- 메모리 보호(시작 관문 + 실행 중 보호): 실제 메모리를 채우지 않고 실제 sysctl도 부르지 않는다. ----
+// 측정(measure)·시계·간격은 인자로 넣는다. 시험은 우분투 CI와 tests/run.mjs(끄는 스위치) 아래에서도 돌아야 하므로
+// 관문·보호를 보는 시험은 enabled: true와 platform: 'darwin'을 함께 넣는다. 제목 끝의 [표 N]은 카드의 고정한 동작 표 번호다.
+const sample = (segmentPct, {pagePct = 10, pressure = 1, swapUsedMb = 0} = {}) =>
+  ({known: true, segmentPct, pagePct, pressure, swapUsedMb, recoveryAllowed: true});
+const UNREAD = {known: false, reason: 'read'};
+const MAC = {enabled: true, platform: 'darwin'};
+// 모양은 이 맥의 실제 `sysctl` 출력에서 가져왔다(2026-11-22). 세그먼트 한도 100, 보관 페이지 한도 1000으로 비율을 읽기 쉽게 했다.
+const SYSCTL = ({segments, pages = 100, pressure = 1}) => [
+  `kern.memorystatus_vm_pressure_level: ${pressure}`,
+  'vm.swapusage: total = 8192.00M  used = 7065.60M  free = 1126.40M  (encrypted)',
+  `vm.compressor.segment.total: ${segments}`,
+  'vm.compressor.segment.limit: 100',
+  `vm.compressor.pages_compressed: ${pages}`,
+  'vm.compressor.pages_compressed_limit: 1000',
+  '',
+].join('\n');
+const fromSysctl = options => readMachineMemory(() => ({status: 0, stdout: SYSCTL(options)}), 'darwin');
 
 const memoryHome = () => {
   const home = freshHome();
@@ -468,45 +447,179 @@ const memoryHome = () => {
 };
 // 가짜 시계: 대기(sleep)가 시계를 앞으로 보낸다.
 const clock = () => { let t = 0; return {now: () => t, sleepFn: async ms => { t += ms; }}; };
+const quiet = {env: {}, log: () => {}, stdio: 'ignore'};
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } };
 
-test('메모리가 모자라면 자리를 쥔 채 기다리다가 풀리면 명령을 돌린다; 같은 값은 대기 줄을 다시 내지 않는다', async () => {
-  const {home, mark, command} = memoryHome(), logs = [], seen = [];
-  const readings = [{freePercent: 20, swapUsedMb: 0}, {freePercent: 20, swapUsedMb: 0}, {freePercent: 25, swapUsedMb: 0}, {freePercent: 40, swapUsedMb: 0}];
-  const c = clock();
-  const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
-    memory: {enabled: true, ...c, pollMs: 1000, waitMs: 60_000, measure: () => {
-      seen.push(lockCount(home)); // 재는 동안에도 자리는 쥐고 있다
-      return readings.shift();
-    }}});
-  assert.equal(code, 0);
-  assert.deepEqual(seen, [1, 1, 1, 1]);
+// 실행 중 보호 시험이 쓰는 작은 실제 프로세스: 자식 하나와 그 자식이 띄운 손자 하나. 둘 다 스스로 끝나는 상한이 있어 남지 않는다.
+// 손자는 (SIGTERM을 무시하게 했다면 처리기를 건 뒤에) 자기 PID를 파일에 적는다. 시험은 그 파일이 생긴 뒤에만 문턱을 넘긴다.
+const leftovers = new Set();
+afterEach(() => {
+  for (const file of leftovers) {
+    try { process.kill(Number(fs.readFileSync(file, 'utf8')), 'SIGKILL'); } catch { /* 이미 없으면 그만 */ }
+  }
+  leftovers.clear();
+});
+function tree(home, {ignoreTerm = false} = {}) {
+  const pidFile = path.join(home, 'grandchild.pid');
+  leftovers.add(pidFile);
+  const grand = `${ignoreTerm ? "process.on('SIGTERM', () => {});" : ''}
+    require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+    setTimeout(() => process.exit(0), 20000);`;
+  const command = node(`
+    require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(grand)}], {stdio: 'ignore'});
+    setTimeout(() => process.exit(3), 20000);
+  `);
+  return {pidFile, command, grandPid: () => Number(fs.readFileSync(pidFile, 'utf8'))};
+}
+// 끝난 뒤 남은 것: 이 프로세스의 타이머 수와 신호·exit 처리기 수. runLimited 앞뒤로 같아야 한다.
+const residue = () => JSON.stringify({
+  timers: process.getActiveResourcesInfo().filter(name => name === 'Timeout').length,
+  listeners: ['SIGINT', 'SIGTERM', 'SIGHUP', 'exit'].map(name => process.listenerCount(name)),
+});
+
+test('시작 판정: 압축 공간(세그먼트·보관 페이지 중 큰 값) 74.99%는 시작, 75%는 대기; 압박 위급은 낮아도 대기; 압박 모름은 위급 아님; 못 읽으면 대기 [표 2·3]', () => {
+  assert.equal(compressorPct(sample(40, {pagePct: 62.5})), 62.5);
+  assert.equal(compressorPct(UNREAD), null);
+  assert.equal(compressorPct({...sample(40), known: false, pagePct: null}), null); // 한 축만 읽은 값은 읽음이 아니다
+  assert.equal(judgeStart(sample(74.99)).ok, true);
+  assert.equal(judgeStart(sample(75)).ok, false);
+  assert.equal(judgeStart(sample(10, {pagePct: 74.99})).ok, true);
+  assert.equal(judgeStart(sample(10, {pagePct: 75})).ok, false);
+  assert.equal(judgeStart(sample(20, {pressure: 4})).ok, false);
+  assert.equal(judgeStart(sample(74, {pressure: 2})).ok, true);
+  assert.equal(judgeStart(sample(74, {pressure: null})).ok, true);
+  // 스왑은 판정에 쓰지 않는다: 평소 스왑 16.7GiB에서도 시작한다.
+  assert.equal(judgeStart(sample(30, {swapUsedMb: 17100})).ok, true);
+  for (const unread of [UNREAD, {known: false, reason: 'timeout'}, null, undefined, {}]) {
+    assert.deepEqual(judgeStart(unread), {ok: false, line: '못 읽음'});
+  }
+  assert.equal(judgeStart(sample(80.04, {pagePct: 33.3, pressure: 2, swapUsedMb: 7065.6})).line,
+    '압축 공간 80.0%(세그먼트 80.0%·보관 페이지 33.3%)·압박 경고·스왑 6.9G(참고)');
+  // 가짜 sysctl 출력으로도 같다: 읽기는 감시기와 같은 readMachineMemory()다.
+  assert.equal(judgeStart(fromSysctl({segments: 74})).ok, true);
+  assert.equal(judgeStart(fromSysctl({segments: 75})).ok, false);
+  assert.equal(judgeStart(fromSysctl({segments: 20, pages: 750})).ok, false);
+  assert.equal(judgeStart(fromSysctl({segments: 20, pressure: 4})).ok, false);
+  assert.equal(judgeStart(readMachineMemory(() => ({status: 0, stdout: 'garbage\n'}), 'darwin')).ok, false);
+  assert.equal(judgeStart(readMachineMemory(() => { throw new Error('boom'); }, 'darwin')).ok, false);
+  assert.deepEqual([MEMORY_START_MAX_PCT, MEMORY_WAIT_MS, MEMORY_POLL_MS, MEMORY_WAIT_EXIT], [75, 90_000, 5000, 75]);
+});
+
+test('실행 중 판정과 연속 셈: 85%는 위험·84.99%는 아님, 압박 위급은 75%부터 위험; 내려오거나 못 읽으면 셈이 0으로 돌아간다 [표 5·6·7·8]', () => {
+  const danger = value => judgeRunning(value).danger;
+  assert.equal(danger(sample(85)), true);
+  assert.equal(danger(sample(84.99)), false);
+  assert.equal(danger(sample(10, {pagePct: 85})), true);
+  assert.equal(danger(sample(84.99, {pressure: 2})), false);
+  assert.equal(danger(sample(75, {pressure: 4})), true);
+  assert.equal(danger(sample(74.99, {pressure: 4})), false);
+  assert.equal(danger(sample(80, {pressure: null})), false);
+  assert.deepEqual(judgeRunning(UNREAD), {read: false, danger: false, line: '못 읽음'});
+  assert.deepEqual(judgeRunning(null), {read: false, danger: false, line: '못 읽음'});
+  const streaks = values => { let s = 0; return values.map(value => (s = nextStopStreak(s, judgeRunning(value)))); };
+  assert.deepEqual(streaks([sample(90), sample(90)]), [1, 2]); // 2번 연속이면 끊는다
+  assert.deepEqual(streaks([sample(90), sample(50), sample(90)]), [1, 0, 1]); // 1번 걸리고 내려옴
+  assert.deepEqual(streaks([sample(90), UNREAD, sample(90)]), [1, 0, 1]); // 못 읽음이 사이에 끼면 이어 세지 않는다
+  assert.deepEqual(streaks([UNREAD, UNREAD, UNREAD]), [0, 0, 0]); // 못 읽음은 끊는 근거가 아니다
+  assert.deepEqual(streaks([sample(90), sample(80, {pressure: 4})]), [1, 2]); // 두 조건이 섞여도 위험한 읽기의 연속이다
+  assert.deepEqual([MEMORY_STOP_PCT, MEMORY_STOP_STREAK, MEMORY_KILL_GRACE_MS, MEMORY_STOP_EXIT], [85, 2, 10_000, 76]);
+});
+
+test('맥이 아니면 건너뜀 한 줄만 남기고 시작하고, 실행 중에도 재지 않는다 [표 1]', async () => {
+  const {home, mark} = memoryHome(), logs = [];
+  let calls = 0;
+  const slow = node(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x'); setTimeout(() => {}, 150)`);
+  const outcome = await runLimitedResult(home, 'build', slow, {...quiet, log: m => logs.push(m),
+    memory: {enabled: true, platform: 'linux', pollMs: 10, measure: () => { calls += 1; return sample(99, {pressure: 4}); }}});
+  assert.deepEqual(outcome, {code: 0, started: true});
+  assert.deepEqual(logs, ['메모리 확인 건너뜀: 맥이 아님(linux)']);
+  assert.equal(calls, 0);
   assert.ok(fs.existsSync(mark));
-  const waits = logs.filter(m => /^대기: 메모리 부족/.test(m));
-  assert.equal(waits.length, 2, logs.join('\n')); // 20% 한 번(두 번째 같은 값은 생략), 25% 한 번
-  assert.match(waits[0], /여유 20%\(30% 이상 필요\)·스왑 used 0M\(0이어야 함\)\. 자리는 쥔 채 기다림\(최대 1분\)/);
   assert.equal(lockCount(home), 0);
 });
 
-test('대기 상한을 넘으면 명령을 돌리지 않고 자리를 풀고 종료 코드 75와 잰 값을 낸다', async () => {
+test('압축 공간 75% 미만이고 압박 위급이 아니면 기다리지 않고 바로 시작한다 [표 2]', async () => {
   const {home, mark, command} = memoryHome(), logs = [];
-  const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
-    memory: {enabled: true, ...clock(), pollMs: 1000, waitMs: 3000, measure: () => ({freePercent: 12, swapUsedMb: 300})}});
-  assert.equal(code, MEMORY_WAIT_EXIT);
-  assert.equal(MEMORY_WAIT_EXIT, 75);
-  assert.equal(fs.existsSync(mark), false); // 부작용 없음
-  assert.equal(lockCount(home), 0); // 자리를 풀었다
-  assert.match(logs.at(-1), /^메모리 부족으로 시작하지 않음\(종료 75\): 여유 12%\(30% 이상 필요\)·스왑 used 300M\(0이어야 함\)\. 3초 기다렸지만/);
-  // 시험 실패(1)와 구별된다: 같은 자리에서 다음 명령은 그대로 돈다.
-  assert.equal(await runLimited(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore',
-    memory: {enabled: true, measure: () => ({freePercent: 80, swapUsedMb: 0})}}), 0);
+  let calls = 0;
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    memory: {...MAC, sleepFn: () => assert.fail('기다리지 않는다'), measure: () => { calls += 1; return sample(74.9, {pressure: 2, swapUsedMb: 17000}); }}});
+  assert.deepEqual(outcome, {code: 0, started: true});
+  assert.deepEqual(logs, []);
+  assert.ok(calls >= 1);
   assert.ok(fs.existsSync(mark));
 });
 
-test('메모리를 기다리는 동안 자리를 쥐고 있어 다른 무거운 작업은 시작하지 않는다', async () => {
+test('75% 이상·압박 위급·못 읽음이면 자리를 쥔 채 5초마다 다시 재다가 풀리면 시작한다; 같은 값은 대기 줄을 다시 내지 않는다 [표 3]', async () => {
+  const {home, mark, command} = memoryHome(), logs = [], seen = [], slept = [];
+  const readings = [sample(80), sample(80), sample(40, {pressure: 4}), UNREAD, sample(60)];
+  const c = clock();
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    memory: {...MAC, now: c.now, sleepFn: async ms => { slept.push(ms); await c.sleepFn(ms); }, measure: () => {
+      seen.push(lockCount(home)); // 재는 동안에도 자리는 쥐고 있다
+      return readings.length ? readings.shift() : sample(60);
+    }}});
+  assert.deepEqual(outcome, {code: 0, started: true});
+  assert.deepEqual(seen.slice(0, 5), [1, 1, 1, 1, 1]);
+  assert.deepEqual(slept, [5000, 5000, 5000, 5000]); // 기본 간격은 5초
+  assert.ok(fs.existsSync(mark));
+  const waits = logs.filter(m => /^대기: 메모리/.test(m));
+  assert.equal(waits.length, 3, logs.join('\n')); // 80%(같은 값 한 번 생략)·압박 위급·못 읽음
+  assert.match(waits[0], /^대기: 메모리 — 압축 공간 80\.0%\(세그먼트 80\.0%·보관 페이지 10\.0%\)·압박 정상·스왑 0\.0G\(참고\)\. 압축 공간 75% 미만·압박 위급 아님이어야 시작한다\. 자리는 쥔 채 기다림\(최대 90초\)$/);
+  assert.match(waits[1], /압축 공간 40\.0%.*압박 위급/);
+  assert.match(waits[2], /^대기: 메모리 — 못 읽음\./);
+  assert.equal(lockCount(home), 0);
+});
+
+test('90초 안에 풀리지 않으면 명령을 돌리지 않고 자리를 풀고 종료 75·잰 값 한 줄이다; 맥에서 못 읽어도 같다 [표 3]', async () => {
+  const cases = [
+    [() => sample(88, {pagePct: 20, swapUsedMb: 300}), /^메모리 보호로 시작하지 않음\(종료 75\): 압축 공간 88\.0%\(세그먼트 88\.0%·보관 페이지 20\.0%\)·압박 정상·스왑 0\.3G\(참고\)\. 90초 기다렸지만 풀리지 않아 명령은 돌리지 않고 자리를 풀었다$/],
+    [() => UNREAD, /^메모리 보호로 시작하지 않음\(종료 75\): 못 읽음\. 90초 기다렸지만/],
+    [() => { throw new Error('측정 예외'); }, /^메모리 보호로 시작하지 않음\(종료 75\): 못 읽음\./],
+  ];
+  for (const [measure, lastLine] of cases) {
+    const {home, mark, command} = memoryHome(), logs = [];
+    const before = residue();
+    const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m), memory: {...MAC, ...clock(), measure}});
+    assert.deepEqual(outcome, {code: 75, started: false});
+    assert.equal(fs.existsSync(mark), false); // 부작용 없음
+    assert.equal(lockCount(home), 0); // 자리를 풀었다
+    assert.match(logs.at(-1), lastLine);
+    assert.equal(residue(), before);
+    // 시험 실패(1)와 구별된다: 같은 자리에서 다음 명령은 그대로 돈다.
+    assert.equal(await runLimited(home, 'build', command, {...quiet, memory: {...MAC, measure: () => sample(30)}}), 0);
+    assert.ok(fs.existsSync(mark));
+  }
+});
+
+test('90초 경계: 89,999ms에 통과한 측정은 시작하고, 90,000ms부터는 통과여도 시작하지 않는다(재는 중에 넘어도 같다) [표 3]', async () => {
+  for (const [at, code] of [[89_999, 0], [90_000, 75], [90_001, 75]]) {
+    // 대기 뒤의 시각이 at이다.
+    const first = memoryHome();
+    let now = 0;
+    const logs = [];
+    assert.deepEqual(await runLimitedResult(first.home, 'build', first.command, {...quiet, log: m => logs.push(m),
+      memory: {...MAC, now: () => now, sleepFn: async () => { now = at; }, measure: () => sample(now === 0 ? 75 : 74)}}),
+      {code, started: code === 0}, `대기 뒤 ${at}ms`);
+    assert.equal(fs.existsSync(first.mark), code === 0);
+    assert.equal(lockCount(first.home), 0);
+    if (code === 75) assert.match(logs.at(-1), /압축 공간 75\.0%.*90초 기다렸지만/); // 마지막으로 걸린 값을 보인다
+    // 두 번째 측정이 끝난 시각이 at이다(측정 중에 시계가 넘어감).
+    const second = memoryHome();
+    let clockMs = 0, calls = 0;
+    assert.deepEqual(await runLimitedResult(second.home, 'build', second.command, {...quiet,
+      memory: {...MAC, now: () => clockMs, sleepFn: async () => { clockMs = 5000; },
+        measure: () => { if (++calls === 1) return sample(80); clockMs = at; return sample(10); }}}),
+      {code, started: code === 0}, `측정 종료 ${at}ms`);
+    assert.equal(calls, 2);
+    assert.equal(fs.existsSync(second.mark), code === 0);
+  }
+});
+
+test('메모리를 기다리는 동안 자리를 쥐고 있어 다른 무거운 작업은 시작하지 않는다 [표 3]', async () => {
   const {home, mark, command} = memoryHome();
   let enough = false;
-  const holder = runLimited(home, 'rust', command, {env: {}, log: () => {}, stdio: 'ignore', pollMs: 10,
-    memory: {enabled: true, pollMs: 20, waitMs: 60_000, measure: () => ({freePercent: enough ? 80 : 5, swapUsedMb: 0})}});
+  const holder = runLimited(home, 'rust', command, {...quiet, pollMs: 10,
+    memory: {...MAC, pollMs: 20, waitMs: 60_000, measure: () => sample(enough ? 20 : 95)}});
   try {
     await until(() => lockCount(home) === 1);
     const other = start(home, 'install', node('0'));
@@ -520,31 +633,177 @@ test('메모리를 기다리는 동안 자리를 쥐고 있어 다른 무거운 
   assert.equal(lockCount(home), 0);
 });
 
-test('못 읽거나 맥이 아니면 건너뛰고 한 줄만 남긴다(대기 아님); 끄는 스위치 파일이 있으면 재지도 않는다', async () => {
-  const {home, mark, command} = memoryHome(), logs = [];
-  const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
-    memory: {enabled: true, measure: () => readMemory({platform: 'linux'})}});
-  assert.equal(code, 0);
-  assert.deepEqual(logs, ['메모리 확인 건너뜀: 맥이 아님(linux)']);
-  assert.ok(!logs.some(m => /대기/.test(m)));
-  fs.rmSync(mark);
-  // 스위치 파일: measure가 불리면 안 된다.
-  fs.writeFileSync(path.join(home, 'memory-check.off'), '');
-  const quiet = [];
-  assert.equal(await runLimited(home, 'build', command, {env: {}, log: m => quiet.push(m), stdio: 'ignore',
-    memory: {measure: () => assert.fail('스위치가 있으면 재지 않는다')}}), 0);
-  assert.deepEqual(quiet, []);
-  assert.ok(fs.existsSync(mark));
-  // 환경 변수 스위치(env 인자가 비어 있어도 이 프로세스의 환경을 본다는 것은 아래 기본값 시험이 따로 확인한다).
-  assert.equal(memoryCheckEnabled(home, {}), false);
-  assert.equal(memoryCheckEnabled(freshHome(), {[MEMORY_OFF_ENV]: 'off'}), false);
+test('끄는 스위치(파일·환경 변수)가 있으면 시작 관문도 실행 중 보호도 재지 않는다 [표 4]', async () => {
+  const slowHome = () => {
+    const {home, mark} = memoryHome();
+    return {home, mark, command: node(`require('fs').writeFileSync(${JSON.stringify(mark)}, 'x'); setTimeout(() => {}, 150)`)};
+  };
+  let calls = 0;
+  // enabled를 넣지 않는다: 스위치 판정 자체를 본다. 값은 시작 관문도 실행 중 보호도 걸리는 값이다.
+  const memory = {platform: 'darwin', pollMs: 10, measure: () => { calls += 1; return sample(99, {pressure: 4}); }};
+  // 시험 실행기(tests/run.mjs)가 깐 이 프로세스의 스위치를 잠시 치운다. 치우지 않으면 아래가 그 스위치 때문에 통과한다.
+  const inherited = process.env[MEMORY_OFF_ENV];
+  delete process.env[MEMORY_OFF_ENV];
+  try {
+    // 파일 스위치
+    const byFile = slowHome(), logs = [];
+    fs.writeFileSync(path.join(byFile.home, 'memory-check.off'), '');
+    assert.deepEqual(await runLimitedResult(byFile.home, 'build', byFile.command, {...quiet, log: m => logs.push(m), memory}), {code: 0, started: true});
+    assert.ok(fs.existsSync(byFile.mark));
+    assert.deepEqual(logs, []);
+    assert.equal(memoryCheckEnabled(byFile.home, {}), false);
+    // 환경 변수 스위치(넘겨받은 환경)
+    const byEnv = slowHome();
+    assert.deepEqual(await runLimitedResult(byEnv.home, 'build', byEnv.command, {...quiet, env: {[MEMORY_OFF_ENV]: 'off'}, memory}), {code: 0, started: true});
+    assert.ok(fs.existsSync(byEnv.mark));
+    assert.equal(calls, 0, '스위치가 있으면 시작 전에도 도는 중에도 재지 않는다');
+    // 스위치가 없으면 같은 측정·같은 명령이 시작 관문에 걸린다: 위 통과가 스위치 덕분임을 보인다.
+    const on = slowHome();
+    assert.deepEqual(await runLimitedResult(on.home, 'build', on.command, {...quiet, memory: {...memory, ...clock()}}), {code: 75, started: false});
+    assert.equal(fs.existsSync(on.mark), false);
+    assert.ok(calls > 0);
+  } finally { if (inherited !== undefined) process.env[MEMORY_OFF_ENV] = inherited; }
+  // 넘겨받은 환경이 비어 있어도 이 프로세스의 환경에 스위치가 있으면 끈다(tests/run.mjs 아래의 시험이 맥을 재지 않게).
+  calls = 0;
+  const underRunner = slowHome();
+  assert.deepEqual(await runLimitedResult(underRunner.home, 'build', underRunner.command, {...quiet, memory}), {code: 0, started: true});
+  assert.equal(calls, 0);
 });
 
-test('운영 기본은 켜짐이고, tests/run.mjs 아래(KADAN_MEMORY_CHECK=off)는 꺼짐이다', () => {
+test('운영 기본은 켜짐이고, tests/run.mjs 아래(KADAN_MEMORY_CHECK=off)는 꺼짐이다 [표 4]', () => {
   assert.equal(memoryCheckEnabled(freshHome(), {}), true);
   assert.equal(memoryCheckEnabled(freshHome(), {[MEMORY_OFF_ENV]: 'on'}), true);
   assert.equal(memoryCheckEnabled(freshHome(), process.env), false, 'npm test(tests/run.mjs)로 돌려야 한다');
   assert.match(fs.readFileSync(fileURLToPath(new URL('./run.mjs', import.meta.url)), 'utf8'), /env\.KADAN_MEMORY_CHECK = 'off'/);
+});
+
+test('실행 중 압축 공간 85% 이상이 2번 연속이면 프로세스 그룹을 끊는다: 손자까지 끝나고 종료 76·memoryStop이다 [표 5·11]', async () => {
+  const home = freshHome(), {pidFile, command, grandPid} = tree(home), logs = [], seen = [];
+  const before = residue();
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    memory: {...MAC, pollMs: 20, graceMs: 5000, measure: () => {
+      const value = fs.existsSync(pidFile) ? sample(91.2, {swapUsedMb: 2048}) : sample(10);
+      seen.push([value.segmentPct, lockCount(home)]);
+      return value;
+    }}});
+  assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
+  // 끊기로 한 뒤에는 더 재지 않는다: 위험한 읽기는 정확히 2번이고, 재는 동안 자리는 쥐고 있었다.
+  assert.equal(seen.filter(([pct]) => pct > 85).length, 2, JSON.stringify(seen));
+  assert.ok(seen.every(([, locks]) => locks === 1));
+  await until(() => !alive(grandPid()), 3000); // 손자까지 끝났다
+  assert.equal(lockCount(home), 0);
+  assert.deepEqual(logs.filter(m => /^메모리 보호/.test(m)).length, 1);
+  assert.match(logs.at(-1), /^메모리 보호로 명령을 끊음\(종료 76\): 압축 공간 91\.2%\(세그먼트 91\.2%·보관 페이지 10\.0%\)·압박 정상·스왑 2\.0G\(참고\)\. 압축 공간 85% 이상\(또는 압박 위급이면서 75% 이상\)이 2번 연속이라/);
+  assert.equal(residue(), before); // 남은 타이머·신호 처리기 없음
+});
+
+test('SIGTERM을 무시하는 손자는 유예가 지난 뒤 그룹 SIGKILL로 끝나고, 그 뒤에야 자리를 푼다 [표 5·11]', async () => {
+  const home = freshHome(), {pidFile, command, grandPid} = tree(home, {ignoreTerm: true});
+  const before = residue(), graceMs = 400;
+  let stopAt = null, lockAtReturn = null;
+  const run = runLimitedResult(home, 'build', command, {...quiet,
+    log: m => { if (/^메모리 보호로 명령을 끊음/.test(m)) stopAt = performance.now(); },
+    memory: {...MAC, pollMs: 20, graceMs, measure: () => sample(fs.existsSync(pidFile) ? 97 : 10)}});
+  const outcome = await run.then(value => { lockAtReturn = lockCount(home); return value; });
+  const took = performance.now() - stopAt;
+  assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
+  assert.ok(took >= graceMs * 0.9, `유예(${graceMs}ms) 전에 끝남: ${took}ms`); // 자식이 먼저 죽어도 손자를 기다렸다
+  await until(() => !alive(grandPid()), 3000);
+  assert.equal(lockAtReturn, 0);
+  assert.equal(residue(), before);
+});
+
+test('압박 위급이면서 압축 공간 75% 이상이 2번 연속이어도 끊는다 [표 6]', async () => {
+  const home = freshHome(), {pidFile, command, grandPid} = tree(home), logs = [];
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    memory: {...MAC, pollMs: 20, graceMs: 5000, measure: () => sample(fs.existsSync(pidFile) ? 76 : 10, {pressure: fs.existsSync(pidFile) ? 4 : 1})}});
+  assert.deepEqual(outcome, {code: 76, started: true, memoryStop: true});
+  await until(() => !alive(grandPid()), 3000);
+  assert.match(logs.at(-1), /^메모리 보호로 명령을 끊음\(종료 76\): 압축 공간 76\.0%.*압박 위급/);
+  assert.equal(lockCount(home), 0);
+});
+
+test('1번만 걸리고 내려오거나 못 읽음·측정 예외가 사이에 끼면 끊지 않는다 [표 7·8]', async () => {
+  const home = freshHome(), release = path.join(home, 'release'), logs = [];
+  // 위험한 읽기는 여러 번이지만 한 번도 2번 연속이 아니다. 준비한 읽기를 다 쓰면 명령을 스스로 끝나게 한다.
+  const readings = [sample(60), sample(90), sample(50), sample(90), UNREAD, sample(90), 'throw', sample(90),
+    sample(74.9, {pressure: 4}), sample(84.9), sample(90), {known: false, reason: 'timeout'}, sample(96)];
+  const total = readings.length + 1; // 시작 관문의 첫 읽기(sample 60) 포함
+  let calls = 0;
+  const command = node(`
+    const fs = require('fs');
+    setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) process.exit(0); }, 10);
+    setTimeout(() => process.exit(3), 20000);
+  `);
+  const before = residue();
+  const outcome = await runLimitedResult(home, 'build', command, {...quiet, log: m => logs.push(m),
+    memory: {...MAC, pollMs: 15, graceMs: 5000, measure: () => {
+      calls += 1;
+      if (calls === 1) return sample(60);
+      const value = readings.shift();
+      if (!readings.length) fs.writeFileSync(release, 'x');
+      if (value === undefined) return sample(10);
+      if (value === 'throw') throw new Error('측정 예외');
+      return value;
+    }}});
+  assert.deepEqual(outcome, {code: 0, started: true}); // 메모리 보호 표시 없음
+  assert.ok(calls >= total, `읽기 ${calls}번`);
+  assert.deepEqual(logs, []);
+  assert.equal(lockCount(home), 0);
+  assert.equal(residue(), before);
+});
+
+test('명령이 스스로 75·76으로 끝나면 보통 종료다: 코드는 그대로이고 메모리 보호 표시가 없다 [표 9]', async () => {
+  const {home, command} = memoryHome();
+  const fine = {...MAC, pollMs: 10, measure: () => sample(20)};
+  assert.deepEqual(await runLimitedResult(home, 'build', node('process.exit(76)'), {...quiet, memory: fine}), {code: 76, started: true});
+  assert.deepEqual(await runLimitedResult(home, 'build', node('process.exit(75)'), {...quiet, memory: fine}), {code: 75, started: true});
+  assert.equal(await runLimited(home, 'build', node('process.exit(76)'), {...quiet, memory: fine}), 76);
+  // 메모리로 못 시작한 75는 started false로 구별된다.
+  assert.deepEqual(await runLimitedResult(home, 'build', command, {...quiet, memory: {...MAC, ...clock(), waitMs: 2000, measure: () => sample(99)}}),
+    {code: 75, started: false});
+  // 스위치가 꺼져 있어도 같다.
+  assert.deepEqual(await runLimitedResult(home, 'build', node('process.exit(76)'), {...quiet, memory: {enabled: false}}), {code: 76, started: true});
+});
+
+test('limit run이 받은 SIGINT·SIGTERM·SIGHUP은 자식 하나가 아니라 그 프로세스 그룹에 간다: 손자까지 끝난다 [표 10·11]', async () => {
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    const home = freshHome(), {pidFile, command, grandPid} = tree(home);
+    const run = start(home, 'build', command);
+    await until(() => fs.existsSync(pidFile) && lockCount(home) === 1);
+    const pid = grandPid();
+    assert.equal(alive(pid), true);
+    run.child.kill(signal);
+    const result = await run.done;
+    assert.equal(result.code, 128 + os.constants.signals[signal], `${signal}: ${result.stderr}`);
+    await until(() => !alive(pid), 3000);
+    assert.equal(lockCount(home), 0);
+  }
+});
+
+test('명령은 표준 입력을 받지 않는다: 부모의 표준 입력이 열려 있어도 명령은 바로 끝(EOF)을 읽는다', async () => {
+  const home = freshHome();
+  // start()는 limit run의 표준 입력을 열린 파이프로 둔다. 명령이 그 파이프를 물려받았다면 끝을 읽지 못해 9로 끝난다.
+  const result = await start(home, 'build', node(`
+    process.stdin.on('end', () => process.exit(0)); process.stdin.resume();
+    setTimeout(() => process.exit(9), 5000);
+  `)).done;
+  assert.equal(result.code, 0, result.stderr);
+});
+
+test('끝난 뒤 남는 것이 없다: 정상 종료·실패·실행 파일 없음 어느 쪽이든 타이머·신호 처리기·자리가 남지 않는다 [표 11]', async () => {
+  const home = freshHome(), before = residue();
+  const memory = {...MAC, pollMs: 10, measure: () => sample(20)};
+  assert.deepEqual(await runLimitedResult(home, 'build', node('setTimeout(() => {}, 60)'), {...quiet, memory}), {code: 0, started: true});
+  assert.equal(residue(), before);
+  assert.deepEqual(await runLimitedResult(home, 'build', node('setTimeout(() => process.exit(7), 60)'), {...quiet, memory}), {code: 7, started: true});
+  assert.equal(residue(), before);
+  const logs = [];
+  assert.deepEqual(await runLimitedResult(home, 'build', [path.join(home, '없는-실행-파일')], {...quiet, log: m => logs.push(m), memory}),
+    {code: 127, started: false});
+  assert.match(logs.at(-1), /^실행 실패:/);
+  assert.equal(residue(), before);
+  assert.equal(lockCount(home), 0);
 });
 
 test('옛 <종류>-N.lock은 세지도 회수하지도 않는다(머지 직후 잠깐 겹침을 막는 장치는 없다)', async () => {
@@ -673,42 +932,6 @@ test('회수 표지 1c: 내용 없음·깨진 표지는 잠금과 같은 고아 
   }
 });
 
-test('5분 상한: 상한을 넘은 뒤의 측정이 통과여도 시작하지 않는다(종료 75·명령 미실행·자리 해제)', async () => {
-  for (const finalFree of [29, 30]) {
-    const {home, mark, command} = memoryHome();
-    let clock = 0;
-    const logs = [];
-    const code = await runLimited(home, 'build', command, {env: {}, log: m => logs.push(m), stdio: 'ignore',
-      memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 300_001; }, // MEMORY_WAIT_MS(300000) 직후
-        measure: () => ({freePercent: clock === 0 ? 29 : finalFree, swapUsedMb: 0})}});
-    assert.equal(code, MEMORY_WAIT_EXIT, `두 번째 측정 ${finalFree}%`);
-    assert.equal(fs.existsSync(mark), false);
-    assert.equal(lockCount(home), 0);
-    assert.match(logs.at(-1), /여유 29%.*5분 기다렸지만/);
-  }
-  // 상한 직전(299,999ms)의 측정이 통과하면 시작한다.
-  const {home, mark, command} = memoryHome();
-  let clock = 0;
-  assert.equal(await runLimited(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore',
-    memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 299_999; },
-      measure: () => ({freePercent: clock === 0 ? 29 : 30, swapUsedMb: 0})}}), 0);
-  assert.ok(fs.existsSync(mark));
-});
-
-test('5분 상한 2: 측정 중에 시계가 상한을 넘으면 통과여도 시작하지 않고, 299,999ms에 끝난 통과 측정은 시작한다', async () => {
-  for (const [endsAt, code] of [[300_001, 75], [299_999, 0]]) {
-    const {home, mark, command} = memoryHome();
-    let clock = 0, calls = 0;
-    const outcome = await runLimitedResult(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore',
-      memory: {enabled: true, now: () => clock, sleepFn: async () => { clock = 299_999; },
-        measure: () => { if (++calls === 1) return {freePercent: 29, swapUsedMb: 0}; clock = endsAt; return {freePercent: 30, swapUsedMb: 0}; }}});
-    assert.deepEqual(outcome, {code, started: code === 0}, `측정 종료 ${endsAt}ms`);
-    assert.equal(calls, 2);
-    assert.equal(fs.existsSync(mark), code === 0);
-    assert.equal(lockCount(home), 0);
-  }
-});
-
 test('실행 파일이 없으면 started false·코드 127이다', async () => {
   const home = freshHome(), logs = [];
   const outcome = await runLimitedResult(home, 'build', [path.join(home, '없는-실행-파일')], {env: {}, log: m => logs.push(m), stdio: 'ignore',
@@ -716,17 +939,4 @@ test('실행 파일이 없으면 started false·코드 127이다', async () => {
   assert.deepEqual(outcome, {code: 127, started: false});
   assert.match(logs.at(-1), /^실행 실패:/);
   assert.equal(lockCount(home), 0);
-});
-
-test('runLimitedResult: 메모리로 못 시작하면 started false, 명령이 돌고 75로 끝나면 started true', async () => {
-  const {home, command} = memoryHome();
-  let clock = 0;
-  const memory = {enabled: true, now: () => clock, sleepFn: async ms => { clock += ms; }, pollMs: 1000, waitMs: 2000,
-    measure: () => ({freePercent: 1, swapUsedMb: 0})};
-  assert.deepEqual(await runLimitedResult(home, 'build', command, {env: {}, log: () => {}, stdio: 'ignore', memory}),
-    {code: MEMORY_WAIT_EXIT, started: false});
-  assert.deepEqual(await runLimitedResult(home, 'build', node('process.exit(75)'), {env: {}, log: () => {}, stdio: 'ignore',
-    memory: {enabled: true, measure: () => ({freePercent: 90, swapUsedMb: 0})}}), {code: 75, started: true});
-  assert.equal(await runLimited(home, 'build', node('process.exit(75)'), {env: {}, log: () => {}, stdio: 'ignore',
-    memory: {enabled: true, measure: () => ({freePercent: 90, swapUsedMb: 0})}}), 75);
 });

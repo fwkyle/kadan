@@ -115,29 +115,68 @@ test('버려진 임차(세션 없음·너무 오래됨)는 회수하고 그렇�
   assert.deepEqual(aged.reclaimed.map(r => r.reason), ['1시간 초과']);
 });
 
+// 메모리 읽기는 넣어 준다(실제 맥을 재지 않는다). readMachineMemory()와 같은 모양이다.
+const memorySample = segmentPct => ({known: true, segmentPct, pagePct: 10, pressure: 1, swapUsedMb: 0, recoveryAllowed: true});
+
 test('deps: 메모리로 시작 못 하면 미실행으로, 설치 명령이 돌고 75로 끝나면 설치 실패로 알린다(종료 코드가 아니라 시작 여부로 구분)', async () => {
   const f = fixture();
   const got = await run(f, ['acquire', f.repo], {for: 'card-a'});
   const mark = path.join(f.base, 'ran.txt');
   let clock = 0;
-  const lowMemory = {enabled: true, now: () => clock, sleepFn: async ms => { clock += ms; }, pollMs: 1000, waitMs: 2000,
-    measure: () => ({freePercent: 3, swapUsedMb: 0})};
+  const lowMemory = {enabled: true, platform: 'darwin', now: () => clock, sleepFn: async ms => { clock += ms; }, pollMs: 1000, waitMs: 2000,
+    measure: () => memorySample(96)};
   await assert.rejects(run(f, ['deps', got.path], {cmd: `echo x > ${mark}`}, {memory: lowMemory}), e => {
     assert.equal(e.exitCode, 75);
-    assert.match(e.message, /메모리 부족으로 설치를 시작하지 않음.*돌리지 않았다/);
+    assert.match(e.message, /메모리 보호로 설치를 시작하지 않음\(종료 75\).*돌리지 않았다/);
     return true;
   });
   assert.equal(fs.existsSync(mark), false);
-  const enough = {enabled: true, measure: () => ({freePercent: 90, swapUsedMb: 0})};
+  const enough = {enabled: true, platform: 'darwin', measure: () => memorySample(20)};
   await assert.rejects(run(f, ['deps', got.path], {cmd: `echo x > ${mark}; exit 75`}, {memory: enough}), e => {
     assert.equal(e.exitCode, 75);
     assert.match(e.message, /설치 실패\(종료 75\)/);
-    assert.doesNotMatch(e.message, /돌리지 않았다|메모리 부족/);
+    assert.doesNotMatch(e.message, /돌리지 않았다|메모리/);
     return true;
   });
   assert.equal(fs.existsSync(mark), true); // 명령은 실제로 돌았다
   // 미실행·실패 어느 쪽도 설치 기록을 남기지 않는다: 다음 deps는 첫 설치로 돈다.
   assert.equal((await run(f, ['deps', got.path], {cmd: 'mkdir -p node_modules'}, {memory: enough})).reason, '첫 설치');
+});
+
+test('deps: 설치 기록이 맞는 자리에서 다시 설치하다 메모리 보호로 끊기면(76) 다음 deps가 건너뛰지 않고 다시 설치한다', async () => {
+  const f = fixture();
+  const got = await run(f, ['acquire', f.repo], {for: 'card-a'});
+  const counter = path.join(f.base, 'installs.txt'), modules = path.join(got.path, 'node_modules');
+  const cmd = `echo x >> ${counter} && mkdir -p node_modules && touch node_modules/full`;
+  const enough = {enabled: true, platform: 'darwin', pollMs: 20, measure: () => memorySample(20)};
+  assert.equal((await run(f, ['deps', got.path], {cmd}, {memory: enough})).installed, true);
+  assert.equal((await run(f, ['deps', got.path], {cmd}, {memory: enough})).reason, '잠금 파일 그대로'); // 기록이 맞다
+  // 캐시 정리로 node_modules가 지워져 다시 설치하는 중에, 반쯤 깔린 채로 메모리 보호가 끊는다.
+  fs.rmSync(modules, {recursive: true});
+  const half = path.join(modules, 'half');
+  const cutMidway = {enabled: true, platform: 'darwin', pollMs: 20, graceMs: 5000,
+    measure: () => memorySample(fs.existsSync(half) ? 93 : 20)};
+  await assert.rejects(run(f, ['deps', got.path], {cmd: 'mkdir -p node_modules && touch node_modules/half && sleep 30'}, {memory: cutMidway}), e => {
+    assert.equal(e.exitCode, 76);
+    assert.match(e.message, /^메모리 보호로 설치를 중단\(종료 76\): 다음 deps가 다시 설치한다/);
+    return true;
+  });
+  assert.equal(fs.existsSync(half), true); // 반쯤 깔린 node_modules가 남았다
+  assert.equal(fs.existsSync(path.join(modules, 'full')), false);
+  // 잠금 파일도 그대로이고 node_modules도 있지만, 설치 기록이 없어 다시 설치한다.
+  const again = await run(f, ['deps', got.path], {cmd}, {memory: enough});
+  assert.equal(again.installed, true);
+  assert.equal(fs.existsSync(path.join(modules, 'full')), true);
+  assert.equal(fs.readFileSync(counter, 'utf8').trim().split('\n').length, 2);
+  assert.equal((await run(f, ['deps', got.path], {cmd}, {memory: enough})).reason, '잠금 파일 그대로'); // 성공 뒤에는 다시 기록된다
+  // 설치 명령이 스스로 76으로 끝나면 메모리 보호 중단이 아니라 보통의 설치 실패다(종료 코드만으로 가르지 않는다).
+  fs.rmSync(modules, {recursive: true});
+  await assert.rejects(run(f, ['deps', got.path], {cmd: 'exit 76'}, {memory: enough}), e => {
+    assert.equal(e.exitCode, 76);
+    assert.match(e.message, /^설치 실패\(종료 76\)/);
+    assert.doesNotMatch(e.message, /메모리/);
+    return true;
+  });
 });
 
 test('deps는 잠금 파일이 바뀌었거나 node_modules가 없을 때만 설치한다', async () => {

@@ -242,11 +242,16 @@ async function deps(target, flags, ctx) {
   if (meta?.lockfile === lockfile && meta.hash === hash && fs.existsSync(path.join(dir, 'node_modules')))
     return {path: dir, installed: false, reason: '잠금 파일 그대로', lockfile};
   const command = typeof flags.cmd === 'string' ? ['/bin/sh', '-c', flags.cmd] : defaultCommand;
+  // 설치를 맡기기 전에 이 자리의 설치 기록을 지우고, 성공한 뒤에만 다시 쓴다. 기록이 맞는 채로 node_modules만 지워져
+  // 다시 설치하다 끊기면(메모리 보호 76·강제 종료) 반쯤 깔린 node_modules와 맞는 기록이 남아 다음 deps가 건너뛰기 때문이다.
+  // 여기까지 왔으면 어차피 설치가 필요한 상태라, 시작하지 못하고 75로 끝나도 기록이 없어 더 설치하게 되는 일은 없다.
+  fs.rmSync(metaFile(pool, lease.slot), {force: true});
   // 설치 출력은 표준 오류로 보낸다. 표준 출력은 이 명령의 JSON 결과만 둔다.
-  const {code, started} = await runLimitedResult(ctx.home, 'install', command,
+  const {code, started, memoryStop} = await runLimitedResult(ctx.home, 'install', command,
     {cwd: dir, env: ctx.env, log: ctx.log, stdio: ['ignore', 2, 2], memory: ctx.memory});
-  // 시작 못 함(메모리)과 명령이 돌고 75로 끝남은 종료 코드가 아니라 started로 구분한다.
-  if (!started && code === MEMORY_WAIT_EXIT) throw Object.assign(new Error(`메모리 부족으로 설치를 시작하지 않음(종료 ${code}): 설치 명령은 돌리지 않았다. 메모리가 풀린 뒤 다시 한다`), {exitCode: code});
+  // 시작 못 함(75)·메모리 보호 중단(76)과 명령이 스스로 75·76으로 끝남은 종료 코드가 아니라 started·memoryStop으로 구분한다.
+  if (!started && code === MEMORY_WAIT_EXIT) throw Object.assign(new Error(`메모리 보호로 설치를 시작하지 않음(종료 ${code}): 설치 명령은 돌리지 않았다. 메모리가 풀린 뒤 다시 한다`), {exitCode: code});
+  if (memoryStop) throw Object.assign(new Error(`메모리 보호로 설치를 중단(종료 ${code}): 다음 deps가 다시 설치한다. 바로 다시 돌리지 않는다`), {exitCode: code});
   if (code !== 0) throw Object.assign(new Error(`설치 실패(종료 ${code}): ${command.join(' ')}`), {exitCode: code});
   writeJson(metaFile(pool, lease.slot), {lockfile, hash, command, installedAt: new Date().toISOString()});
   return {path: dir, installed: true, reason: meta ? '잠금 파일 바뀜 또는 node_modules 없음' : '첫 설치', lockfile};

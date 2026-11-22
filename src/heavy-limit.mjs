@@ -1,7 +1,8 @@
 // 무거운 명령 동시 실행 제한. 카단 폴더의 잠금 파일로 기계 전체에서 무거운 명령을 한 줄(기본 동시 1개)로 세운다.
 // 왜: 병렬 에이전트가 설치·빌드·러스트 빌드를 한꺼번에 돌려 부하 75·스왑 25GB까지 갔다 (2026-10-02 [kyle]).
 // 종류별 상한은 종류가 다르면 셋이 겹쳐 돌아, 2026-11-21 커널 패닉 재부팅 2회 뒤 종류와 상관없는 한 줄로 합쳤다.
-// 자리를 잡은 뒤 명령을 띄우기 직전에 메모리를 재서 모자라면 자리를 쥔 채 기다린다(src/memory-check.mjs).
+// 자리를 잡은 뒤 명령을 띄우기 직전에 맥 전체 압축 메모리 공간을 재서 높으면 자리를 쥔 채 기다리고(시작 관문),
+// 도는 동안에도 5초마다 재서 위험하면 그 명령의 프로세스 그룹을 끊는다(실행 중 보호). 기준은 src/memory-check.mjs.
 // 데몬·서비스 없이 잠금 파일만 쓴다. 죽은 PID의 잠금과, PID를 다른 프로세스가 다시 받은 잠금은 다음 사람이 회수한다.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,13 +10,15 @@ import path from 'node:path';
 import {spawn, spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {isRoleName} from './role-name.mjs';
-import {MEMORY_WAIT_EXIT, MEMORY_WAIT_MS, judgeMemory, memoryCheckEnabled, readMemory} from './memory-check.mjs';
+import {MEMORY_KILL_GRACE_MS, MEMORY_POLL_MS, MEMORY_START_MAX_PCT, MEMORY_STOP_EXIT, MEMORY_STOP_PCT, MEMORY_STOP_STREAK,
+  MEMORY_WAIT_EXIT, MEMORY_WAIT_MS, judgeRunning, judgeStart, memoryCheckEnabled, nextStopStreak} from './memory-check.mjs';
+import {readMachineMemory} from './machine-memory.mjs';
 
 // 종류는 대기 줄·status 표시와 rust의 CARGO_BUILD_JOBS에만 쓴다. 자리 묶음은 종류와 상관없이 하나다.
 // 시험·브라우저·vite·playwright·내장 Postgres는 build로 돌린다.
 export const HEAVY_KINDS = ['rust', 'install', 'build'];
 export const DEFAULT_CONFIG = {reviewSlots: 4, leaseMaxHours: 12, heavy: 1};
-export const LIMIT_USAGE = 'kadan limit run <rust|install|build> -- <명령...> | status | set conductor-works <0 이상의 정수>. 무거운 명령은 종류와 상관없이 맥 전체에서 한 줄이다(기본 동시 1개, $KADAN_HOME/resource-limits.json의 heavy로 바꾼다. 옛 limits는 더 쓰지 않는다). 자리를 잡은 뒤 명령을 띄우기 직전에 메모리 여유가 30% 미만이거나 스왑 used가 0보다 크면 자리를 쥔 채 최대 5분 기다리고, 그래도 풀리지 않으면 명령을 돌리지 않고 자리를 풀고 종료 코드 75로 끝난다($KADAN_HOME/memory-check.off 파일이나 환경 변수 KADAN_MEMORY_CHECK=off면 확인하지 않는다). rust는 CARGO_BUILD_JOBS=2를 붙인다(이미 지정·-j/--jobs가 있으면 그대로). limit run 안에서 limit run·slot deps를 다시 부르지 않는다(같은 자리를 기다려 멈춘다). set conductor-works는 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수(기본 3, 0이면 안내 문장 끔)를 같은 파일에 적는다. 상세: docs/review-slots.md';
+export const LIMIT_USAGE = 'kadan limit run <rust|install|build> -- <명령...> | status | set conductor-works <0 이상의 정수>. 무거운 명령은 종류와 상관없이 맥 전체에서 한 줄이다(기본 동시 1개, $KADAN_HOME/resource-limits.json의 heavy로 바꾼다. 옛 limits는 더 쓰지 않는다). 맥에서는 자리를 잡은 뒤 명령을 띄우기 직전에 맥 전체 압축 메모리 공간(세그먼트·보관 페이지 중 큰 비율)이 75% 이상이거나 압박 단계가 위급이거나 값을 못 읽으면 자리를 쥔 채 5초마다 다시 재며 최대 90초 기다리고, 그래도 풀리지 않으면 명령을 돌리지 않고 자리를 풀고 종료 코드 75로 끝난다. 도는 동안에도 5초마다 재서 압축 공간 85% 이상(또는 압박 위급이면서 75% 이상)이 2번 연속이면 그 명령의 프로세스 그룹에 SIGTERM, 10초 뒤에도 남아 있으면 SIGKILL을 보내고 종료 코드 76으로 끝난다(76이면 같은 명령을 바로 다시 돌리지 않는다). 맥이 아니면 재지 않는다. $KADAN_HOME/memory-check.off 파일이나 환경 변수 KADAN_MEMORY_CHECK=off면 시작 전 확인도 실행 중 보호도 하지 않는다. 명령은 자기 프로세스 그룹에서 표준 입력 없이 돈다(입력을 받는 명령은 돌리지 않는다). rust는 CARGO_BUILD_JOBS=2를 붙인다(이미 지정·-j/--jobs가 있으면 그대로). limit run 안에서 limit run·slot deps를 다시 부르지 않는다(같은 자리를 기다려 멈춘다). set conductor-works는 일반감독 한 명에게 맡길 진행 중 업무의 기준 개수(기본 3, 0이면 안내 문장 끔)를 같은 파일에 적는다. 상세: docs/review-slots.md';
 const CARGO_JOBS = '2';
 
 // 설정 파일은 선택이다. 없으면 기본값을 쓴다 (2026-10-02 [kyle]: 손잡이를 늘리지 않는다).
@@ -220,52 +223,98 @@ const OWNER_MARK = {alive: '', dead: '(죽음)', 'pid-reused': '(PID 재사용: 
 const describe = holders => holders
   .map(h => `${h.lock} pid ${h.pid}${OWNER_MARK[h.state]} ${h.since ?? ''}${h.kind ? ` 종류 ${h.kind}` : ''}${h.role ? ` 역할 ${h.role}` : ''}`.trim()).join('; ');
 
-const spanText = ms => (ms >= 60_000 ? `${Math.round(ms / 60_000)}분` : `${Math.round(ms / 1000)}초`);
+const spanText = ms => (ms >= 60_000 && ms % 60_000 === 0 ? `${ms / 60_000}분` : `${Math.round(ms / 1000)}초`);
 
-// 자리를 쥔 채 메모리가 풀리길 기다린다(그동안 다른 무거운 작업도 시작하지 못한다). 시작해도 되면 null,
-// 기다림이 상한을 넘으면 잰 값 한 줄을 돌려준다. 값이 바뀔 때만 대기 줄을 다시 낸다.
-// 못 읽거나 맥이 아니면 막지 않고 이유만 한 줄 남긴다. 대기 줄과 건너뜀 줄은 문구를 달리한다.
-async function waitForMemory(home, env, {measure = readMemory, waitMs = MEMORY_WAIT_MS, pollMs = 5000,
-  now = () => performance.now(), sleepFn = sleep, enabled, log}) {
-  // 넘겨받은 환경(env)이 비어 있어도 이 프로세스의 환경에 끄는 스위치가 있으면 끈다(tests/run.mjs 아래의 시험이 맥을 재지 않게).
-  if (!(enabled ?? (memoryCheckEnabled(home, env) && memoryCheckEnabled(home, process.env)))) return null;
+// 시작 관문. 자리를 쥔 채 메모리가 풀리길 기다린다(그동안 다른 무거운 작업도 시작하지 못한다). 시작해도 되면 null,
+// 기다림이 상한을 넘으면 잰 값 한 줄(못 읽었으면 "못 읽음")을 돌려준다. 값이 바뀔 때만 대기 줄을 다시 낸다.
+async function waitForMemory({measure, waitMs, pollMs, now, sleepFn, log}) {
   const started = now();
   let shown = '', last = null;
   for (;;) {
     // 상한을 넘었으면 새 측정이 통과여도 시작하지 않는다. 경과는 단조 시계(performance.now)로 잰다: 벽시계 변경에 안 흔들린다.
     if (last && now() - started >= waitMs) return last;
     let verdict;
-    try { verdict = judgeMemory(measure()); } catch (error) { verdict = {ok: true, skip: `측정 실패: ${error.message}`}; }
-    if (verdict.skip) { log(`메모리 확인 건너뜀: ${verdict.skip}`); return null; }
+    try { verdict = judgeStart(measure()); } catch { verdict = judgeStart(null); }
     if (verdict.ok) {
       // 측정이 끝난 뒤에도 한 번 더 본다: 측정 중에 상한을 넘었으면 통과여도 시작하지 않는다.
       return last && now() - started >= waitMs ? last : null;
     }
     last = verdict.line;
     if (verdict.line !== shown) {
-      log(`대기: 메모리 부족 — ${verdict.line}. 자리는 쥔 채 기다림(최대 ${spanText(waitMs)})`);
+      log(`대기: 메모리 — ${verdict.line}. 압축 공간 ${MEMORY_START_MAX_PCT}% 미만·압박 위급 아님이어야 시작한다. 자리는 쥔 채 기다림(최대 ${spanText(waitMs)})`);
       shown = verdict.line;
     }
     await sleepFn(pollMs);
   }
 }
 
+// 프로세스 그룹(음수 PID)에 신호를 보낸다. 그룹 번호가 정상일 때만 보내고, 이미 없으면 false다.
+function signalGroup(pid, signal) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try { process.kill(-pid, signal); return true; } catch { return false; }
+}
+// 그룹에 남은 프로세스가 있는가. 없음(ESRCH)만 "없다"로 본다.
+function groupAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  try { process.kill(-pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; }
+}
+// SIGKILL 뒤 그룹이 사라지길 기다리는 상한. 확인이 이상해도 자리 풀기가 끝없이 밀리지 않게 한다.
+const GROUP_GONE_WAIT_MS = 2000;
+async function groupGone(pid, ms) {
+  const end = performance.now() + ms;
+  while (groupAlive(pid)) {
+    if (performance.now() >= end) return false;
+    await sleep(Math.min(50, Math.max(1, ms)));
+  }
+  return true;
+}
+// 그룹을 끊는다: SIGTERM을 보내고, 유예가 지나도 남은 프로세스가 있으면 SIGKILL을 보낸다(이미 없으면 보내지 않는다).
+async function stopGroup(pid, graceMs) {
+  signalGroup(pid, 'SIGTERM');
+  if (await groupGone(pid, graceMs)) return;
+  signalGroup(pid, 'SIGKILL');
+  await groupGone(pid, GROUP_GONE_WAIT_MS);
+}
+
+// 실행 중 보호. pollMs마다 재서 위험한 읽기가 연속 MEMORY_STOP_STREAK번이면 그 명령의 그룹을 끊는다.
+// 못 읽은 읽기·측정 예외는 끊는 근거로 쓰지 않고 연속 셈을 0으로 되돌린다. 끊기로 한 뒤에는 더 재지 않는다.
+// stopping은 끊기를 시작했을 때만 생기는 약속(그룹 종료까지)이고, stop()은 타이머를 멈춘다.
+function watchMemory(pid, {measure, pollMs, graceMs, log}) {
+  let streak = 0, timer = null;
+  const state = {stopping: null, stop() { clearTimeout(timer); timer = null; }};
+  const tick = () => {
+    timer = null;
+    let verdict;
+    try { verdict = judgeRunning(measure()); } catch { verdict = judgeRunning(null); }
+    streak = nextStopStreak(streak, verdict);
+    if (streak < MEMORY_STOP_STREAK) { timer = setTimeout(tick, pollMs); return; }
+    log(`메모리 보호로 명령을 끊음(종료 ${MEMORY_STOP_EXIT}): ${verdict.line}. 압축 공간 ${MEMORY_STOP_PCT}% 이상(또는 압박 위급이면서 ${MEMORY_START_MAX_PCT}% 이상)이 ${MEMORY_STOP_STREAK}번 연속이라 이 명령의 프로세스 그룹을 끊는다. 같은 명령을 바로 다시 돌리지 않는다`);
+    state.stopping = stopGroup(pid, graceMs);
+  };
+  timer = setTimeout(tick, pollMs);
+  return state;
+}
+
 // 자리가 날 때까지 기다렸다가 메모리를 확인하고 명령을 돌리고, 성공·실패·중단 어느 쪽이든 잠금을 푼다.
-// 종료 코드는 명령의 것을 돌려준다. 메모리가 끝내 모자라면 명령을 돌리지 않고 MEMORY_WAIT_EXIT(75)를 돌려준다.
-// 명령 자신이 75로 끝난 경우와 구별해야 하면 runLimitedResult의 started(명령을 띄웠는지)를 본다.
+// 종료 코드는 명령의 것을 돌려준다. 메모리가 끝내 풀리지 않으면 명령을 돌리지 않고 MEMORY_WAIT_EXIT(75)를,
+// 도는 중에 메모리 보호가 끊었으면 MEMORY_STOP_EXIT(76)를 돌려준다. 명령 자신이 75·76으로 끝난 경우와 구별해야 하면
+// runLimitedResult의 started(명령을 띄웠는지)와 memoryStop(메모리 보호가 끊었을 때만 true로 붙는다)을 본다.
+// 명령은 자기 프로세스 그룹(detached)에서 표준 입력 없이 돈다: 끊을 때 명령이 띄운 프로세스까지 함께 끊으려는 것이다.
+// 분리된 자식은 터미널의 Ctrl-C를 직접 받지 못하므로 이 프로세스가 받은 신호를 그룹에 전달한다.
+// 메모리 옵션(memory): enabled·platform·measure·waitMs·pollMs·graceMs·now·sleepFn. 시험이 측정과 시계를 넣는 자리다.
 export async function runLimited(...args) { return (await runLimitedResult(...args)).code; }
-export async function runLimitedResult(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = 'inherit', memory = {}} = {}) {
+export async function runLimitedResult(home, kind, command, {cwd = process.cwd(), env = process.env, pollMs = 2000, log = m => console.error(m), stdio = ['ignore', 'inherit', 'inherit'], memory = {}} = {}) {
   if (!command.length) throw new Error('실행할 명령 필요: kadan limit run <종류> -- <명령...>');
   checkKind(kind);
   capOf(home);
   const token = processStartToken(process.pid);
   const holder = {pid: process.pid, kind, since: new Date().toISOString(),
     ...(token ? {startToken: token} : {}), ...(env.KADAN_ROLE ? {role: env.KADAN_ROLE} : {})};
-  let file = null, child = null;
+  let file = null, child = null, watch = null;
   const release = () => { try { if (file && readJson(file)?.pid === process.pid) fs.rmSync(file, {force: true}); } catch {} };
   // 신호 처리는 잠금을 잡기 전에 건다. 잡은 직후·명령 시작 전에 신호가 와도 잠금을 풀고 끝낸다.
   const onSignal = signal => {
-    if (child) { try { child.kill(signal); } catch {} return; }
+    if (child) { if (!signalGroup(child.pid, signal)) { try { child.kill(signal); } catch {} } return; }
     release(); process.exit(128 + (os.constants.signals[signal] ?? 1));
   };
   const signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -287,19 +336,34 @@ export async function runLimitedResult(home, kind, command, {cwd = process.cwd()
       lookup = oncePerPid();
       file = tryAcquireLimit(home, holder, lookup);
     }
-    const short = await waitForMemory(home, env, {...memory, log});
-    if (short) {
-      log(`메모리 부족으로 시작하지 않음(종료 ${MEMORY_WAIT_EXIT}): ${short}. ${spanText(memory.waitMs ?? MEMORY_WAIT_MS)} 기다렸지만 풀리지 않아 명령은 돌리지 않고 자리를 풀었다`);
-      return {code: MEMORY_WAIT_EXIT, started: false};
+    // 끄는 스위치는 여기서 한 번 읽어 시작 관문과 실행 중 보호에 같이 쓴다. 넘겨받은 환경(env)이 비어 있어도
+    // 이 프로세스의 환경에 스위치가 있으면 끈다(tests/run.mjs 아래의 시험이 맥을 재지 않게).
+    const {enabled, platform = process.platform, measure = () => readMachineMemory(), waitMs = MEMORY_WAIT_MS,
+      pollMs: memoryPollMs = MEMORY_POLL_MS, graceMs = MEMORY_KILL_GRACE_MS, now = () => performance.now(), sleepFn = sleep} = memory;
+    const on = enabled ?? (memoryCheckEnabled(home, env) && memoryCheckEnabled(home, process.env));
+    const guarded = on && platform === 'darwin';
+    if (on && !guarded) log(`메모리 확인 건너뜀: 맥이 아님(${platform})`);
+    if (guarded) {
+      const short = await waitForMemory({measure, waitMs, pollMs: memoryPollMs, now, sleepFn, log});
+      if (short) {
+        log(`메모리 보호로 시작하지 않음(종료 ${MEMORY_WAIT_EXIT}): ${short}. ${spanText(waitMs)} 기다렸지만 풀리지 않아 명령은 돌리지 않고 자리를 풀었다`);
+        return {code: MEMORY_WAIT_EXIT, started: false};
+      }
     }
-    child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio});
+    child = spawn(command[0], command.slice(1), {cwd, env: limitEnv(kind, command, env), stdio, detached: true});
     const started = child.pid !== undefined; // 실행 파일이 없어 못 띄우면 pid가 없다
-    const code = await new Promise(resolve => {
+    const exited = new Promise(resolve => {
       child.once('error', error => { log(`실행 실패: ${error.message}`); resolve(127); });
       child.once('exit', (code, signal) => resolve(code ?? 128 + (os.constants.signals[signal] ?? 1)));
     });
+    if (guarded && started) watch = watchMemory(child.pid, {measure, pollMs: memoryPollMs, graceMs, log});
+    const code = await exited;
+    watch?.stop();
+    // 끊기를 시작한 뒤라면 명령이 무슨 코드로 끝났든 메모리 보호 중단이다. 그룹이 사라진 것을 본 뒤에 자리를 푼다.
+    if (watch?.stopping) { await watch.stopping; return {code: MEMORY_STOP_EXIT, started, memoryStop: true}; }
     return {code, started};
   } finally {
+    watch?.stop();
     for (const signal of signals) process.off(signal, onSignal);
     process.off('exit', release);
     release();
