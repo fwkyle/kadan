@@ -1,67 +1,83 @@
-// 무거운 명령을 띄우기 직전의 메모리 확인. 여유가 모자라거나 스왑을 이미 쓰고 있으면 시작하지 않는다.
-// 왜: 2026-11-21 맥이 메모리 압축 한계로 커널 패닉 재부팅을 두 번 했다(19:45·20:59). 여러 역할이 무거운 명령을 겹쳐 돌린 탓이다.
-// 문턱은 [kyle] 규칙 그대로다: 여유 30% 이상 그리고 스왑 used 0일 때만 시작한다.
-// 맥이 아니거나 값을 못 읽으면 막지 않는다(건너뛰고 이유만 알린다). 끄는 스위치는 파일이나 환경 변수 하나다.
+// 무거운 명령의 메모리 보호: 띄우기 직전의 시작 관문과, 도는 동안의 실행 중 보호. 판정 기준만 둔다(대기·종료는 heavy-limit.mjs).
+// 왜: 패닉 3번(2026-11-13·11-21 두 번)은 모두 맥의 압축 메모리 공간 100% 고갈이었다. 11-21 2차는 스왑 0·세그먼트 19%에서
+// 시작해 4분 23초 만에 고갈돼 시작 전 확인만으로는 못 막는다. 옛 조건(여유 30%·스왑 used 0)은 평소 스왑이 0으로
+// 내려오지 않아(11/13~17 정상 3.4일 중앙값 6.9GiB) 계속 대기를 만들어 뺐다(2026-11-22 [kyle]).
+// "압축 공간"은 감시기(watch-machine-memory.mjs)와 같은 정의다: max(세그먼트 비율, 보관 페이지 비율).
+// 문턱 숫자는 실측으로 정한 값이 아니라 시작값이다. 끄는 스위치는 파일이나 환경 변수 하나다.
 import fs from 'node:fs';
 import path from 'node:path';
-import {spawnSync} from 'node:child_process';
 
-export const MEMORY_FREE_MIN_PERCENT = 30;
-export const SWAP_USED_MAX_MB = 0;
-// 메모리가 풀리길 기다리는 최대 시간. 도구 호출 한 번의 제한(10분)보다 짧게 둔다.
-export const MEMORY_WAIT_MS = 5 * 60 * 1000;
-// 시험 실패(1)·사용법 오류(2)·명령 없음(127)·신호(128+)와 겹치지 않는 종료 코드(EX_TEMPFAIL).
+// 시작 관문: 압축 공간이 이 값 이상이거나 압박 단계가 위급이면 시작하지 않고 기다린다.
+export const MEMORY_START_MAX_PCT = 75;
+// 실행 중 보호: 기준 둘을 따로 센다. (가) 압축 공간이 이 값 이상, (나) 압박 위급이면서 MEMORY_START_MAX_PCT 이상.
+// 어느 한쪽이 연속 MEMORY_STOP_STREAK번이면 끊는다. 두 기준을 한 번씩 번갈아 만족한 것은 끊는 근거가 아니다.
+export const MEMORY_STOP_PCT = 85;
+export const MEMORY_STOP_STREAK = 2;
+export const MEMORY_PRESSURE_CRITICAL = 4;
+// 시작 전 다시 재는 간격이자 실행 중 읽는 간격.
+export const MEMORY_POLL_MS = 5000;
+// 시작 전 메모리가 풀리길 기다리는 최대 시간.
+export const MEMORY_WAIT_MS = 90_000;
+// 실행 중 보호가 SIGTERM을 보낸 뒤 SIGKILL까지 기다리는 시간.
+export const MEMORY_KILL_GRACE_MS = 10_000;
+// SIGKILL 뒤 프로세스 그룹이 사라지는지 보는 시간. 넘으면 "그룹이 남았다" 한 줄을 남기고 자리를 푼다(하나뿐인 자리를 무기한 쥐지 않는다).
+export const MEMORY_GROUP_GONE_MS = 10_000;
+// 시험 실패(1)·사용법 오류(2)·명령 없음(127)·신호(128+)와 겹치지 않는 종료 코드. 75(EX_TEMPFAIL)는 시작하지 않음, 76은 돌던 명령을 끊음.
 export const MEMORY_WAIT_EXIT = 75;
+export const MEMORY_STOP_EXIT = 76;
 export const MEMORY_OFF_FILE = 'memory-check.off';
 export const MEMORY_OFF_ENV = 'KADAN_MEMORY_CHECK';
 
-// `memory_pressure`의 마지막 줄: "System-wide memory free percentage: 58%"
-export function parseFreePercent(text) {
-  const all = [...String(text ?? '').matchAll(/System-wide memory free percentage:\s*(\d+(?:\.\d+)?)\s*%/g)];
-  return all.length ? Number(all.at(-1)[1]) : null;
+const PRESSURE_NAME = {1: '정상', 2: '경고', 4: '위급'};
+const percent = value => `${value.toFixed(1)}%`;
+
+// readMachineMemory()의 결과에서 압축 공간 비율. 두 축을 모두 읽지 못했으면(known이 true가 아니면) null이다.
+export function compressorPct(sample) {
+  if (sample?.known !== true) return null;
+  return Math.max(sample.segmentPct, sample.pagePct);
 }
 
-// `sysctl vm.swapusage`: "vm.swapusage: total = 0.00M  used = 0.00M  free = 0.00M  (encrypted)" → used를 MB로
-const UNIT_MB = {K: 1 / 1024, M: 1, G: 1024, T: 1024 * 1024};
-export function parseSwapUsedMb(text) {
-  const found = /\bused\s*=\s*(\d+(?:\.\d+)?)\s*([KMGT]?)/i.exec(String(text ?? ''));
-  if (!found) return null;
-  return Number(found[1]) * (UNIT_MB[found[2].toUpperCase()] ?? 1);
+// 대기·종료 줄에 쓰는 잰 값 한 줄. 스왑은 참고로만 보이고 판정에 쓰지 않는다.
+export function describeMemory(sample) {
+  const used = compressorPct(sample);
+  if (used === null) return '못 읽음';
+  const swap = Number.isFinite(sample.swapUsedMb) ? `${(sample.swapUsedMb / 1024).toFixed(1)}G` : '모름';
+  return `압축 공간 ${percent(used)}(세그먼트 ${percent(sample.segmentPct)}·보관 페이지 ${percent(sample.pagePct)})`
+    + `·압박 ${PRESSURE_NAME[sample.pressure] ?? '모름'}·스왑 ${swap}(참고)`;
 }
 
-// 읽은 값: {freePercent, swapUsedMb} 또는 건너뛸 이유 {skip}. 둘 중 하나라도 못 읽으면 건너뛴다.
-export function readMemory({platform = process.platform, run = spawnSync} = {}) {
-  if (platform !== 'darwin') return {skip: `맥이 아님(${platform})`};
-  const ask = (cmd, args) => {
-    try {
-      const result = run(cmd, args, {encoding: 'utf8', timeout: 5000});
-      return result?.status === 0 ? String(result.stdout ?? '') : null;
-    } catch { return null; }
-  };
-  const free = ask('memory_pressure', []);
-  if (free === null) return {skip: 'memory_pressure를 실행하지 못함'};
-  const freePercent = parseFreePercent(free);
-  if (freePercent === null) return {skip: 'memory_pressure 출력에서 여유 비율을 읽지 못함'};
-  const swap = ask('sysctl', ['vm.swapusage']);
-  if (swap === null) return {skip: 'sysctl vm.swapusage를 실행하지 못함'};
-  const swapUsedMb = parseSwapUsedMb(swap);
-  if (swapUsedMb === null) return {skip: 'vm.swapusage 출력에서 used를 읽지 못함'};
-  return {freePercent, swapUsedMb};
+// 시작해도 되는지. 못 읽은 값은 막는다(ok false). 압박 단계를 못 읽으면 위급이 아닌 것으로 본다.
+export function judgeStart(sample) {
+  const used = compressorPct(sample), line = describeMemory(sample);
+  if (used === null) return {ok: false, line};
+  return {ok: used < MEMORY_START_MAX_PCT && sample.pressure !== MEMORY_PRESSURE_CRITICAL, line};
 }
 
-const mb = value => `${Number(value.toFixed(2))}M`;
-export const describeMemory = ({freePercent, swapUsedMb}) =>
-  `여유 ${freePercent}%(${MEMORY_FREE_MIN_PERCENT}% 이상 필요)·스왑 used ${mb(swapUsedMb)}(${SWAP_USED_MAX_MB}이어야 함)`;
-
-// 시작해도 되는지. 못 읽은 값(skip)은 막지 않는다.
-export function judgeMemory(memory) {
-  if (memory.skip) return {ok: true, skip: memory.skip};
-  const ok = memory.freePercent >= MEMORY_FREE_MIN_PERCENT && memory.swapUsedMb <= SWAP_USED_MAX_MB;
-  return {ok, line: describeMemory(memory)};
+// 도는 중의 읽기 한 번이 두 기준을 각각 만족하는가. 못 읽은 값은 read false이고 끊는 근거로 쓰지 않는다.
+// over는 (가) 압축 공간 MEMORY_STOP_PCT 이상, critical은 (나) 압박 위급이면서 MEMORY_START_MAX_PCT 이상이다.
+export function judgeRunning(sample) {
+  const used = compressorPct(sample), line = describeMemory(sample);
+  if (used === null) return {read: false, over: false, critical: false, line};
+  return {read: true, over: used >= MEMORY_STOP_PCT,
+    critical: sample.pressure === MEMORY_PRESSURE_CRITICAL && used >= MEMORY_START_MAX_PCT, line};
 }
 
-// 켜짐이 운영 기본이다. 환경 변수 KADAN_MEMORY_CHECK=off(시험 실행기 tests/run.mjs가 넣는다) 또는 $KADAN_HOME/memory-check.off 파일이 있으면 끈다.
-// 파일 스위치 이유: 스왑은 한 번 쓰이면 메모리가 풀려도 0으로 돌아오지 않을 수 있어, 이 확인을 고치는 작업까지 막힐 수 있다.
+// 연속 셈 두 개. 읽은 값이 기준을 만족하면 그 셈만 +1, 아니면 그 셈을 0으로 되돌린다(한 값이 둘 다 만족하면 둘 다 센다).
+// 못 읽은 회차와 스위치가 꺼진 회차(verdict 없음)는 둘 다 0으로 되돌린다.
+export const NO_STOP_STREAK = Object.freeze({over: 0, critical: 0});
+export function nextStopStreak(streak, verdict) {
+  if (!verdict?.read) return NO_STOP_STREAK;
+  return {over: verdict.over ? streak.over + 1 : 0, critical: verdict.critical ? streak.critical + 1 : 0};
+}
+// 끊을 때가 됐으면 어느 기준인지 한 줄, 아니면 null.
+export function stopReason(streak) {
+  if (streak.over >= MEMORY_STOP_STREAK) return `압축 공간 ${MEMORY_STOP_PCT}% 이상이 ${MEMORY_STOP_STREAK}번 연속`;
+  if (streak.critical >= MEMORY_STOP_STREAK) return `압박 위급이면서 압축 공간 ${MEMORY_START_MAX_PCT}% 이상이 ${MEMORY_STOP_STREAK}번 연속`;
+  return null;
+}
+
+// 켜짐이 운영 기본이다. 환경 변수 KADAN_MEMORY_CHECK=off(시험 실행기 tests/run.mjs가 넣는다) 또는 $KADAN_HOME/memory-check.off 파일이 있으면
+// 시작 관문과 실행 중 보호를 모두 끈다(실행 중 보호는 재는 회차마다 다시 읽는다). 문턱이 실측 전 값이라 잘못 막거나 끊을 때 사람이 바로 끌 수 있게 파일 스위치를 둔다.
 export function memoryCheckEnabled(home, env = process.env) {
   if (String(env[MEMORY_OFF_ENV] ?? '').toLowerCase() === 'off') return false;
   try { return !fs.existsSync(path.join(home, MEMORY_OFF_FILE)); } catch { return true; }

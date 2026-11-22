@@ -1,79 +1,18 @@
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {notifyUser} from './user-notify.mjs';
+import {readMachineMemory, unknownMachineMemory as unknown} from './machine-memory.mjs';
+
+// 읽기 부분은 machine-memory.mjs로 옮겼다(무거운 명령의 메모리 보호가 알림·원장 모듈 없이 쓰게). 이름은 여기서 그대로 다시 내보낸다.
+export {MACHINE_MEMORY_KEYS, MACHINE_MEMORY_MAX_PCT, parseMachineMemory, readMachineMemory} from './machine-memory.mjs';
 
 // XNU vm_compressor.c의 공간 부족선은 약 98%. 90/97/80은 실측으로 최적화한 값이 아니다.
 // 공개 근거: apple-oss-distributions/xnu f6217f8, vm_compressor.c:903,918.
 export const MACHINE_MEMORY_LIMITS = Object.freeze({critical: 90, imminent: 97, recovery: 80});
 // 정상 순회 간격 약190초는 허용하되 잠자기·감시 중단을 넘어 회복을 이어 세지 않는다.
 export const MACHINE_MEMORY_RECOVERY_GAP_MS = 10 * 60_000;
-// 잘린 한도 등으로 생긴 비현실적인 비율을 거르는 방어선이며 실측으로 정한 값은 아니다.
-export const MACHINE_MEMORY_MAX_PCT = 150;
-export const MACHINE_MEMORY_KEYS = Object.freeze([
-  'kern.memorystatus_vm_pressure_level',
-  'vm.swapusage',
-  'vm.compressor.segment.total',
-  'vm.compressor.segment.limit',
-  'vm.compressor.pages_compressed',
-  'vm.compressor.pages_compressed_limit',
-]);
 const ID = 'machine:memory';
 const KIND = '기기메모리';
-const unknown = reason => ({known: false, reason});
-const swapPattern = new RegExp(
-  /^total\s*=\s*\d+(?:\.\d+)?[KMGT]/.source
-  + /\s+used\s*=\s*(\d+(?:\.\d+)?)([KMGT])/.source
-  + /\s+free\s*=\s*\d+(?:\.\d+)?[KMGT](?:\s+\(encrypted\))?$/.source);
-
-export function parseMachineMemory(output) {
-  const values = new Map();
-  const text = String(output), lines = text.split('\n');
-  const unfinished = lines.pop(); // 마지막 줄은 줄바꿈이 있어야 완결된 값이다.
-  for (const line of lines) {
-    const match = line.match(/^([^:\s]+):[ \t]*(.*)$/);
-    if (!match) continue;
-    values.set(match[1], values.has(match[1]) ? null : match[2]);
-  }
-  const unfinishedKey = unfinished.match(/^([^:\s]+):/);
-  if (unfinishedKey) values.set(unfinishedKey[1], null);
-  const integer = key => {
-    const raw = values.get(key);
-    const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
-    return Number.isSafeInteger(value) ? value : NaN;
-  };
-  const rawPressure = integer(MACHINE_MEMORY_KEYS[0]);
-  const pressure = [1, 2, 4].includes(rawPressure) ? rawPressure : null;
-  const [segments, segmentLimit, pages, pageLimit] = MACHINE_MEMORY_KEYS.slice(2).map(integer);
-  const ratio = (used, limit) => {
-    if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return null;
-    const percent = used / limit * 100;
-    return percent <= MACHINE_MEMORY_MAX_PCT ? percent : null;
-  };
-  const segmentPct = ratio(segments, segmentLimit), pagePct = ratio(pages, pageLimit);
-  const swap = values.get('vm.swapusage')?.match(swapPattern);
-  const swapMb = swap ? Number(swap[1]) * ({K: 1 / 1024, M: 1, G: 1024, T: 1024 ** 2}[swap[2]]) : NaN;
-  // known은 두 공간 축을 모두 읽었는가다. 보조 값은 각각 null(모름)일 수 있다.
-  return {known: segmentPct !== null && pagePct !== null, segmentPct, pagePct, pressure,
-    swapUsedMb: Number.isFinite(swapMb) ? swapMb : null, recoveryAllowed: text.endsWith('\n')};
-}
-
-export function readMachineMemory(spawn = spawnSync, platform = process.platform) {
-  if (platform !== 'darwin') return unknown('platform');
-  try {
-    const result = spawn('/usr/sbin/sysctl', MACHINE_MEMORY_KEYS, {
-      encoding: 'utf8', timeout: 2000, maxBuffer: 16 * 1024, env: {...process.env, LC_ALL: 'C'},
-    });
-    // 원인 모를 종료2 이상은100%가 보여도 버린다. 실패 출력을 믿지 않는 의도된 손해다.
-    if (result.error || result.signal || ![0, 1].includes(result.status)) {
-      return unknown(result.error?.code === 'ETIMEDOUT' ? 'timeout' : 'read');
-    }
-    const sample = parseMachineMemory(result.stdout);
-    // 없는 키로 종료1이어도 성공한 다른 키의 출력은 쓴다. 완전한 출력의 원인 불명 실패는 모름이다.
-    const complete = [sample.segmentPct, sample.pagePct, sample.pressure, sample.swapUsedMb]
-      .every(Number.isFinite);
-    return result.status === 0 || !complete ? sample : unknown('read');
-  } catch { return unknown('read'); }
-}
 
 export function assessMachineMemory(state, sample, now) {
   const usage = Math.max(...[sample.segmentPct, sample.pagePct].filter(Number.isFinite));
