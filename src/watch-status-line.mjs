@@ -4,7 +4,7 @@
 // 표본 근거: 감시AI 관찰 자료(codex 0.163 일하는 중·입력 대기·끊김, claude 입력 대기)와 claude 2.1.302 일하는 중 실제 화면 2장.
 // claude 일하는 중 모양은 감독이 자기 세션에서 뜬 실제 화면 두 장으로 맞췄다.
 import {waitingLetters} from './mailbox-queries.mjs';
-import { anyStopWordInBottom } from "./watch-stop-phrases.mjs";
+import { anyStopWordInBottom, phraseOfLine } from "./watch-stop-phrases.mjs";
 
 // (b) 멈춤 경보의 코드 기본값. 감시 주기 60초, 정체 기본 5분보다 짧게 둔다. 프로필 키는 더하지 않는다.
 export const IDLE_STOP_AFTER_MS = 4 * 60_000;
@@ -88,6 +88,24 @@ export function readStatusLine(screenText) {
   const input = lines.findLast((line) => CODEX_INPUT.test(line) || CLAUDE_INPUT.test(line));
   if (input != null) return { kind: "idle", tool: CODEX_INPUT.test(input) ? "codex" : "claude", clockSec: null };
   return { kind: "unknown", tool: null, clockSec: null };
+}
+
+// 입력 한 번이면 이어가는 멈춤 줄(`resume`: 자동 계속 멈춤·로그인 시간 초과)은 그 줄 아래에 일하는 표시(스피너 줄, 들여쓴 `⎿  Running…`)가
+// 있으면 정지가 아니다. 입력창 위를 훑는 claudeLimitLine이 들여쓴 줄을 이어진 본문처럼 건너뛰어 예전 정지 줄을 집기 때문에(PR #466 검수),
+// 일하는 중 판정(readStatusLine)을 그 줄 아래 화면에 다시 적용해 거른다. 다른 낱말(한도·429 등)은 건드리지 않는다.
+// found: currentStopPhrases(screen)의 결과(줄 키 → 줄). 걸러진 새 Map을 돌려준다.
+export function withoutWorkingResumeStops(screenText, found) {
+  if (typeof screenText !== "string" || found.size === 0) return found;
+  const lines = screenText.split("\n");
+  const kept = new Map();
+  for (const [key, line] of found) {
+    if (phraseOfLine(line)?.resume) {
+      const at = lines.findLastIndex((text) => text.trim() === line);
+      if (at >= 0 && readStatusLine(lines.slice(at + 1).join("\n")).kind === "working") continue;
+    }
+    kept.set(key, line);
+  }
+  return kept;
 }
 
 // 일하는 줄의 시계 글자 원문(앞뒤 공백 뗌). 일하는 줄이 없으면 null.

@@ -74,6 +74,7 @@ watch의 AMBER·RED는 작업 이상을 확인할 입력 신호다. 화면·PID�
 | `can't be shown`, `cybersecurity`, `Trusted Access` (`security-filter`) | 안전 필터 차단 — 품질 실패가 아니라 가용성 사건 | 카드 문구에서 공격·위조·적대 어휘를 빼고 재발령. 그래도 막히면 다른 실행기로 교체를 올림 | 카드 failed 처리, 같은 문구 재시도 |
 | `oauth/token`, `Reconnecting 5/5` (`auth-token`·`reconnecting`) | 인증·세션 실패 | 하네스 장애와 실행기 장애를 나눠 확인한 뒤 교체를 올림 | 같은 세션 무한 재연결 대기 |
 | `No API key`, 모델 이름 오류 (`no-api-key`; 모델 이름 오류는 표본이 없어 목록에 아직 없음) | 설정 오류 | 즉시 중단, 정확한 이름으로 다시 세우도록 올림 | 재시도 반복 |
+| `Automatic continue stopped · your login changed or ended`, `Login reached its time limit · Please run /login` (`claude-auto-continue-stopped`·`claude-login-timeout`) | 한도 자동 계속이 로그인 변경으로 멈췄거나 로그인 시간 초과 — 입력 한 번이면 이어가는 상태(교대가 아님). 감시기는 알리기만 한다 | 계정 전환·로그인이 끝났는지 사람에게 확인한 뒤 `kadan claude refresh --nudge --role <역할>`로 한 번 보낸다. 보낸 뒤에도 같은 줄이면 재시도하지 않고 사용자에게 로그인을 올린다 | 감시기·AI의 자동 전송, 같은 줄이 남은 채 반복 전송, 한도 교대로 처리 |
 | `Selected model is at capacity` (`model-capacity`) | 모델 용량 초과로 턴이 끊김 — 한도·계정 문제가 아님. 감시기는 자동 재개하지 않고 알리기만 한다 | 맡긴 감독이 그 세션에 이어가라고 다시 보낼지 판단, 되풀이되면 다른 모델·실행기로 교대를 올림 | 알림 없이 풀리기를 기다리며 방치, 한도로 단정 |
 | 폴더 신뢰·명령 허용 창 뒤로 출력 정지 | 사람 승인 대기 | 승인 창임을 실측 → 그 판·그 CLI에 사전 신뢰 설정 → 재기동. `dispatch-wait.md` 2단계대로 자동 통과 금지 | 무진행으로 오판, 사람이 대신 눌러주고 원인 기록 안 함 |
 | 오류 없음, 화면은 도는데 카드가 제자리 | 논리 교착 | 판 감독에게 무엇을 기다리는지 한 번 묻고 답을 원장과 대조 | 화면 활동만 보고 정상 판정 |

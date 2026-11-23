@@ -5,7 +5,7 @@ import {taskIdentity,taskConnectionError} from './task-identity.mjs';
 import { hierarchyRoute } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { holdPosts } from "./notify-policy.mjs";
-import { statusProgress } from "./watch-status-line.mjs";
+import { statusProgress, withoutWorkingResumeStops } from "./watch-status-line.mjs";
 
 const JUDGE_INPUT_PREFIX = [
   "너는 터미널 화면 조각을 보고 에이전트 상태를 판정한다.",
@@ -92,7 +92,7 @@ export function queuedInputLine(screenText) {
 // 낱말을 화면 어디서나 한 줄로 찾는 길은 없다(도구 결과·설명·인용 줄의 헛경보 방지). 덩어리로 확정하지 못한 화면은
 // 즉시 경보 대신 기존 정체 경로(상태 줄 판정 + 정체 + 감시AI)로 간다.
 export function screenDisconnects(screenText) {
-  return currentStopPhrases(screenText);
+  return withoutWorkingResumeStops(screenText, currentStopPhrases(screenText));
 }
 
 function screenDoneMarker(screenText) {
