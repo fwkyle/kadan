@@ -13,7 +13,7 @@ export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
 // 같은 화면 재사용: 원장의 마지막 요청 뒤 이 시간이 지나면 같은 화면이어도 정기 확인을 한 번 부른다(재시작해도 유지).
 export const SUPERVISOR_REUSE_MS = 4 * 60 * 60_000;
-// 도구 줄 `Running… (… · timeout T)`이 화면 끝 상태 구역에 있는 동안, 처음 본 시각 + T + 이 여유까지는 정기 후보를 내지 않는다.
+// 도구 줄 `Running… (… · timeout T)`이 화면 끝 상태 구역에 있는 동안, 처음 본 시각 + T(최대 60분) + 이 여유까지는 정기 후보를 내지 않는다.
 export const SUPERVISOR_TOOL_GRACE_MS = 60_000;
 const REUSABLE_VERDICTS = new Set(['입력대기', '실행완료']);
 const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
@@ -99,7 +99,7 @@ export class SupervisorHealth {
       const previousScreen = state.prevScreen, previousClockSec = state.workClock;
       state.workClock = progress.status?.kind === 'working' ? progress.status.clockSec : null;
       state.prevScreen = seen.screen.slice(-8000);
-      // 도구 줄 timeout 안: 같은 도구 줄(글자 전체)을 처음 본 감시기 시각부터 센다. 줄 글자가 바뀌면(새 도구·경과 변화) 다시 세고, 같은 줄이 이어지는 동안은 늘리지 않는다. 오류 화면·T를 못 읽은 줄은 억제하지 않는다. 상태는 후보 여부와 무관하게 매 순회 갱신한다.
+      // 도구 줄 timeout 안: 상태 구역(실제 입력창 바로 위 스피너 + 그 위 도구 줄)이 확정될 때만 읽는다. 같은 도구 = 경과 표시를 뺀 도구 줄 + T라서 경과만 바뀌어도 처음 본 감시기 시각은 그대로고, 쓰는 T는 최대 60분이라 한 도구의 억제는 처음 본 뒤 최대 61분이다. 도구 줄이 없어지거나 T가 달라지면 다시 센다. 오류 화면·구역 미확정·T 못 읽음은 억제하지 않는다. 상태는 후보 여부와 무관하게 매 순회 갱신한다.
       const tool = readToolTimeout(seen.screen);
       if (!tool) state.tool = null;
       else if (state.tool?.key !== tool.key) state.tool = {key:tool.key,since:now,timeoutMs:tool.timeoutMs};

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {buildWatchScope,buildSupervisorScope} from '../src/watch-scope.mjs';
+import {parseTimeout} from '../src/watch-tool-timeout.mjs';
 import {SupervisorHealth,SUPERVISOR_CHECK_MS,SUPERVISOR_ERROR_MS,SUPERVISOR_REUSE_MS} from '../src/watch-supervisor-health.mjs';
 import {WatchReports,watchResponsibility} from '../src/watch-report.mjs';
 import {changeDigest} from '../src/watch-roles.mjs';
@@ -298,17 +299,56 @@ test('응답 본문·우편 인용 속의 도구 줄 모양은 상태 구역이 
   assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly');
  }
 });
-test('도구 줄 글자가 바뀌면 처음 본 시각부터 다시 세고 같은 줄이 이어지는 동안은 늘리지 않는다',()=>{
- const f=health(),first=seenAt(),second=first+4*60_000;
- const next=toolScreen('Running… (3m 59s · timeout 4m)');
+test('도구 줄이 사라졌다가 다시 나타나거나 T가 바뀌면 처음 본 시각부터 다시 센다',()=>{
+ const f=health(),first=seenAt(),second=first+4*60_000,six=toolScreen('Running… (3s · timeout 6m)');
  f.check(0,'하위 결과를 기다리는 중');f.check(first,TOOL_4M);
- // 첫 줄의 한도(first+5분)가 지났어야 할 때 줄이 바뀌면 새로 센다.
- assert.equal(f.check(second,next).candidate,undefined);
- assert.equal(f.check(first+5*60_000+1,next).candidate,undefined);
- assert.equal(f.check(second+5*60_000-1,next).candidate,undefined);
- assert.equal(f.check(second+5*60_000,next).candidate.input.check,'hourly');
- // 도구 줄이 사라졌다가 같은 글자가 다시 나타나도 새로 처음 본 것이다.
+ // 첫 도구의 한도(first+5분)가 지나기 전에 다른 T의 도구 줄로 바뀌면 그때부터 새로 센다.
+ assert.equal(f.check(second,six).candidate,undefined);
+ assert.equal(f.check(first+5*60_000+1,six).candidate,undefined);
+ assert.equal(f.check(second+7*60_000-1,six).candidate,undefined);
+ assert.equal(f.check(second+7*60_000,six).candidate.input.check,'hourly');
+ // 도구 줄이 사라졌다가 같은 줄이 다시 나타나도 새로 처음 본 것이다.
  const g=health();g.check(0,'하위 결과를 기다리는 중');g.check(first,TOOL_4M);
  g.check(second,'하위 결과를 기다리는 중');g.check(second+60_000,TOOL_4M);
  assert.equal(g.check(second+5*60_000,TOOL_4M).candidate,undefined);
+});
+// 2라운드(PR #463 검수): 상태 구역 확정·같은 도구 정체성·유한 상한. 합성 화면만 쓴다.
+const BOX='────────\n❯ \n────────\n  ? for shortcuts';
+test('실제 입력창이 없거나 상태 구역이 아닌 인용·지난 출력의 도구·스피너 모양은 억제하지 않는다',()=>{
+ const spin='✶ Processing… (55s · ↓ 3.7k tokens)';
+ for(const screen of [
+  // 도구·스피너 모양 아래에 인용 줄이 있고 실제 입력창이 없다.
+  `화면 인용\n  ⎿  Running… (7s · timeout 4m)\n${spin}\n> 이것은 인용의 마지막 줄입니다\n출력 끝`,
+  // 지난 Bash 출력 안의 들여쓴 도구·스피너 모양, 그 아래에 실제 입력창.
+  `⏺ Bash(지난 화면 예시 출력)\n  ⎿  지난 출력\n     ⎿  Running… (7s · timeout 4m)\n     ${spin}\n${BOX}`,
+  // 스피너 줄이 들여쓰였다 / 도구 줄 들여쓰기가 다르다 / 도구 줄과 스피너 사이에 글이 낀다 / 입력창 위에 가로줄 없음.
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n\n  ${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n     ⎿  Running… (7s · timeout 4m)\n\n${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n끼어든 글\n${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n\n${spin}\n\n❯ \n────────\n  ? for shortcuts`,
+ ]){
+  const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly',screen);
+ }
+});
+test('같은 도구의 경과 표시만 바뀌어도 처음 본 시각은 그대로라 12시간 가짜 시계에서도 후보가 돌아온다',()=>{
+ const f=health(),first=seenAt(),until=first+5*60_000;let count=0,firstBack=null;
+ f.check(0,'하위 결과를 기다리는 중');
+ for(let i=0;i<=12*60;i++){
+  const at=first+i*60_000,candidate=f.check(at,toolScreen(`Running… (${i%2?'8s':'7s'} · timeout 4m)`)).candidate;
+  if(candidate){count++;firstBack??=at;}
+ }
+ assert.equal(firstBack,until);assert.equal(count,12*60+1-5);
+});
+test('쓰는 timeout은 최대 60분이고 유한하지 않은 값은 읽기 실패라 억제하지 않는다',()=>{
+ const f=health(),first=seenAt(),ten=toolScreen('Running… (7s · timeout 10h)'),until=first+61*60_000;
+ f.check(0,'하위 결과를 기다리는 중');f.check(first,ten);
+ assert.equal(f.check(until-1,ten).candidate,undefined);
+ assert.equal(f.check(until,ten).candidate.input.check,'hourly');
+ const huge=toolScreen(`Running… (7s · timeout ${'9'.repeat(310)}h)`),g=health();
+ g.check(0,'하위 결과를 기다리는 중');g.check(first,huge);
+ assert.equal(g.check(SUPERVISOR_CHECK_MS,huge).candidate.input.check,'hourly');
+ assert.equal(parseTimeout('10h'),60*60_000);assert.equal(parseTimeout(`${'9'.repeat(310)}h`),null);
+ assert.deepEqual(['4m','6m 40s','30s','1h','2h 5m'].map(parseTimeout),[240_000,400_000,30_000,3_600_000,3_600_000]);
+ for(const bad of ['0s','1d','2 mins','',undefined])assert.equal(parseTimeout(bad),null);
 });
