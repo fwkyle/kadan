@@ -17,6 +17,7 @@ import {
   viewOf,
 } from "./navigation";
 import type { Summary } from "./types";
+import { autoReloadChunkError } from "./chunk-reload";
 import { AppContext, ErrorMessage, Loading, Roll, time } from "./ui";
 import SecretaryNotice from "./SecretaryNotice";
 import { useFreshMarks } from "./fresh";
@@ -258,6 +259,9 @@ class Boundary extends Component<
   }
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(error, info.componentStack);
+    // 재빌드 뒤 옛 탭의 화면 조각 못 읽음이면 한 번 자동으로 새로 읽는다.
+    // 상한 안에 또 실패하면 오류와 '다시 읽기'를 그대로 보인다.
+    autoReloadChunkError(error.message);
   }
   render() {
     return this.state.error ? (
