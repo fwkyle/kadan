@@ -18,7 +18,9 @@ const harnessLabel = (unit: Unit) => harnessName(unit) ?? "세션";
 const unitLine = (unit: Unit) => `${harnessLabel(unit)} · ${STATE_LABEL[unit.state]}`;
 // 칸 둘째 줄("실행 도구 · 상태")이 칸보다 길면 상태만 남긴다. 실행 도구는 모양으로도 보인다.
 const fitLine = (full: string, state: string, max: number) => (fitText(full, max, 9.5) === full ? full : full.endsWith(state) ? fitText(state, max, 9.5) : fitText(full, max, 9.5));
-const unitTitle =(unit: Unit) => `${unit.role} · ${KIND_LABEL[unit.kind]} · ${unitLine(unit)}${unit.alerts ? ` · 경보 ${unit.alerts}건` : ""}`;
+// 기반 세션 칸의 생존 줄. PID가 기록과 다르면 아래 기반 세션 표와 같은 낱말로 알린다.
+const sessionLife = (s: LiveSession) => (s.pidState === "match" ? "살아 있음" : "PID 변경 · 확인 필요");
+const unitTitle = (unit: Unit) => `${unit.role} · ${KIND_LABEL[unit.kind]} · ${unitLine(unit)}${unit.alerts ? ` · 경보 ${unit.alerts}건` : ""}`;
 
 // 모양 = 실행 도구, 색 = 상태. 창 없음은 가운데 ✕ 금.
 function ShapeMark({ harness, state, cx, cy, r }: { harness: string | null; state: UnitState; cx: number; cy: number; r: number }) {
@@ -142,7 +144,7 @@ function TreeSvg({ forest, model, sessions, width, fold, expanded, selected, onS
         {sessions === null ? "세션 상태를 지금 알 수 없습니다." : "열린 기반 세션(감시기·대시보드)이 없습니다."}</text>}
       {(sessions ?? []).map((s, i) => { const c = layout.system.cells[i]; return <g key={s.role}><title>{s.role}</title>
         <rect className="smt-frame" x={c.x} y={c.y} width={c.w} height={c.h} rx={6} /><ShapeMark harness={null} state="idle" cx={c.x + 14} cy={c.y + c.h / 2} r={5.5} />
-        <text className="smt-t1" x={c.x + 27} y={c.y + 14}>{fitText(s.role, c.w - 34, 11.5)}</text><text className="smt-t2" x={c.x + 27} y={c.y + 26}>살아 있음</text></g>; })}
+        <text className="smt-t1" x={c.x + 27} y={c.y + 14}>{fitText(s.role, c.w - 34, 11.5)}</text><text className="smt-t2" x={c.x + 27} y={c.y + 26}>{fitText(sessionLife(s), c.w - 30, 9.5)}</text></g>; })}
     </g>
   </svg>;
 }
@@ -190,7 +192,7 @@ export function TreeList({ forest, model, sessions, fold, expanded, selected, on
     {line(SYSTEM_KEY, title(`기반 세션${sessions ? ` ${sessions.length}` : ""}`), [], systemOpen, "기반 세션", () => !sessions?.length
       ? <p className="smt-note">{sessions === null ? "세션 상태를 지금 알 수 없습니다." : "열린 기반 세션(감시기·대시보드)이 없습니다."}</p>
       : sessions.map((s) => <div key={s.role} className="smt-row smt-leaf"><span className="smt-pick smt-plain">
-        <ShapeIcon harness={null} state="idle" /><span className="smt-nm">{s.role}</span><span className="smt-tag">살아 있음</span></span></div>))}
+        <ShapeIcon harness={null} state="idle" /><span className="smt-nm">{s.role}</span><span className="smt-tag">{sessionLife(s)}</span></span></div>))}
   </div>;
 }
 

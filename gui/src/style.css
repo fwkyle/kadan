@@ -483,6 +483,8 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-canvas { width: 100%; touch-action: none; }
 /* 전략 맵 나무 보기(2026-11-23). 상자·선·글자색은 여기서만 준다. 움직임은 없다. */
 .smt-host { min-width: 0; }
+/* 세로 스크롤 막대가 생기고 사라질 때 그림 칸 폭이 바뀌어 그림과 목록이 번갈아 뜨지 않게, 막대 자리를 늘 비워 둔다. */
+.sm-stage:has(> .smt-host) { scrollbar-gutter: stable; }
 .smt-svg { max-width: none; }
 .smt-t1 { font-size: 11.5px; font-weight: 600; fill: #202724; }
 .smt-t2 { font-size: 9.5px; fill: #536159; }
@@ -523,7 +525,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .smt-roll { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 8px; font-size: 11.5px; color: #536159; }
 .smt-roll span { display: inline-flex; align-items: center; white-space: nowrap; }
 .smt-roll .sm-dot { width: 8px; height: 8px; margin-right: 4px; }
-.smt-list { columns: 2 300px; column-gap: 20px; font-size: 13px; }
+.smt-list { columns: 2 300px; column-gap: 20px; font-size: 13px; word-break: keep-all; overflow-wrap: break-word; }
 .smt-list > .smt-node { margin-bottom: 6px; padding: 4px 8px; background: #fff; border: 1px solid #dfe6e0; border-radius: 7px; break-inside: avoid; }
 .smt-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .smt-leaf { padding-left: 30px; }

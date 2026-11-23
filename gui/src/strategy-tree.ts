@@ -106,7 +106,8 @@ export function depotLine(rows: Pick<Row, "bucket" | "board">[]) {
 // 작업자 칸 폭만 시안(113)보다 3 좁다: 폭 1600 화면의 실제 그림 칸(964)에 다섯 칸이 들어가야 해서다.
 export const TREE = {
   SW: 150, DX: 172, DW: 170, INDENT: 16, CX: 396, CW: 110, GAP: 4, RH: 40, BH: 32, FOLDED: 58,
-  WORKERS: 5, LONE_W: 152, LONE_H: 44, LONE_ROWS: 2, CRATE: 17, MIN_WIDTH: 630, DEFAULT_WIDTH: 980,
+  WORKERS: 5, LONE_W: 152, LONE_H: 44, LONE_ROWS: 2, CRATE: 17, DEFAULT_WIDTH: 980,
+  MIN_WIDTH: 620, // 작업자 칸 두 개(CX + 2 × CW + GAP)가 들어가는 폭. 이보다 좁으면 목록으로 보인다
 } as const;
 export const LONE_KEY = "\u0000lone";
 export type Box = { x: number; y: number; w: number; h: number };

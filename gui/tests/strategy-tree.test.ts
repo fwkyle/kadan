@@ -124,6 +124,8 @@ test("그림 폭이 좁으면 작업자 칸을 다음 줄로 내리고 그림 �
   const right = [...a.rows.flatMap((r) => [...r.workers, ...(r.more ? [r.more] : [])]), ...l.lone!.cells, ...l.system.cells].map((c) => c.x + c.w);
   assert.ok(Math.max(...right) <= l.width, `오른쪽 끝 ${Math.max(...right)} ≤ ${l.width}`);
   assert.equal(layout({ width: 300 }).width, TREE.MIN_WIDTH, "이보다 좁으면 목록으로 바꾸므로 그림 폭은 더 줄이지 않는다");
+  assert.equal(TREE.MIN_WIDTH, TREE.CX + 2 * TREE.CW + TREE.GAP, "최소 폭 = 작업자 칸 두 개가 들어가는 폭");
+  assert.equal(layout({ width: TREE.MIN_WIDTH }).cols, 2);
 });
 
 test("맨 아래: 하위 없는 슈퍼감독 묶음 → 발령 전 창고 → 기반 세션 순서", () => {
