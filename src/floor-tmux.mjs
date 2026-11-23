@@ -806,12 +806,15 @@ export function hasTrustPrompt(screen) {
 // 문구를 인용한 응답은 그 아래에 입력창·상태 줄이 이어지므로 통과한다. 공백은 모두 걷고 비교한다.
 // Claude Code 2.1.330 실측 화면(고정 입력 tests/fixtures/question-dialog-screens.mjs)의 바닥 안내 세 꼴:
 //   (가) `Enter to select · Tab/Arrow keys to navigate · Esc to cancel` — 여러 질문 창, 선택지 커서
-//   (나) 위에 `ctrl+g to edit in Vim`이 끼는 꼴 — 직접 입력 칸("Type something.") 커서(사고의 실제 경우)
+//   (나) 위에 `ctrl+g to edit in <편집기 이름>`이 끼는 꼴 — 직접 입력 칸("Type something.") 커서(사고의 실제 경우).
+//        이름은 설정에 따라 Vim·nano 등으로 바뀐다(2.1.330 실행 파일 실측). 이름 자리는 어떤 낱말이든 받되 앞의 `Enter to select ·
+//        Tab/Arrow keys to navigate` 묶음과 함께일 때만 참이다.
 //   (다) `Enter to select · ↑/↓ to navigate · Esc to cancel` — 질문 하나짜리 창(탭 줄 없음). 다른 창(권한 확인 등)도 쓸 수 있는 문구라
-//        바로 위 12줄에 이 창의 선택지 `Chat about this`가 있을 때만 질문 창으로 본다.
+//        바로 위 12줄 안에 이 창의 선택지 줄 `N. Chat about this`(줄 처음부터)가 있을 때만 질문 창으로 본다.
 // 받아들인 한계: 붙여넣기와 Enter 사이 1초 안에 창이 새로 뜨는 경우는 못 막는다(검사는 전송 시작 때 한 번이다).
-const QUESTION_FOOTER = /Entertoselect[·•](Tab\/Arrowkeys|↑\/↓)tonavigate[·•](?:ctrl\+gtoeditinVim[·•])?Esc(?:tocancel)?$/u;
-const QUESTION_ARROW_EVIDENCE = "Chataboutthis";
+const QUESTION_FOOTER = /Entertoselect[·•](Tab\/Arrowkeys|↑\/↓)tonavigate[·•](?:ctrl\+gtoeditin[^·•]{1,40}[·•])?Esc(?:tocancel)?$/u;
+// 선택지 줄: 번호가 붙은 `N. Chat about this`(커서 글자 있거나 없이)가 줄 처음부터. 앞선 응답에서 이 말을 인용만 한 줄은 아니다.
+const QUESTION_ARROW_EVIDENCE = /^[❯>]?\d+\.Chataboutthis$/u;
 const QUESTION_DIALOG_TAIL_LINES = 40;
 const QUESTION_ARROW_EVIDENCE_LINES = 12;
 export function hasQuestionDialog(screen) {
@@ -825,8 +828,7 @@ export function hasQuestionDialog(screen) {
   for (let i = 0; i < lines.length; i++) { if (offset === match.index) { row = i; break; } offset += lines[i].length; }
   if (row < 0) return false; // 안내가 줄 처음에서 시작하지 않는다(다른 글 끝에 붙은 인용)
   if (match[1] !== "↑/↓") return true;
-  const above = lines.slice(Math.max(0, row - QUESTION_ARROW_EVIDENCE_LINES), row).join("");
-  return above.includes(QUESTION_ARROW_EVIDENCE);
+  return lines.slice(Math.max(0, row - QUESTION_ARROW_EVIDENCE_LINES), row).some(line => QUESTION_ARROW_EVIDENCE.test(line));
 }
 
 // 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회, 두 창 판정이 같은 화면을 쓴다). 읽기에 실패하면 지금까지처럼 보낸다 —

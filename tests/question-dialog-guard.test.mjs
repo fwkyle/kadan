@@ -118,3 +118,40 @@ test('[표 8] 보류 코드는 기존 보관·재안내 길을 탄다(isNotifica
   const band = openAlerts([alert]);
   assert.match(band.items[0].holdReason, /선택 질문 창/);
 });
+
+// ---- PR #468 검수 발견 회귀(수정 카드 exec-65c6abfe) ----
+test('[발견 1] 직접 입력 칸 안내의 편집기 이름이 Vim이 아니어도(nano·임의 낱말) 같은 판정이다', () => {
+  for (const editor of ['Vim', 'nano', 'Helix', 'my-editor2']) {
+    const screen = screens.TYPE_SOMETHING.replace('edit in Vim', `edit in ${editor}`);
+    assert.equal(hasQuestionDialog(screen), true, editor);
+    assertHeld(screen, `편집기 ${editor}`);
+    for (const [name, options] of Object.entries(VARIANTS)) assertHeld(screen, `${name} / ${editor}`, options);
+  }
+  // 넓히지 않는다: 편집기 안내만 있고 앞의 `Enter to select · Tab/Arrow keys to navigate` 묶음이 없으면 창이 아니다.
+  assert.equal(hasQuestionDialog('⏺ 응답\nctrl+g to edit in nano · Esc to cancel\n'), false);
+  assert.equal(hasQuestionDialog(screens.IDLE.replace('? for shortcuts', 'ctrl+g to edit in nano')), false);
+});
+
+test('[발견 2] 방향키형 단서는 선택지 줄(`N. Chat about this`, 줄 처음부터)에서만 찾는다', () => {
+  const prose = '⏺ The earlier reply mentioned Chat about this.\n';
+  // 검수자 재현: 앞선 응답에서 이 말을 인용만 한 줄 + 다른 창(Yes/No) → 전달
+  for (const screen of [`${prose}${screens.ARROW_OTHER_DIALOG}`, `${screens.ARROW_OTHER_DIALOG.replace('⏺ 가나다 라마바', '⏺ "5. Chat about this"를 눌러 보세요')}`]) {
+    assert.equal(hasQuestionDialog(screen), false);
+    const calls = [];
+    assert.equal(sendTmux('kadan-qd', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}).keyDelivery, 'sent');
+  }
+  // 번호가 붙은 선택지 꼴은 커서 글자 있든 없든 참
+  for (const option of ['  5. Chat about this', '❯ 5. Chat about this', '> 5. Chat about this']) {
+    assert.equal(hasQuestionDialog(screens.SINGLE_ARROW.replace('  5. Chat about this', option)), true, option);
+  }
+  // 원래 방향키형 고정 입력(보류)은 그대로
+  assert.equal(hasQuestionDialog(screens.SINGLE_ARROW), true);
+  assertHeld(screens.SINGLE_ARROW, '질문 하나짜리 창');
+});
+
+test('[발견 3] 고정 입력에 마스크 경로·금융 용어가 남아 있지 않다', () => {
+  for (const [name, value] of Object.entries(screens)) {
+    if (typeof value !== 'string') continue;
+    assert.doesNotMatch(value, /ETF|\/aaaaaa/u, name);
+  }
+});
