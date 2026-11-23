@@ -98,9 +98,10 @@ export function runNudge({ entriesOf, floor, pendingCards, send, pressKey, roles
       assertAlive(floor, session, pid);
       const after = floor.read(session);
       result.screenEnd = screenEnd(after);
-      if (claudeLimitMatch(after) || hasLimitMenuText(after)) {
+      const remaining = claudeLimitMatch(after);
+      if (remaining || hasLimitMenuText(after)) {
         result.outcome = 'limited';
-        result.reason = '재확인 화면에 한도가 남음';
+        result.reason = remaining?.resumeStop ? '재확인 화면에 같은 멈춤 줄이 남음 — 다시 보내지 않음(로그인이 끝났을 수 있음)' : '재확인 화면에 한도가 남음';
       } else if (readStatusLine(after).kind !== 'unknown') {
         result.outcome = 'nudged';
         result.reason = '재확인 화면 끝에서 한도 줄·메뉴가 사라짐(계정 미확인)';
