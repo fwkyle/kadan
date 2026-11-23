@@ -11,7 +11,7 @@
 // 구조로 판정하는 항목(detect)은 마지막 입력창 주변 덩어리만 본다 — 인용·설명·오래된 스크롤 줄을 멈춤으로 읽지 않는다.
 import { terminal429, USAGE_LIMIT_LINE } from "./watch-rate-limit.mjs";
 import { securityFilterNotice } from "./watch-security-filter.mjs";
-import { claudeLimitLine } from "./claude-limit-line.mjs";
+import { claudeLimitLine, CLAUDE_AUTO_CONTINUE_STOPPED, CLAUDE_LOGIN_TIMEOUT } from "./claude-limit-line.mjs";
 
 export const STOP_ACTIONS = ["auto-resume", "alert-supervisor", "replace-runner", "report"];
 
@@ -54,6 +54,19 @@ export const STOP_PHRASES = [
   { id: "model-capacity", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
     pattern: /^\s*[■✕×]\s+Selected model is at capacity\.\s+Please try a different model\.\s*$/iu,
     sample: "codex `■ Selected model is at capacity. Please try a different model.` (tests/fixtures/waiting-capacity-screens.json)" },
+  // Claude 화면: 한도로 멈췄다 자동 계속하려던 것이 로그인 변경으로 멈췄거나(`⏺ Automatic continue stopped · your login changed or ended
+  // · send a prompt to continue`), 로그인 시간이 초과된 줄(`⏺ Login reached its time limit · Please run /login`) 뒤에 빈 입력창만 남는다
+  // (2026-11-23 대기 표시를 남긴 작업자가 이 화면에서 1시간 반 넘게 멈춘 사고). 교대가 아니라 입력 한 번이면 이어가는 상태라 한도(usage-limit)가
+  // 아니다 — 교대 안내 없이 직속 감독에게 알리고, 경보에 `kadan claude refresh --nudge` 안내를 붙인다(감시기는 보내지 않는다).
+  // 읽는 자리는 응답 줄(`⏺ …`)이 빈 입력창 바로 위(빈 줄·가로선·턴 끝 줄만 사이에)일 때뿐이다(claudeLimitLine, currentStopPhrases).
+  // 일하는 중 거부(WORKER_SIGNATURES)와 감독 화면(SUPERVISOR_ERROR_PATTERN)에는 넣지 않는다: 감독이 이 문구를 인용한 우편·카드를
+  // 화면에 띄워도 오류로 읽히지 않고, 도구 timeout 억제(#463)가 꺼지지 않는다.
+  { id: "claude-auto-continue-stopped", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
+    pattern: CLAUDE_AUTO_CONTINUE_STOPPED, resume: true,
+    sample: "claude `⏺ Automatic continue stopped · your login changed or ended · send a prompt to continue` (tests/claude-resume-stop.test.mjs, 2026-11-23 실측 줄)" },
+  { id: "claude-login-timeout", kind: "끊김", action: "alert-supervisor", scope: ["worker"],
+    pattern: CLAUDE_LOGIN_TIMEOUT, resume: true,
+    sample: "없음(TODO 원문 `Login reached its time limit · Please run /login`로 재구성, tests/claude-resume-stop.test.mjs)" },
   { id: "sse-timeout", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
     pattern: /idle timeout waiting for SSE/iu, sample: "없음" },
   { id: "compact-error", kind: "끊김", action: "alert-supervisor", scope: ["supervisor"],
@@ -76,7 +89,9 @@ export const WORKER_PHRASES = withPattern("worker");
 // 줄 하나씩 읽는 낱말(현재 오류 덩어리의 각 줄, 일하는 중 거부용 넓은 검사). 용량 초과 문장은 여기 없다: 덩어리 전체를 이어 붙여
 // 따로 읽고(capacityStopLine), 넓은 검사에는 넣지 않는다 — 넣으면 문장이 화면 아래에 보이는 동안 시계가 도는 정상 작업이
 // '일하는 중 아님'이 되어 정체 판정 AI가 불린다(2026-11-19 검수).
-export const WORKER_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES.filter((p) => p.id !== "model-capacity")), "giu");
+// 응답 줄 구조로만 읽는 항목(claude 멈춤 줄 둘, currentStopPhrases의 claudeLimitLine 자리)도 여기 없다: 일하는 중 거부에 넣으면 화면 아래에 보이는 동안
+// 정상 작업이 정체 경로로 새고, 오류 덩어리 낱말 판정에 넣으면 다른 덩어리가 인용한 문장까지 읽는다.
+export const WORKER_SIGNATURES = new RegExp(sourceOf(WORKER_PHRASES.filter((p) => p.id !== "model-capacity" && !p.resume)), "giu");
 export const SUPERVISOR_ERROR_PATTERN = new RegExp(sourceOf(withPattern("supervisor")), "iu");
 
 const SLEEP_SIGNATURE = new RegExp(STOP_PHRASES.find((p) => p.id === "sleep-interrupted").pattern.source, "giu");
@@ -122,6 +137,12 @@ function claudeLimitShape(screen, found) {
   let above = found.at - 1;
   while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
   return above >= 0 && TURN_DONE.test(lines[above]);
+}
+
+// 입력 한 번이면 이어가는 멈춤 줄(`resume`)이면 경보에 붙일 안내 한 줄. 아니면 null. 감시기는 보내지 않고 사람이 실행할 명령만 알린다.
+export function resumeHint(line, role) {
+  const phrase = phraseOfLine(line);
+  return phrase?.resume ? `입력 한 번 보내면 이어감: kadan claude refresh --nudge --role ${role}` : null;
 }
 
 export const phraseKinds = () => [...new Set(WORKER_PHRASES.map(({ kind }) => kind))];
@@ -286,6 +307,8 @@ export function currentStopPhrases(screen) {
   // 이 경보 경로에서는 실측 줄 꼴(`… limit · resets <시각> [(지역)]`이 줄 끝까지, 또는 맨 줄 + 바로 아래 슬래시 안내 줄)만 받는다 —
   // 도구 출력·응답 안의 맨 문구와 설명 문장은 한도로 올리지 않는다.
   const picked = claudeLimitLine(screen);
+  // 멈춤 줄 둘(자동 계속 멈춤·로그인 시간 초과)도 같은 자리(빈 입력창 바로 위 응답 줄)에서 읽는다. 위에 한도 배너가 있어도 새 줄이 이긴다.
+  if (picked && phraseOfLine(picked.line)?.resume) found.set(lineKey(picked.head.slice(0, 40), picked.line), picked.line);
   const claude = picked && claudeLimitDetail(screen, picked);
   if (claude && claudeLimitShape(screen, claude) && phraseOfLine(claude.line)?.id === "usage-limit") {
     found.set(lineKey(claude.head.slice(0, 40), claude.line), claude.line);

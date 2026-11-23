@@ -11,6 +11,15 @@ import { claudeLimitMenu } from "./claude-limit-menu.mjs";
 export const CLAUDE_LIMIT_HEADS = [/^You['’]ve hit your /u, /^You['’]ve reached your /u, /^Usage limit reached/u];
 const LEAD_SYMBOL = /^\s*(?:[⏺⎿●✗⚠]\s+)?/u;
 
+// 한도 줄은 아니지만 "입력 한 번 보내면 이어가는" 멈춤 줄 둘: 한도로 자동 계속하려던 것이 로그인 변경으로 멈춘 줄,
+// 로그인 시간 초과 줄. 응답 머리표(`⏺`)로 시작할 때만 받는다(문장 중간·인용·`⎿` 도구 출력·머리표 없는 줄은 아니다).
+// 실측: `⏺ Automatic continue stopped · your login changed or ended · send a prompt to continue`(2026-11-23).
+// 로그인 줄은 실측 화면을 못 찾아 TODO 원문 `Login reached its time limit · Please run /login`으로 재구성했다.
+export const CLAUDE_AUTO_CONTINUE_STOPPED = /^\s*⏺\s+Automatic continue stopped\s+·/u;
+export const CLAUDE_LOGIN_TIMEOUT = /^\s*⏺\s+Login reached its time limit\s+·\s+Please run \/login\b/u;
+const RESUME_STOP_LINES = [CLAUDE_AUTO_CONTINUE_STOPPED, CLAUDE_LOGIN_TIMEOUT];
+export const isResumeStopLine = (line) => RESUME_STOP_LINES.some((pattern) => pattern.test(String(line ?? "")));
+
 const CLAUDE_INPUT = /^\s*[❯>]\s*$/u;
 const ANY_COMPOSER = /^\s*[›❯]/u;
 const USER_INPUT_LINE = /^\s*[❯>]\s+\S/u;
@@ -29,6 +38,7 @@ function trimmedLines(screen) {
 
 const limitHeadOf = (line) => {
   const rest = line.replace(LEAD_SYMBOL, "");
+  if (isResumeStopLine(line)) return rest;
   return CLAUDE_LIMIT_HEADS.find((head) => head.test(rest)) ? rest : null;
 };
 
