@@ -21,6 +21,7 @@ const env = {...process.env};
 env.KADAN_SOCKET = `kadan-test-${process.pid}-${Date.now().toString(36)}`;
 env.KADAN_WINDOW = 'none';
 env.KADAN_NOTIFY = 'off';
+env.KADAN_TEST_RUN = '1'; // 웹훅은 루프백 주소로만 나간다(src/user-notify.mjs postDiscordWebhook). 제한만 하는 표시
 delete env.KADAN_TEST_NOTIFY_SINK; // 시험 파일이 필요할 때 스스로 넣는다
 env.KADAN_MEMORY_CHECK = 'off'; // 무거운 명령의 메모리 보호(kadan limit run의 시작 전 확인·실행 중 보호)를 끈다: 시험이 실제 맥 측정값에 걸려 멈추지 않게. 운영 기본은 켜짐(tests/heavy-limit.test.mjs)
 env.KADAN_ALT_CHECK_MS ??= '0'; // 시작 뒤 풀스크린 확인의 기다림을 끈다(전용 시험만 켠다)
