@@ -72,7 +72,7 @@ test('표7: 같은 이름이 살아 있으나 다른 최상위(또는 super 아�
   const name = 'kadan-sample-repo-슈퍼감독';
   const other = plan('/w/sample-repo', [start(name, '/elsewhere/sample-repo')], [name]);
   assert.equal(other.action, 'conflict');
-  assert.match(other.why, /다른 폴더\(\/elsewhere\/sample-repo\)/);
+  assert.deepEqual([other.reason, other.otherCwd], ['other-root', '/elsewhere/sample-repo']);
   const notSuper = plan('/w/sample-repo', [start(name, '/w/sample-repo', {roleProfile: 'worker'})], [name]);
   assert.equal(notSuper.action, 'conflict');
 });
@@ -95,14 +95,14 @@ test('수정1-발견1: 다른 폴더에서 start로 재사용해도(명령 없�
   const entries = [start(name, '/a/sample-repo'), reuse];
   assert.equal(plan('/a/sample-repo', entries, [name]).action, 'attach');
   const fromB = plan('/b/sample-repo', entries, [name]);
-  assert.deepEqual([fromB.action, /다른 폴더\(\/a\/sample-repo\)/.test(fromB.why)], ['conflict', true]);
+  assert.deepEqual([fromB.action, fromB.reason, fromB.otherCwd], ['conflict', 'other-root', '/a/sample-repo']);
 });
 
 test('수정1-발견2: 띄운 start에 cwd가 없으면 어느 레포에도 넣지 않고, 같은 이름이면 소속 확인 불가로 멈춘다', () => {
   const name = 'kadan-sample-repo-슈퍼감독';
   const noCwd = [start(name, undefined)];
   const same = plan('/w/sample-repo', noCwd, [name]);
-  assert.deepEqual([same.action, /소속 확인 불가/.test(same.why)], ['conflict', true]);
+  assert.deepEqual([same.action, same.reason], ['conflict', 'no-cwd']);
   const other = [start('kadan-zzz-슈퍼', undefined)];
   assert.equal(plan('/w/sample-repo', other, ['kadan-zzz-슈퍼']).action, 'start');
 });
@@ -110,22 +110,55 @@ test('수정1-발견2: 띄운 start에 cwd가 없으면 어느 레포에도 넣�
 test('수정1-발견3: 띄운 start의 PID가 지금 pane PID와 다르면 후보가 아니다(같은 이름이면 멈춤)', () => {
   const name = 'kadan-sample-repo-슈퍼감독';
   const same = plan('/w/sample-repo', [start(name, '/w/sample-repo')], [name], 999);
-  assert.deepEqual([same.action, /PID/.test(same.why)], ['conflict', true]);
+  assert.deepEqual([same.action, same.reason], ['conflict', 'pid-changed']);
   const renamed = [start('kadan-내-슈퍼', '/w/sample-repo')];
   assert.equal(plan('/w/sample-repo', renamed, ['kadan-내-슈퍼'], 999).action, 'start');
   assert.equal(plan('/w/sample-repo', [start(name, '/w/sample-repo'), {kind: 'stop', session: name}], [name]).action, 'conflict');
 });
 
-test('수정2: 같은 이름의 소속 확인 불가는 정상 별칭 후보가 있어도 먼저 멈춘다(PID 바뀜·cwd 없음). 다른 폴더·프로필 아님은 별칭 attach를 막지 않는다', () => {
+// 최종 기대 결과 표(수정 3, 감독 결정): 같은 이름 세션 상태 × 이 레포의 그 밖 확인된 후보 수. 오류 문구가 아니라 이유 코드로만 갈린다.
+test('수정3 최종 표: 같은 이름 상태 × 별칭 후보 수의 모든 칸', () => {
+  const name = 'kadan-sample-repo-슈퍼감독';
+  const good = start(name, '/w/sample-repo');
+  const aliases = n => Array.from({length: n}, (_, i) => start(`kadan-alias${i}-슈퍼`, '/w/sample-repo'));
+  const run = (sameEntries, sameAlive, n) => {
+    const a = aliases(n);
+    return plan('/w/sample-repo', [...sameEntries, ...a], [...(sameAlive ? [name] : []), ...a.map(e => e.session)]);
+  };
+  // 같은 이름 세션 없음: 후보 0/1/2+
+  assert.equal(run([], false, 0).action, 'start');
+  const one = run([], false, 1);
+  assert.deepEqual([one.action, one.target.session], ['attach', 'kadan-alias0-슈퍼']);
+  assert.deepEqual([run([], false, 2).action, run([], false, 3).action], ['multiple', 'multiple']);
+  // 같은 이름이 살아 있고 확인된 후보: 별칭 0이면 같은 이름 attach, 1+이면 multiple
+  const solo = run([good], true, 0);
+  assert.deepEqual([solo.action, solo.target.session], ['attach', name]);
+  const withAlias = run([good], true, 1);
+  assert.deepEqual([withAlias.action, withAlias.matches.length], ['multiple', 2]);
+  // 살아 있으나 확인 안 됨(5가지 이유): 별칭 0이든 1+이든 같은 이유로 conflict
+  const bad = {
+    'no-record': [],
+    'no-cwd': [start(name, undefined)],
+    'pid-changed': [start(name, '/w/sample-repo', {panePid: 7})],
+    'other-root': [start(name, '/elsewhere/sample-repo')],
+    'other-profile': [start(name, '/w/sample-repo', {roleProfile: 'worker'})],
+  };
+  for (const [reason, entries] of Object.entries(bad)) {
+    for (const n of [0, 1, 2]) {
+      const r = run(entries, true, n);
+      assert.deepEqual([r.action, r.reason], ['conflict', reason], `${reason} + 별칭 ${n}`);
+    }
+  }
+  // 꺼진 마지막 사건(stop)은 기록 없음과 같다
+  assert.equal(run([good, {kind: 'stop', session: name}], true, 1).reason, 'no-record');
+});
+
+test('수정3: 다른 폴더 같은 이름의 결과는 시작 폴더 경로 문자열(소속 확인 불가 포함 여부)과 무관하다', () => {
   const name = 'kadan-sample-repo-슈퍼감독', alias = start('kadan-alias-슈퍼', '/w/sample-repo');
-  const pidChanged = plan('/w/sample-repo', [start(name, '/w/sample-repo', {panePid: 7}), alias], [name, alias.session]);
-  assert.deepEqual([pidChanged.action, /PID/.test(pidChanged.why)], ['conflict', true]);
-  const noCwd = plan('/w/sample-repo', [start(name, undefined), alias], [name, alias.session]);
-  assert.deepEqual([noCwd.action, /소속 확인 불가/.test(noCwd.why)], ['conflict', true]);
-  const twoAliases = [start(name, undefined), alias, start('kadan-alias2-슈퍼', '/w/sample-repo')];
-  assert.equal(plan('/w/sample-repo', twoAliases, [name, alias.session, 'kadan-alias2-슈퍼']).action, 'conflict');
-  const otherFolder = plan('/w/sample-repo', [start(name, '/elsewhere/sample-repo'), alias], [name, alias.session]);
-  assert.equal(otherFolder.action, 'attach');
+  for (const elsewhere of ['/elsewhere/sample-repo', '/소속 확인 불가/sample-repo', '/x/소속 확인 불가(PID 다름)/sample-repo']) {
+    const r = plan('/w/sample-repo', [start(name, elsewhere), alias], [name, alias.session]);
+    assert.deepEqual([r.action, r.reason, r.otherCwd], ['conflict', 'other-root', elsewhere], elsewhere);
+  }
 });
 
 // ---- cmdSuper 배선: start·attach를 가짜로 끼워 호출 여부만 본다 ----
@@ -250,6 +283,8 @@ const panePid = (f, session) => {
   const r = f.tmuxArgs(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']);
   return r.status === 0 ? r.stdout.trim() : '';
 };
+// 한 번 얻은 값 하나로 "숫자이고 이전 값과 다름"을 판단한다(두 번 조회해 섞지 않는다).
+const waitForNewPid = (f, session, before) => waitFor(() => { const now = panePid(f, session); return /^[0-9]+$/.test(now) && now !== before; });
 const startsOf = (home, session) => readLedger(home).filter(e => e.kind === 'start' && e.session === session);
 
 test('실제 CLI 수정1-발견1: A에서 띄운 super를 B(같은 폴더 이름)에서 start로 재사용한 뒤 A는 attach, B는 멈춘다', {skip}, t => {
@@ -303,7 +338,7 @@ test('실제 CLI 수정1-발견3: pane PID가 원장과 다르면 attach하지 �
   const before = panePid(f, session);
   assert.match(before, /^[0-9]+$/);
   assert.equal(f.tmuxArgs(['respawn-pane', '-k', '-t', `=${session}:`, 'sleep 130']).status, 0);
-  assert.ok(waitFor(() => /^[0-9]+$/.test(panePid(f, session)) && panePid(f, session) !== before), '새 숫자 PID가 나올 때까지');
+  assert.ok(waitForNewPid(f, session, before), '새 숫자 PID가 나올 때까지');
   const r = f.cli(repo, ['super']);
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /PID/);
@@ -324,7 +359,7 @@ test('실제 CLI 수정2: PID 바뀐 같은 이름 + 정상 별칭, cwd 없는 �
   const before = panePid(f, session);
   assert.match(before, /^[0-9]+$/);
   assert.equal(f.tmuxArgs(['respawn-pane', '-k', '-t', `=${session}:`, 'sleep 130']).status, 0);
-  assert.ok(waitFor(() => /^[0-9]+$/.test(panePid(f, session)) && panePid(f, session) !== before));
+  assert.ok(waitForNewPid(f, session, before), '새 숫자 PID가 나올 때까지');
   const made = f.cli(repo, ['start', alias, '--profile', 'super']);
   assert.equal(made.status, 0, made.stdout + made.stderr);
   assert.ok(waitFor(() => startsOf(f.home, aliasSession).length === 1));
@@ -353,4 +388,43 @@ test('실제 CLI 수정2: PID 바뀐 같은 이름 + 정상 별칭, cwd 없는 �
   assert.equal(total(), count2, '새 start 없음');
   f.cli(repo, ['stop', alias]);
   f.cli(repo2, ['stop', alias2]);
+});
+
+test('실제 CLI 수정3: 다른 레포 같은 이름 + 로컬 별칭은 시작 폴더 경로에 "소속 확인 불가"가 있든 없든 똑같이 멈춘다', {skip}, t => {
+  for (const parent of ['x-plain', '소속 확인 불가-x']) {
+    const f = isolated();
+    t.after(f.cleanup);
+    const other = makeRepo(path.join(f.work, parent)), local = makeRepo(path.join(f.work, 'local'));
+    const role = 'sample-repo-슈퍼감독', session = `kadan-${role}`, alias = 'local-alias-슈퍼', aliasSession = `kadan-${alias}`;
+    assert.equal(f.cli(other, ['super']).status, 0, parent);
+    assert.ok(waitFor(() => startsOf(f.home, session).length === 1));
+    assert.equal(f.cli(local, ['start', alias, '--profile', 'super']).status, 0, parent);
+    assert.ok(waitFor(() => startsOf(f.home, aliasSession).length === 1));
+    const total = readLedger(f.home).filter(e => e.kind === 'start').length;
+    const r = f.cli(local, ['super']);
+    assert.equal(r.status, 1, `${parent}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /다른 폴더/, parent);
+    assert.doesNotMatch(r.stdout, new RegExp(aliasSession), `${parent}: 별칭 attach 없음`);
+    assert.equal(readLedger(f.home).filter(e => e.kind === 'start').length, total, `${parent}: 새 start 없음`);
+    f.cli(other, ['stop', role]);
+    f.cli(local, ['stop', alias]);
+  }
+});
+
+test('실제 CLI 수정3: 원장 기록이 전혀 없는 같은 이름 세션 + 정상 별칭도 멈춘다(tmux 세션 존재로 본다)', {skip}, t => {
+  const f = isolated();
+  t.after(f.cleanup);
+  const repo = makeRepo(f.work);
+  const role = 'sample-repo-슈퍼감독', session = `kadan-${role}`, alias = 'norec-alias-슈퍼', aliasSession = `kadan-${alias}`;
+  assert.equal(f.tmuxArgs(['new-session', '-d', '-s', session, 'sleep 120']).status, 0);
+  assert.equal(f.cli(repo, ['start', alias, '--profile', 'super']).status, 0);
+  assert.ok(waitFor(() => startsOf(f.home, aliasSession).length === 1));
+  assert.equal(startsOf(f.home, session).length, 0, '같은 이름은 원장 기록이 없다');
+  const total = readLedger(f.home).filter(e => e.kind === 'start').length;
+  const r = f.cli(repo, ['super']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /시작 기록을 찾지 못했다/);
+  assert.doesNotMatch(r.stdout, new RegExp(aliasSession), '별칭 attach 없음');
+  assert.equal(readLedger(f.home).filter(e => e.kind === 'start').length, total, '새 start 없음');
+  f.cli(repo, ['stop', alias]);
 });

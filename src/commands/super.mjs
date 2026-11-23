@@ -28,9 +28,22 @@ export function gitRootOf(dir) {
 
 const pidOf = entry => entry?.panePid ?? entry?.rottiePid;
 
-// 무엇을 할지만 정한다(부작용 없음, alive·pidOf·rootOf는 주입 가능). action: start | attach | multiple | conflict | inside-home.
-// 소속 근거는 "마지막 start"가 아니라 "지금 살아 있는 세대를 실제로 띄운 start"(launchStart)다. 그 start의 pane PID가 지금 pane PID와
-// 같고 작업 폴더의 git 최상위를 읽을 수 있을 때만 후보다. 못 읽으면 어느 레포에도 넣지 않고, 같은 이름이면 "소속 확인 불가"로 멈춘다.
+// 같은 이름 세션이 이 레포의 확인된 후보가 아닐 때의 이유. 판정은 이 코드로만 하고 문구로 분기하지 않는다.
+export const REASON_TEXT = {
+  "no-record": "원장에서 이 세션을 띄운 시작 기록을 찾지 못했다(소속 확인 불가)",
+  "no-cwd": "띄운 시작 기록에 작업 폴더가 없거나 읽을 수 없다(소속 확인 불가)",
+  "pid-changed": "원장의 pane PID와 지금 pane PID가 달라 같은 세대인지 확인할 수 없다(소속 확인 불가, PID 다름)",
+  "other-root": "다른 폴더에서 띄운 슈퍼감독이다",
+  "other-profile": "슈퍼감독 프로필(--profile super)로 띄운 세션이 아니다",
+};
+
+// 무엇을 할지만 정한다(부작용 없음, alive·livePid·rootOf는 주입 가능). action: start | attach | multiple | conflict | inside-home.
+// 규칙 두 단계(2026-11-23 감독 결정):
+// 1) 같은 이름 `<레포>-슈퍼감독` 세션이 바닥에 살아 있으면(원장 기록 유무와 무관) 이 레포의 확인된 후보일 때만 2)로 간다.
+//    아니면 이유 코드(reason)를 정해 conflict로 멈춘다. 별칭 후보가 있든 없든 같다.
+// 2) 이 레포의 확인된 후보(같은 이름 포함) 0개 → start, 1개 → attach, 2개 이상 → multiple.
+// "확인된 후보" = 그 세대를 실제로 띄운 start(launchStart)가 있고, roleProfile이 super이고, 그 pane PID가 지금 pane PID와 같고,
+// start cwd의 git 최상위를 읽을 수 있고 지금 최상위와 같다.
 export function planSuper({ cwd, home, entries, alive, livePid = () => null, rootOf = gitRootOf }) {
   const inside = workdirInsideHome(cwd, home);
   if (inside) return { action: "inside-home", message: workdirInsideHomeMessage(inside) };
@@ -45,37 +58,33 @@ export function planSuper({ cwd, home, entries, alive, livePid = () => null, roo
   }
   const launched = name => {
     const events = eventsBy.get(name) ?? [];
-    // 마지막 start 뒤에 stop이 있으면 원장상 꺼진 세대라 지금 pane이 그 세대인지 모른다.
-    if (events.at(-1)?.kind === "stop") return null;
-    return launchStart(events);
+    // 마지막 사건이 stop이면 원장상 꺼진 세대라 지금 pane이 그 세대인지 모른다.
+    return events.at(-1)?.kind === "stop" ? null : launchStart(events);
   };
-  const matches = [];
-  let blocked = null; // 같은 이름 세션이 살아 있는데 이 레포의 것으로 확인되지 않는 이유
-  let unverified = false; // 그 이유가 "소속 확인 불가"(원장 근거 없음·폴더 없음·PID 바뀜)인가
-  for (const name of eventsBy.keys()) {
-    const start = launched(name);
-    const isTarget = name === session;
-    if (!isTarget && start?.roleProfile !== "super") continue; // 프로필을 모르는 다른 이름은 후보가 아니다
-    if (!alive(name)) continue;
-    let why = null;
-    if (!start) why = "이 세션을 띄운 시작 기록을 원장에서 찾지 못했다(소속 확인 불가)";
-    else if (start.roleProfile !== "super") why = "슈퍼감독 프로필(--profile super)로 띄운 세션이 아니다";
-    else if (pidOf(start) == null || String(pidOf(start)) !== String(livePid(name)))
-      why = "원장의 pane PID와 지금 pane PID가 달라 같은 세대인지 확인할 수 없다(소속 확인 불가)";
-    else {
-      const startRoot = rootOf(start.cwd);
-      if (startRoot === null) why = "띄운 시작 기록에 작업 폴더가 없거나 읽을 수 없다(소속 확인 불가)";
-      else if (startRoot === root) { matches.push(start); continue; }
-      else why = `다른 폴더(${start.cwd})에서 띄운 슈퍼감독이다`;
-    }
-    if (isTarget) { blocked = why; unverified = /소속 확인 불가/.test(why); }
+  // 살아 있는 세션 하나의 소속: {ok: true, start} | {ok: false, reason, start}
+  const classify = (name, start) => {
+    if (!start) return { ok: false, reason: "no-record", start };
+    if (start.roleProfile !== "super") return { ok: false, reason: "other-profile", start };
+    if (pidOf(start) == null || String(pidOf(start)) !== String(livePid(name))) return { ok: false, reason: "pid-changed", start };
+    const startRoot = rootOf(start.cwd);
+    if (startRoot === null) return { ok: false, reason: "no-cwd", start };
+    return startRoot === root ? { ok: true, start } : { ok: false, reason: "other-root", start };
+  };
+  const candidates = [];
+  if (alive(session)) {
+    const verdict = classify(session, launched(session));
+    if (!verdict.ok) return { action: "conflict", root, role, session, reason: verdict.reason, otherCwd: verdict.start?.cwd };
+    candidates.push(verdict.start);
   }
-  // 같은 이름의 소속 확인 불가는 후보 수와 상관없이 먼저 멈춘다(정상 별칭이 있어도 그 이름의 세션을 못 믿는 채 넘어가지 않는다).
-  if (blocked && unverified) return { action: "conflict", root, role, session, why: blocked };
-  if (matches.length > 1) return { action: "multiple", root, role, matches };
-  if (matches.length === 1) return { action: "attach", root, role, target: matches[0] };
-  if (blocked) return { action: "conflict", root, role, session, why: blocked };
-  if (alive(session)) return { action: "conflict", root, role, session, why: "이 세션을 띄운 시작 기록을 원장에서 찾지 못했다(소속 확인 불가)" };
+  for (const name of eventsBy.keys()) {
+    if (name === session) continue;
+    const start = launched(name);
+    if (start?.roleProfile !== "super" || !alive(name)) continue;
+    const verdict = classify(name, start);
+    if (verdict.ok) candidates.push(verdict.start);
+  }
+  if (candidates.length > 1) return { action: "multiple", root, role, matches: candidates };
+  if (candidates.length === 1) return { action: "attach", root, role, target: candidates[0] };
   return { action: "start", root, role };
 }
 
@@ -95,11 +104,13 @@ export function cmdSuper(argv, flags, deps = {}) {
       for (const s of plan.matches) console.error(`  ${roleOfStart(s)}  (세션 ${s.session}, 시작 폴더 ${s.cwd})`);
       process.exitCode = 1;
       return;
-    case "conflict":
-      console.error(`오류: 같은 이름 ${plan.session}이 이미 살아 있지만 이 레포(${plan.root})의 슈퍼감독으로 확인되지 않는다 — ${plan.why}. 붙지도 새로 띄우지도 않고 멈춘다. `
+    case "conflict": {
+      const detail = plan.reason === "other-root" && plan.otherCwd ? ` (시작 폴더 ${plan.otherCwd})` : "";
+      console.error(`오류: 같은 이름 ${plan.session}이 이미 살아 있지만 이 레포(${plan.root})의 슈퍼감독으로 확인되지 않는다 — ${REASON_TEXT[plan.reason]}${detail}. 붙지도 새로 띄우지도 않고 멈춘다. `
         + `확인이 끝나면 \`kadan stop ${plan.role}\`로 끄거나, 다른 이름의 폴더에서 치세요.`);
       process.exitCode = 1;
       return;
+    }
     case "attach":
       return attach([roleOfStart(plan.target)]);
     default:
