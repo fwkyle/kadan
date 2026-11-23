@@ -50,16 +50,18 @@ const page = (view: string | null) => {
     { value: { token: "fake-token", readOnly: false, draft: () => {}, notice: () => {} } },
     React.createElement(StrategyMap, { url: new URL("https://kadan.example.com/#strategy-map") })));
 };
-const pressed = (html: string) => [...html.matchAll(/<button type="button" aria-pressed="(true|false)">(2D|3D|나무)<\/button>/g)].map((m) => `${m[2]}:${m[1]}`);
+const stage = (html: string) => html.slice(html.indexOf('class="sm-stage"'));
 
-test("보기 전환에 '나무'가 있고, 기억한 보기가 나무면 나무 그림을 그린다", () => {
-  const html = page("tree");
-  assert.deepEqual(pressed(html), ["2D:false", "3D:false", "나무:true"]);
+test("전략 맵은 나무 보기 하나: 보기 전환 단추가 없고 나무 그림을 그린다", () => {
+  const html = page(null);
+  assert.doesNotMatch(html, /sm-viewswitch|aria-label="지도 보기"|>2D<|>3D<|>나무</, "전환 단추 없음");
+  assert.doesNotMatch(html, /기지와 유닛 지도|왕관 = 슈퍼감독|<canvas/, "2D·3D 그림과 그 범례 없음");
   assert.match(html, /aria-label="판과 역할 나무"/);
+  assert.match(html, /슈퍼감독마다 판 하나, 그 아래 감독과 작업자·검수자가 이어집니다\. 칸을 누르면 옆 칸\(좁은 화면에서는 아래\)에 그 역할의 카드가 보입니다\./);
+  assert.doesNotMatch(html, /기지 하나|유닛 옆 상자/, "옛 소개 문단 없음");
   assert.match(html, /<b[^>]*>3<\/b> 판|>3<[^>]*> 판/, "집계 줄에 판 수");
   assert.match(html, /대기 역할/);
   assert.match(html, /큰 상자 = 슈퍼감독 · 둥근 상자 = 감독/);
-  assert.doesNotMatch(html, /왕관 = 슈퍼감독/);
   assert.match(html, />지시</);
   assert.match(html, />\+3 더 보기</);
   assert.match(html, /하위 역할 없는 슈퍼감독 1/);
@@ -68,15 +70,14 @@ test("보기 전환에 '나무'가 있고, 기억한 보기가 나무면 나무 
   assert.match(html, /aria-label="a-작업1 · 작업자·검수자 · codex · 작업중"/);
   assert.match(html, /aria-expanded="false" aria-label="b-슈퍼 하위 역할"/, "작업중이 없는 판은 접힌 채로 시작");
   assert.doesNotMatch(html, /aria-label="b-작업 ·/, "접은 판의 하위 역할은 그리지 않는다");
+  assert.match(html, /aria-label="기반 세션"/, "지도 아래 기반 세션 표는 그대로");
+  assert.match(html, /유닛이나 발령 전 창고를 누르면 상태와 카드가 여기에 보입니다\./, "옆 칸 자리는 그대로");
 });
 
-test("기억한 보기가 없거나 모르는 값이면 2D, 2D·3D에는 나무 전용 줄이 없다", () => {
-  for (const view of [null, "나무", "4d"]) assert.deepEqual(pressed(page(view)), ["2D:true", "3D:false", "나무:false"]);
-  const html = page("2d");
-  assert.match(html, /aria-label="기지와 유닛 지도"/);
-  assert.match(html, /왕관 = 슈퍼감독 · 깃발 = 감독/);
-  assert.doesNotMatch(html, /대기 역할|큰 상자 = 슈퍼감독/);
-  assert.deepEqual(pressed(page("3d")), ["2D:false", "3D:true", "나무:false"]);
+test("옛 보기 값(2d·3d)이 저장된 브라우저도 같은 나무 보기로 열린다", () => {
+  const base = stage(page(null));
+  assert.match(base, /aria-label="판과 역할 나무"/);
+  for (const view of ["2d", "3d", "tree", "4d"]) assert.equal(stage(page(view)), base, `저장값 ${view}`);
 });
 
 test("좁은 화면의 접는 목록: 접은 줄에 하위 상태 개수, 펼친 줄에 하위 역할, 넘치면 '+N 더 보기'", () => {
@@ -112,7 +113,7 @@ const both = (data: Fake) => {
   current = { ...data, alerts: null, collectedAt: status.collectedAt };
   try {
     return {
-      wide: page("tree"),
+      wide: page(null),
       narrow: renderToStaticMarkup(React.createElement(TreeList, {
         forest: buildForest(map.bases, false), model: map, sessions: [], fold: {}, expanded: new Set(),
         selected: null, depotKey: "depot", onSelect: () => {}, onFold: () => {}, onMore: () => {},

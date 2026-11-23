@@ -33,7 +33,7 @@ export type Forest = {
 export function flatten(node: TreeNode): Unit[] {
   return [node.unit, ...node.children.flatMap(flatten)];
 }
-// 쉬는 작업자는 2D·3D처럼 기본으로 숨긴다. 보이는 유닛이 없는 판은 뺀다.
+// 쉬는 작업자는 기본으로 숨긴다(쉬는 역할도 보기로 켠다). 보이는 유닛이 없는 판은 뺀다.
 export function buildForest(bases: Base[], showResting: boolean): Forest {
   const groups: Group[] = [], lone: Unit[] = [], all: Unit[] = [];
   for (const base of bases) {

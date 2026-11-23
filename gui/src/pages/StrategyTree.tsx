@@ -8,7 +8,7 @@ import {
 } from "../strategy-tree";
 
 // 전략 맵 '나무' 보기(2026-11-23 [kyle]). 넓으면 시안 1안 그림(판 → 감독 → 지시 → 작업자·검수자), 좁으면 접는 목록.
-// 색은 전부 style.css의 클래스로만 준다(2D와 같은 이유: SVG 속성의 색은 다크 모드 변환을 거치지 않는다).
+// 색은 전부 style.css의 클래스로만 준다 — SVG 속성에 색을 적으면 다크 모드 변환(theme.mjs)을 거치지 않는다.
 const NARROW = "(max-width: 799px)";
 const LIST_LIMIT = 8, LIST_KEEP = 6;
 const DEPOT_NOTE = "담당이 정해지지 않은 카드 (누르면 옆 칸에 목록)";
@@ -50,7 +50,7 @@ export function TreeLegend({ forest }: { forest: Forest }) {
 
 type Common = { selected: string | null; onSelect: (key: string) => void };
 type Variant = "super" | "director" | "worker";
-// 유닛 상자 하나. 누르면 옆 칸이 열린다(2D의 유닛과 같은 동작).
+// 유닛 상자 하나. 누르면 옆 칸이 열린다.
 function UnitBox({ cell, variant, sup, lines, selected, onSelect }: Common & { cell: Cell; variant: Variant; sup: string | null; lines?: string[] }) {
   const { unit, x, y, w, h } = cell, on = selected === unit.role, tall = h > 40;
   const rx = variant === "director" ? h / 2 : variant === "super" ? 8 : 6, pick = () => onSelect(unit.role);

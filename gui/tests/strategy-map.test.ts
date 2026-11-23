@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, diffMap, lifeLabel, placeUnits, restartGeneration, runLabel, systemSessions, shortName, iso, visibleUnits, worldLayout, CELL, BASE_GAP, TILE_W, TILE_H } from "../src/strategy-map.ts";
+import { buildMap, lifeLabel, restartGeneration, runLabel, systemSessions, shortName, visibleUnits } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -63,18 +63,6 @@ test("관계표를 모르면 모든 역할이 '관계표 밖' 한 기지에 모�
   assert.deepEqual(map.bases.map((b) => b.id), ["관계표 밖"]);
 });
 
-test("배치: 슈퍼감독 앞줄, 감독 둘째 줄, 작업자는 cols개씩 줄바꿈", () => {
-  const map = buildMap({ hierarchy, rows, live, alerts: null });
-  const { placed, width, depth } = placeUnits(map.bases[0].units, 1);
-  assert.deepEqual(placed.map((p) => [p.unit.role, p.gx, p.gy]), [
-    ["m-슈퍼감독", 0, 0], ["m-감독", 0, 1], ["m-검수자", 0, 2], ["m-작업자", 0, 3],
-  ]);
-  assert.deepEqual([width, depth], [1, 4]);
-  assert.deepEqual(iso(1, 0), { x: TILE_W / 2, y: TILE_H / 2 });
-  assert.equal(shortName("m-작업자", "m-슈퍼감독"), "작업자");
-  assert.equal(shortName("떠돌이", null), "떠돌이");
-});
-
 test("오래된 미확정만 든 역할은 창이 없어도 '창 없음'으로 과장하지 않는다, 감시기·대시보드 세션은 유닛이 아니다", () => {
   const map = buildMap({ hierarchy, rows: [row("r/9", "m-작업자", "stale"), row("r/10", "m-검수자", "stuck")], live: [...live,
     { role: "watch", harness: null, model: null, effort: null, pidState: "match" }, { role: "대시보드", harness: null, model: null, effort: null, pidState: "match" }], alerts: null });
@@ -90,44 +78,6 @@ test("쉬는 작업자만 숨기고 슈퍼감독·감독은 쉬어도 남긴다"
   assert.deepEqual(units.map((u) => [u.role, u.state]), [["m-슈퍼감독", "dead"], ["m-감독", "off"], ["m-작업자", "off"]]);
   assert.deepEqual(visibleUnits(units, false).map((u) => u.role), ["m-슈퍼감독", "m-감독"]);
   assert.equal(visibleUnits(units, true).length, 3);
-});
-
-test("3D 배치: 2D와 같은 칸을 바닥 좌표로, 기지는 x로 늘어서고 창고는 맨 오른쪽", () => {
-  const map = buildMap({ hierarchy, rows, live, alerts: null });
-  const world = worldLayout(map.bases, map.depot, false);
-  assert.deepEqual(world.bases.map((b) => b.base.id), ["m-슈퍼감독", "비서", "관계표 밖"]);
-  const [m, , outside] = world.bases;
-  assert.equal(m.x0, 0);
-  assert.equal(world.bases[1].x0, m.x1 + BASE_GAP, "기지 사이 간격");
-  const at = (role: string) => m.units.find((u) => u.unit.role === role)!;
-  assert.deepEqual([at("m-슈퍼감독").x, at("m-슈퍼감독").z], [CELL / 2, CELL / 2], "슈퍼감독은 맨 안쪽 첫 칸");
-  assert.ok(at("m-감독").z > at("m-슈퍼감독").z && at("m-작업자").z > at("m-감독").z, "감독·작업자 줄은 앞으로");
-  assert.ok(world.depot && world.depot.x > outside.x1, "창고는 마지막 기지 오른쪽");
-  assert.equal(world.size.x, world.depot!.x + CELL / 2);
-  assert.equal(worldLayout(map.bases, 0, false).depot, null, "담당 없는 실행이 없으면 창고도 없다");
-  assert.ok(worldLayout(map.bases, map.depot, true).bases.length >= world.bases.length, "쉬는 역할도 보기를 켜면 기지가 줄지 않는다");
-});
-
-test("모션: 직전 지도와 비교해 창고→유닛·유닛→유닛 이동, 빠진 카드, 상태 변화만 뽑는다", () => {
-  const before = buildMap({ hierarchy, rows, live, alerts: null });
-  assert.deepEqual(diffMap(null, before), [], "처음 그릴 때는 움직이지 않는다");
-  assert.deepEqual(diffMap(before, before), [], "바뀐 게 없으면 움직이지 않는다");
-  const moved = rows.map((r) =>
-    r.key === "r/4" ? row("r/4", "m-작업자", "running") // 창고 → 작업자(발령)
-    : r.key === "r/3" ? row("r/3", "m-작업자", "running") // 검수자 → 작업자(담당 바뀜)
-    : r);
-  const after = buildMap({ hierarchy, rows: [...moved.filter((r) => r.key !== "r/1"), row("r/9", "m-검수자", "running")], live, alerts: null });
-  const events = diffMap(before, after);
-  const flies = events.filter((e) => e.kind === "fly").sort((a, b) => (a.kind === "fly" && b.kind === "fly" ? a.key.localeCompare(b.key) : 0));
-  assert.deepEqual(flies, [
-    { kind: "fly", key: "r/3", from: "m-검수자", to: "m-작업자" },
-    { kind: "fly", key: "r/4", from: null, to: "m-작업자" },
-    { kind: "fly", key: "r/9", from: null, to: "m-검수자" },
-  ], "창고→유닛(발령), 유닛→유닛(담당 바뀜), 새 카드도 창고에서 온 것으로 그린다. 그대로인 카드는 움직이지 않는다");
-  assert.deepEqual(events.filter((e) => e.kind === "leave"), [{ kind: "leave", key: "r/1", from: "m-작업자" }]);
-  const stuck = buildMap({ hierarchy, rows: rows.map((r) => (r.key === "r/3" ? row("r/3", "m-검수자", "stuck") : r)), live, alerts: null });
-  assert.deepEqual(diffMap(before, stuck).filter((e) => e.kind === "state"), [{ kind: "state", role: "m-검수자", from: "running", to: "stuck" }]);
-  assert.equal(diffMap(before, after, 2).length, 2, "한 번에 limit개까지만");
 });
 
 test("옆 칸의 생존·다시 띄우기: 옛 담당자 상태 표와 같은 낱말, 창이 열리고 세대가 있을 때만, 원격 읽기 전용이면 없음", () => {

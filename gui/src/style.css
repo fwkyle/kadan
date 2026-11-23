@@ -391,7 +391,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
  .workspace .toolbar .state-filter { width: 100%; }
  .workspace .toolbar > button { justify-self: end; }
 }
-/* 전략 맵(2026-10-05). 납작한 등각, 바닥은 저채도 한 색, 상태색은 현황판(dashboard-status.mjs)과 같은 값. 색은 여기서만 준다. */
+/* 전략 맵(2026-10-05). 상태색은 현황판(dashboard-status.mjs)과 같은 값. 색은 여기서만 준다. 그림은 아래 나무 보기 하나다(2026-11-23: 2D 등각·3D·2D 모션 스타일은 뺐다). */
 .sm-view .sm-totals { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 10px; font-size: 13px; color: #536159; }
 .sm-view .sm-totals b { color: #202724; font-size: 16px; margin-right: 3px; }
 .sm-view .sm-totals .sm-t-running b { color: #814600; }
@@ -406,53 +406,11 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-dot.sm-s-dead { background: #b3261e; }
 .sm-dot.sm-s-idle { background: #536159; }
 .sm-dot.sm-s-unknown { background: #8a948e; }
-.sm-dot.sm-k-super-dot { background: #c99a2e; border-radius: 2px; }
 .sm-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 @media (min-width: 1100px) { .sm-layout { grid-template-columns: minmax(0, 1fr) 320px; } .sm-side { position: sticky; top: 8px; max-height: calc(100vh - 140px); overflow: auto; } }
 .sm-stage { overflow: auto; background: #f6f8f6; border: 1px solid #dfe6e0; border-radius: 10px; padding: 8px; max-height: 76vh; }
 .sm-svg { display: block; max-width: 100%; height: auto; font-family: var(--ds-font-ui, inherit); }
 @media (max-width: 799px) { .sm-svg { max-width: none; } }
-.sm-plat-top { fill: #e3ebe5; }
-.sm-plat-top.sm-plat-outside { fill: #ece9e2; }
-.sm-plat-left { fill: #c9d6cd; }
-.sm-plat-right { fill: #b7c7bc; }
-.sm-tile { fill: #d7e2da; }
-.sm-shadow { fill: #20272430; }
-.sm-hit { fill: transparent; }
-.sm-unit { cursor: pointer; outline: none; }
-.sm-unit:focus-visible .sm-ring, .sm-unit:focus-visible .sm-shadow { stroke: #2b47a8; stroke-width: 2; }
-.sm-ring { fill: none; stroke: #2b47a8; stroke-width: 2.5; }
-.sm-body, .sm-head { fill: #cbd2cd; }
-.sm-body { fill-opacity: .88; }
-.sm-s-running .sm-body, .sm-s-running .sm-head { fill: #e68a27; }
-.sm-s-stuck .sm-body, .sm-s-stuck .sm-head { fill: #b68625; }
-.sm-s-stale .sm-body, .sm-s-stale .sm-head { fill: #a58a5c; }
-.sm-s-dead .sm-body, .sm-s-dead .sm-head { fill: #b3261e; }
-.sm-s-dead .sm-figure { opacity: .55; }
-.sm-s-idle .sm-body, .sm-s-idle .sm-head { fill: #536159; }
-.sm-s-unknown .sm-body, .sm-s-unknown .sm-head { fill: #8a948e; }
-.sm-s-off .sm-body, .sm-s-off .sm-head { fill: #cbd2cd; }
-.sm-crown { fill: #c99a2e; }
-.sm-flag line { stroke: #536159; stroke-width: 1.5; }
-.sm-flag path { fill: #21684e; }
-.sm-badge circle { fill: #fff; }
-.sm-badge text { font-size: 11px; font-weight: 800; text-anchor: middle; fill: #202724; }
-.sm-s-dead .sm-badge circle { fill: #b3261e; }
-.sm-s-dead .sm-badge text { fill: #fff; }
-.sm-s-stuck .sm-badge circle { fill: #b68625; }
-.sm-s-stuck .sm-badge text { fill: #fff; }
-.sm-label { font-size: 11px; text-anchor: middle; fill: #202724; font-weight: 600; }
-.sm-more { font-size: 10px; fill: #536159; font-weight: 700; }
-.sm-base-label { font-size: 12.5px; font-weight: 750; text-anchor: middle; fill: #536159; }
-.sm-c-running .sm-crate-top { fill: #f2b46a; } .sm-c-running .sm-crate-left { fill: #e68a27; } .sm-c-running .sm-crate-right { fill: #c06d14; }
-.sm-c-stuck .sm-crate-top { fill: #d9b25e; } .sm-c-stuck .sm-crate-left { fill: #b68625; } .sm-c-stuck .sm-crate-right { fill: #8c6516; }
-.sm-c-stale .sm-crate-top { fill: #cdb994; } .sm-c-stale .sm-crate-left { fill: #a58a5c; } .sm-c-stale .sm-crate-right { fill: #7e6843; }
-.sm-c-planned .sm-crate-top { fill: #e6eae7; } .sm-c-planned .sm-crate-left { fill: #cbd2cd; } .sm-c-planned .sm-crate-right { fill: #aab3ad; }
-.sm-s-running .sm-figure { animation: sm-bob 1.6s ease-in-out infinite; }
-.sm-s-stuck .sm-badge, .sm-s-dead .sm-badge { animation: sm-blink 1.4s ease-in-out infinite; }
-@keyframes sm-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-@keyframes sm-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .sm-s-running .sm-figure, .sm-s-stuck .sm-badge, .sm-s-dead .sm-badge { animation: none; } }
 .sm-side { background: #fff; border: 1px solid #dfe6e0; border-radius: 10px; padding: 14px 16px; font-size: 13.5px; }
 .sm-side-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 .sm-side-head h2 { font-size: 15px; margin: 0; overflow-wrap: anywhere; }
@@ -466,21 +424,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-cards small { display: block; color: #536159; font-size: 12px; margin-left: 16px; }
 .sm-legend label.sm-toggle { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; cursor: pointer; color: #202724; font-weight: 600; margin: 0; }
 .sm-legend label.sm-toggle input { width: 16px; height: 16px; min-height: 0; margin: 0; flex: none; }
-.sm-depot { cursor: pointer; outline: none; }
-.sm-depot:focus-visible .sm-hit { stroke: #2b47a8; stroke-width: 2; }
 .sm-depot-note { font-size: 12.5px; color: #536159; margin: 8px 0 4px; }
-/* 전략 맵 3D 보기(2026-10-06). 색은 위 2D 규칙을 숨긴 표본(.sm-probe)으로 읽어 쓴다. 바탕은 비워 두어 .sm-stage 색이 비친다. */
-.sm-viewswitch { gap: 0 !important; }
-.sm-viewswitch button { font-size: 12px; padding: 3px 12px; border-radius: 0; }
-.sm-viewswitch button:first-child { border-radius: 999px 0 0 999px; }
-.sm-viewswitch button + button { margin-left: -1px; }
-.sm-viewswitch button:last-child { border-radius: 0 999px 999px 0; }
-.sm-viewswitch button[aria-pressed="true"] { background: #21684e; border-color: #21684e; color: #fff; }
-.sm-probe { position: absolute; width: 0; height: 0; overflow: hidden; }
-.sm-3d { position: relative; container-type: inline-size; }
-.sm-3d-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 6px; font-size: 12px; color: #536159; }
-.sm-3d-hint button { font-size: 12px; padding: 2px 10px; }
-.sm-canvas { width: 100%; touch-action: none; }
 /* 전략 맵 나무 보기(2026-11-23). 상자·선·글자색은 여기서만 준다. 움직임은 없다. */
 .smt-host { min-width: 0; }
 /* 세로 스크롤 막대가 생기고 사라질 때 그림 칸 폭이 바뀌어 그림과 목록이 번갈아 뜨지 않게, 막대 자리를 늘 비워 둔다. */
@@ -570,28 +514,8 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-ask-status { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: #edf0ed; color: #536159; }
 .sm-ask-answered { background: #dcefe5; color: #155c3d; }
 .sm-ask a { font-size: 12.5px; }
-/* 전략 맵 모션(2026-10-07). 바뀐 것만 잠깐 움직인다. 움직임 줄이기 설정이면 모두 끈다. */
-.sm-fly { animation: sm-fly 900ms cubic-bezier(.3,.6,.3,1) both; }
-@keyframes sm-fly {
-  0% { transform: translate(var(--dx), var(--dy)) scale(.7); opacity: 0; }
-  12% { opacity: 1; }
-  50% { transform: translate(calc(var(--dx) / 2), calc(var(--dy) / 2 - 46px)) scale(1.25); }
-  85% { transform: translate(0, 0) scale(1.05); opacity: 1; }
-  100% { transform: translate(0, 0) scale(1); opacity: 0; }
-}
-.sm-leave { animation: sm-leave 1100ms ease-out both; }
-@keyframes sm-leave {
-  0% { transform: translateY(0) scale(1); opacity: 1; }
-  30% { transform: translateY(-6px) scale(1.2); opacity: 1; }
-  100% { transform: translateY(-30px) scale(.8); opacity: 0; }
-}
-.sm-leave-check { font-size: 13px; font-weight: 800; text-anchor: middle; fill: #158064; }
-.sm-pulse { fill: none; stroke-width: 2.5; transform-box: fill-box; transform-origin: center; animation: sm-pulse 1400ms ease-out both; }
-@keyframes sm-pulse { 0% { transform: scale(.6); opacity: .95; } 100% { transform: scale(2.3); opacity: 0; } }
-.sm-p-running { stroke: #e68a27; } .sm-p-stuck { stroke: #b68625; } .sm-p-stale { stroke: #a58a5c; } .sm-p-dead { stroke: #b3261e; }
-.sm-p-idle { stroke: #536159; } .sm-p-unknown { stroke: #8a948e; } .sm-p-off { stroke: #aab3ad; }
+/* 요약 숫자 굴림(2026-10-07): 바뀐 숫자만 잠깐 색이 바뀐다. */
 .sm-view .sm-totals b.rolling, b.rolling { color: #2b47a8; }
-@media (prefers-reduced-motion: reduce) { .sm-motion { display: none; } }
 /* 화면 모션(2026-10-07). 바뀐 줄만 한 번 깜빡이고(data-fresh), 다른 화면으로 옮길 때 본문이 살짝 겹쳐 넘어간다. */
 .st-num b, .dw-decision-count b { font-weight: inherit; }
 .is-fresh, tr.is-fresh > td { animation: fresh-flash 1.8s ease-out; }
@@ -666,12 +590,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
   background-position: left top, left top, right top, right top, left bottom, left bottom, right bottom, right bottom;
   background-repeat: no-repeat;
 }
-:root[data-skin="space"] :is(.toast, .decision-toast, .recommendation-badge, .sm-viewswitch button[aria-pressed="true"]) { color: rgb(240, 246, 255); }
-:root[data-skin="space"] .sm-badge circle { fill: rgb(225, 235, 255); }
-:root[data-skin="space"] .sm-badge text { fill: rgb(20, 30, 50); }
-:root[data-skin="space"] .sm-s-dead .sm-badge circle { fill: rgb(220, 60, 50); }
-:root[data-skin="space"] .sm-s-stuck .sm-badge circle { fill: rgb(225, 160, 40); }
-:root[data-skin="space"] :is(.sm-s-dead, .sm-s-stuck) .sm-badge text { fill: rgb(255, 255, 255); }
+:root[data-skin="space"] :is(.toast, .decision-toast, .recommendation-badge) { color: rgb(240, 246, 255); }
 :root[data-skin="space"] .pulse { background: rgb(90, 230, 190); }
 :root[data-skin="space"] .pulse-slow { background: rgb(90, 170, 210); }
 :root[data-skin="space"] .pulse-still { background: rgb(110, 125, 150); }
@@ -704,13 +623,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
   --kc-f9fbf9: rgba(120, 170, 255, .05); --kc-eef3ef: rgba(120, 170, 255, .05); --kc-e5ebe4: rgba(110, 170, 255, .1);
   --kc-dcefe5: rgba(110, 170, 255, .1); --kc-dcf1e2: rgba(110, 170, 255, .1);
 }
-/* 우주 테마의 전략 맵: 기지 판을 남색 정거장 판으로. */
-:root[data-skin="space"] .sm-plat-top { fill: rgb(22, 36, 72); stroke: rgba(120, 200, 255, .35); stroke-width: 1; }
-:root[data-skin="space"] .sm-plat-top.sm-plat-outside { fill: rgb(36, 30, 62); }
-:root[data-skin="space"] .sm-plat-left { fill: rgb(14, 24, 52); }
-:root[data-skin="space"] .sm-plat-right { fill: rgb(9, 17, 40); }
-:root[data-skin="space"] .sm-tile { fill: rgba(110, 170, 255, .13); }
-:root[data-skin="space"] .sm-shadow { fill: rgba(0, 0, 0, .45); }
+/* 우주 테마의 전략 맵 바탕. */
 :root[data-skin="space"] .sm-stage { background-color: rgba(6, 12, 30, .55); }
 /* 활동 선 그래프(2026-10-07, 모든 테마). */
 .spark { display: inline-block; vertical-align: middle; margin-left: 6px; overflow: visible; }
@@ -734,15 +647,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .radar-stale { background: rgb(170, 150, 120); }
 @keyframes radar-blip { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.7); } }
 .radar-count { position: absolute; right: 6px; bottom: 3px; font: 10px ui-monospace, Menlo, monospace; color: rgb(150, 205, 255); }
-/* 우주 지도의 우주선. */
-.sm-ship .sm-window { fill: rgb(200, 235, 255); }
-.sm-ship .sm-wing { fill: rgb(70, 90, 130); }
-.sm-engine { fill: rgba(120, 210, 255, .85); transform-box: fill-box; transform-origin: center top; animation: sm-engine .35s ease-in-out infinite alternate; }
-@keyframes sm-engine { from { transform: scaleY(.7); opacity: .6; } to { transform: scaleY(1.25); opacity: 1; } }
-.sm-debris { transform-box: fill-box; transform-origin: center; animation: sm-debris 18s linear infinite; }
-.sm-s-dead .sm-debris .sm-body { fill: rgb(110, 120, 140); }
-@keyframes sm-debris { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .radar-sweep, .radar-blip, .sm-engine, .sm-debris { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .radar-sweep, .radar-blip { animation: none; } }
 .decision-linked { border: 1px solid #d8ded8; border-radius: 10px; padding: 14px 18px; margin: 12px 0; scroll-margin-top: 12px; background: #f0f6f2; }
 /* 감독별 칸반(보기 전용). 한국어 줄바꿈 기준은 이 화면 안에서만 적용한다. */
 .kb-view { word-break: keep-all; overflow-wrap: break-word; }
