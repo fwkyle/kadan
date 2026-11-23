@@ -12,13 +12,10 @@ const CHUNK_ERROR = new RegExp(
   "i",
 );
 
-// 이 탭에서 이미 자동 새로 읽기를 해 본 원인 목록(2026-11-23 검수 수정). 시간이 아니라 원인으로 반복을 막는다:
-// 같은 원인(같은 조각 주소)이 새로 읽은 뒤에도 또 나오면 실패 간격이 얼마든 다시 새로 읽지 않는다.
-// 원인이 다르면(그 사이 다시 빌드해 생긴 별도 조각) 한 번 더 할 수 있다. 원인마다 한 번이라 반복이 끝없이 이어지지 않는다.
-export const TRIED_KEY = "kadan-chunk-reload-tried";
-// 한 탭에서 기억할 원인 수 상한. 넘으면 더는 자동으로 새로 읽지 않는다(끝없는 반복 쪽으로 실패하지 않는다).
-export const TRIED_MAX = 20;
-const CAUSE_MAX = 300;
+// 자동 새로 읽기는 "지금 실행 중인 화면 빌드" 하나로 반복을 막는다(2026-11-23 3라운드 [kyle] 결정).
+// 이 탭에서 이 빌드로 이미 새로 읽었는데 또 조각 못 읽음이면 서버가 같은 빌드를 주는 것(조각이 정말 없음)이라 멈춘다.
+// 새 배포 뒤에는 빌드 표시가 바뀌므로 다시 한 번 복구된다. 오류 문구·조각 주소·화면으로 원인을 나누지 않는다.
+export const BUILD_MARK_KEY = "kadan-chunk-reload-build";
 
 export type MarkStore = { get(): string | null; set(value: string): void };
 
@@ -26,37 +23,26 @@ export function isChunkLoadError(message: string | null | undefined): boolean {
   return typeof message === "string" && CHUNK_ERROR.test(message);
 }
 
-// 원인 이름: 오류 문구(크롬·파이어폭스는 조각 주소가 들어 있다) + 화면 범위. 사파리는 문구에 주소가 없어
-// 화면 범위(보던 화면의 주소 해시)로 원인을 나눈다.
-export function causeKey(message: string, scope = ""): string {
-  return (scope + "|" + message).slice(0, CAUSE_MAX);
+// 빌드 표시: 이 모듈이 담긴 파일 이름(빌드마다 해시가 바뀌는 `index-XXXX.js`). 파일 이름을 못 읽으면 주소 문자열 그대로를
+// 쓴다. 같은 빌드면 어느 경우든 같은 값이다.
+export function buildIdOf(moduleUrl: string): string {
+  const name = moduleUrl.split(/[?#]/)[0].split("/").pop();
+  return name || moduleUrl;
 }
 
-// 저장된 글자를 원인 목록으로 읽는다. 표시가 없으면 빈 목록, 손상됐으면 null(읽을 수 없음).
-export function parseTried(raw: string | null): string[] | null {
-  if (raw === null) return [];
-  try {
-    const list: unknown = JSON.parse(raw);
-    return Array.isArray(list) && list.every((item) => typeof item === "string") ? list : null;
-  } catch {
-    return null;
-  }
-}
-
-// 조각 못 읽음이고 이 원인으로 아직 새로 읽은 적이 없으면 원인을 먼저 적은 뒤 새로 읽는다. 새로 읽었으면 true.
-// 저장소를 읽거나 쓰지 못하거나 표시가 손상됐으면 새로 읽지 않는다: 표시를 못 남기면 새로 읽은 뒤에도 같은 오류가 반복될 수 있다.
+// 조각 못 읽음이고 저장된 표시가 지금 빌드 표시와 다르면(없음·다른 빌드·손상·남이 쓴 값 포함) 지금 표시를 먼저 저장한 뒤
+// 새로 읽는다. 다른 모양의 값은 "다름"으로 봐 최대 한 번만 새로 읽고 곧 지금 표시로 덮이므로 반복이 아니다.
+// 저장소를 읽거나 쓰지 못하면 새로 읽지 않는다: 표시를 못 남기면 새로 읽은 뒤에도 같은 오류가 반복될 수 있다.
 export function autoReloadOnChunkError(
   message: string | null | undefined,
   store: MarkStore,
   reload: () => void,
-  scope = "",
+  build: string,
 ): boolean {
   if (typeof message !== "string" || !isChunkLoadError(message)) return false;
   try {
-    const tried = parseTried(store.get());
-    const key = causeKey(message, scope);
-    if (tried === null || tried.length >= TRIED_MAX || tried.includes(key)) return false;
-    store.set(JSON.stringify([...tried, key]));
+    if (store.get() === build) return false;
+    store.set(build);
   } catch {
     return false;
   }
@@ -66,10 +52,10 @@ export function autoReloadOnChunkError(
 
 // 실제 화면용 저장소: 탭 단위(sessionStorage). 접근 자체가 막혀 있으면 던지므로 호출 쪽 try/catch가 받는다.
 export const tabMarkStore: MarkStore = {
-  get: () => sessionStorage.getItem(TRIED_KEY),
-  set: (value) => sessionStorage.setItem(TRIED_KEY, value),
+  get: () => sessionStorage.getItem(BUILD_MARK_KEY),
+  set: (value) => sessionStorage.setItem(BUILD_MARK_KEY, value),
 };
 
 export function autoReloadChunkError(message: string | null | undefined): boolean {
-  return autoReloadOnChunkError(message, tabMarkStore, () => location.reload(), location.hash);
+  return autoReloadOnChunkError(message, tabMarkStore, () => location.reload(), buildIdOf(import.meta.url));
 }
