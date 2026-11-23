@@ -115,7 +115,8 @@ test('명시한 headless에서 agy가 등록돼 있으면 codex도 부르지 않
 
 test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답·advice·영수증이 같은 글을 가리킨다. 세션은 끄지 않고 남기며(키 0회) 정리 명령이 끈다. 기본 소켓 호출은 0회다', {skip}, async t => {
   const f = fixture(t);
-  const note = path.join(f.home, 'note.md'); fs.writeFileSync(note, '첨부 내용');
+  // 파일명이 비밀 가림 패턴(Bearer …)에 걸려도 첨부 경로는 가리지 않고 원래 경로 그대로 들어간다(가짜 이름, 비밀 없음).
+  const note = path.join(f.home, 'Bearer note_abcdefghijklmnop.md'); fs.writeFileSync(note, '첨부 내용');
   const r = await f.run({file: note, timeout: '60'});
   assert.deepEqual(r.answers.map(a => [a.model, a.reason, a.status, a.mode]), [['gpt-6-astra', 'ok', 'ok', 'interactive'], ['gpt-6-sol', 'ok', 'ok', 'interactive']]);
   const advices = f.advices();

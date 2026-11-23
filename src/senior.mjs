@@ -116,8 +116,10 @@ export function resolveRepoReadDir(repoPath) {
 // session: 대화형 길({token, repoDir?, answer?}). 끝 표지는 조각으로만 적는다(완성된 표지는 이 글에 없다).
 //  - codex(answer 없음): 작업 폴더가 저장소가 아니므로 저장소 절대경로(session.repoDir)와 안내 파일 읽기를 적고 답을 작업 폴더의 result.txt에 쓰게 한다.
 //  - agy(answer: 'screen'): 파일을 쓸 수 없으므로 답을 화면에 쓰고 마지막 줄에 끝 표지만 단독으로 쓰게 한다. 저장소 문구는 readsRepo·repoDir를 따른다.
-export function composeAdvicePrompt({question, card, attachments, readsRepo = true, repoDir = null, session = null}) {
-  return [
+// scrub: 질문·카드 본문을 포함한 앞부분에만 적용한다. 첨부 경로 목록은 가리지 않는다 — 경로는 파일 이름이지 비밀 내용이 아니고,
+// 가림이 경로를 바꾸면 카단이 존재를 확인한 경로와 시니어가 받는 경로가 달라진다(2026-11-23 검수, PR #467).
+export function composeAdvicePrompt({question, card, attachments, readsRepo = true, repoDir = null, session = null, scrub = text => text}) {
+  const head = [
     '당신은 시니어다. 감독이 카드 하나의 작업 결과를 두고 결정할 부분을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
     session && session.answer !== 'screen'
       ? `그 카드의 저장소는 ${session.repoDir} 이다(지금 작업 폴더는 저장소가 아니다). 먼저 그 저장소의 안내 파일(AGENTS.md, 없으면 CLAUDE.md)을 읽고, ` +
@@ -150,8 +152,9 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
     ] : []),
     '--- 질문 ---', question.trim(),
     `--- 카드 ${card.key} (${card.title ?? ''}) ---`, card.body ?? '',
-    ...(attachments.length ? ['--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---', ...attachments.map(a => a.file)] : []),
   ].join('\n');
+  const paths = attachments.length ? ['--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---', ...attachments.map(a => a.file)] : [];
+  return [scrub(head), ...paths].join('\n');
 }
 
 // 영수증 아래에 붙이는 한 줄. 남긴 세션은 감시기·대시보드에 보이지 않으므로(역할이 아니다) 여기서 정리 명령을 알린다.
@@ -275,8 +278,9 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     // 대화형: 화면에는 한 줄만 넣고 프롬프트 전체는 파일로 읽힌다. 끝 표지의 마지막 조각은 호출마다 새로 뽑는다.
     const token = interactive ? randomBytes(4).toString('hex') : null;
     // 카드 글은 외부 서비스로 나가므로 웹훅 주소·토큰 모양을 가린 뒤 보낸다(docs/runner-settings.md).
-    const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments, readsRepo: !onScreen || readDir != null, repoDir: readDir,
-      session: !interactive ? null : onScreen ? {token, answer: 'screen'} : {repoDir: fs.realpathSync(card.repoPath), token}}));
+    // 가림은 질문·카드 본문에만 건다. 첨부 경로 목록은 원래 경로 그대로 붙는다.
+    const prompt = composeAdvicePrompt({question, card, attachments, readsRepo: !onScreen || readDir != null, repoDir: readDir, scrub: scrubForAI,
+      session: !interactive ? null : onScreen ? {token, answer: 'screen'} : {repoDir: fs.realpathSync(card.repoPath), token}});
     if (interactive && Buffer.byteLength(prompt) > EXEC_PROMPT_LIMIT_BYTES) throw new Error(`프롬프트가 너무 크다(${Buffer.byteLength(prompt)}B > ${EXEC_PROMPT_LIMIT_BYTES}B) — 질문·카드 본문을 줄여라(첨부는 내용이 아니라 경로만 들어간다)`);
     return {index, base, value, onScreen, readDir, prompt, token, adviceId: randomUUID(), opened: {tab: 'skipped'}, tab: {tab: 'skipped'}, done: false,
       dir: path.join(home, 'advice', askId, `${index + 1}-${slug(value.runner)}-${slug(value.model)}`)};

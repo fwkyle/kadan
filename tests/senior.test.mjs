@@ -128,6 +128,19 @@ test('첨부는 경로만 입력에 넣는다: 64KB 넘는 파일·6개 이상�
   assert.ok(Buffer.byteLength(input) < 16 * 1024, '입력 크기는 첨부 크기와 무관하다');
 });
 
+test('첨부 경로는 비밀 가림을 거치지 않는다: 가림 패턴에 걸리는 파일명도 원래 경로 그대로 들어가고, 질문·카드의 가짜 토큰은 여전히 가려진다', async () => {
+  const f = fixture();
+  const named = path.join(f.home, 'Bearer release_notes_abcdefghijklmnop.md'); fs.writeFileSync(named, '가짜 파일 — 비밀 없음');
+  const fakeToken = 'Bearer abcdefghijklmnopqrstuvwx'; // 가짜 값
+  const r = await f.run(['qa/card-a'], {question:`이 토큰 ${fakeToken}이 뭐지?`, file:named}, {spawn:f.spawn()});
+  assert.equal(r.answers[0].reason, 'ok');
+  const input = f.calls[0].settings.input;
+  assert.ok(input.endsWith(`--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---\n${named}`), '경로가 그대로 있다');
+  assert.ok(!input.includes(fakeToken) && input.includes('이 토큰 [가림]이 뭐지?'), '질문의 가짜 토큰은 가려진다');
+  assert.deepEqual(f.advices()[0].files, [named]);
+  assert.equal(fs.readFileSync(path.join(r.answers[0].evidencePath, 'input.txt'), 'utf8'), input);
+});
+
 test('입력 조립은 질문·카드·첨부 경로 순서이고 자료 구분선이 있다. 첨부가 있으면 저장소 밖도 읽되 고치지 말라는 지시가 자료 앞에 들어간다', () => {
   const prompt = composeAdvicePrompt({question:'Q', card:{key:'r/c', title:'T', body:'B'}, attachments:[{file:'/a'}, {file:'/b'}]});
   assert.ok(prompt.endsWith('--- 질문 ---\nQ\n--- 카드 r/c (T) ---\nB\n--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---\n/a\n/b'));
