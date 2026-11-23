@@ -258,3 +258,57 @@ test('감독 전용 오류(SSE·압축)가 빈 입력창 아래에 보이면 정
  }
 });
 
+// 도구 줄 timeout 안 정기 후보 억제(2026-11-23). 화면은 실측의 끝 몇 줄만 남긴 합성 화면이다.
+const toolScreen=(tool,spinner='✶ Processing… (55s · ↓ 3.7k tokens)',body='⏺ Bash(sleep 100)')=>`${body}\n  ⎿  ${tool}\n\n${spinner}\n\n────────\n❯ \n────────\n  ? for shortcuts\n`;
+const TOOL_4M=toolScreen('Running… (7s · timeout 4m)'),TOOL_6M40=toolScreen('Running… (32s · timeout 6m 40s)','✳ Warping… (6m 31s · ↓ 20.0k tokens)');
+const TOOL_NO_T=toolScreen('Running…','✢ Swirling… (2m 41s · ↓ 7.5k tokens)');
+// 1시간 직전에 처음 본 도구 줄: 그 시각을 기준으로 T+1분까지 센다.
+const seenAt=()=>SUPERVISOR_CHECK_MS-30_000;
+test('도구 줄 timeout 안(T+1분)에는 1시간이 지나도 정기 후보를 내지 않고 넘으면 지금처럼 낸다',()=>{
+ for(const [screen,timeoutMs] of [[TOOL_4M,4*60_000],[TOOL_6M40,400_000]]){
+  const f=health(),first=seenAt();
+  f.check(0,'하위 결과를 기다리는 중');
+  assert.equal(f.check(first,screen).candidate,undefined);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate,undefined);
+  const until=first+timeoutMs+60_000;
+  assert.equal(f.check(until-1,screen).candidate,undefined);
+  const late=f.check(until,screen).candidate;
+  assert.equal(late.input.check,'hourly');assert.equal(late.role,'boss');
+ }
+});
+test('도구 줄의 timeout을 못 읽으면(⎿ Running…만 있음) 지금처럼 후보를 낸다',()=>{
+ const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),TOOL_NO_T);
+ assert.equal(f.check(SUPERVISOR_CHECK_MS,TOOL_NO_T).candidate.input.check,'hourly');
+});
+test('도구 줄이 있어도 오류 줄이 있으면 억제하지 않고 오류 경로가 그대로다',()=>{
+ const error='Error running remote compact task: stream disconnected before completion: idle timeout waiting for SSE\nReconnecting... 1/2';
+ const screen=`${error}\n${TOOL_4M}`;
+ const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
+ assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly');
+ // 오류가 5분 이어지면 조기 확인도 지금처럼 나간다.
+ const e=health();e.check(0,screen);
+ assert.equal(e.check(SUPERVISOR_ERROR_MS,screen).candidate.input.check,'persistent-error');
+});
+test('응답 본문·우편 인용 속의 도구 줄 모양은 상태 구역이 아니라서 억제하지 않는다',()=>{
+ const quoted=`카드 본문 인용:\n  ⎿  Running… (7s · timeout 4m)\n✶ Processing… (55s · ↓ 3.7k tokens)\n이 줄들은 우편 인용이다.\n\n────────\n❯ \n────────\n`;
+ // 도구 줄이 스피너 바로 위가 아닌 경우(그 사이에 글이 있다)와 스피너 줄이 입력창 바로 위가 아닌 경우.
+ const apart=`  ⎿  Running… (7s · timeout 4m)\n본문 한 줄\n✶ Processing… (55s · ↓ 3.7k tokens)\n\n❯ \n`;
+ for(const screen of [quoted,apart]){
+  const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly');
+ }
+});
+test('도구 줄 글자가 바뀌면 처음 본 시각부터 다시 세고 같은 줄이 이어지는 동안은 늘리지 않는다',()=>{
+ const f=health(),first=seenAt(),second=first+4*60_000;
+ const next=toolScreen('Running… (3m 59s · timeout 4m)');
+ f.check(0,'하위 결과를 기다리는 중');f.check(first,TOOL_4M);
+ // 첫 줄의 한도(first+5분)가 지났어야 할 때 줄이 바뀌면 새로 센다.
+ assert.equal(f.check(second,next).candidate,undefined);
+ assert.equal(f.check(first+5*60_000+1,next).candidate,undefined);
+ assert.equal(f.check(second+5*60_000-1,next).candidate,undefined);
+ assert.equal(f.check(second+5*60_000,next).candidate.input.check,'hourly');
+ // 도구 줄이 사라졌다가 같은 글자가 다시 나타나도 새로 처음 본 것이다.
+ const g=health();g.check(0,'하위 결과를 기다리는 중');g.check(first,TOOL_4M);
+ g.check(second,'하위 결과를 기다리는 중');g.check(second+60_000,TOOL_4M);
+ assert.equal(g.check(second+5*60_000,TOOL_4M).candidate,undefined);
+});
