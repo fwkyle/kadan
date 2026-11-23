@@ -1,9 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { KIND_LABEL, shortName, STATE_LABEL, systemSessions, type MapModel, type Unit, type UnitState } from "../strategy-map";
+import { KIND_LABEL, STATE_LABEL, systemSessions, type MapModel, type Unit, type UnitState } from "../strategy-map";
 import type { LiveSession } from "../status-band";
 import {
-  buildForest, clip, defaultOpen, depotLine, fitText, flatten, harnessName, isBranch, isOpen, isRunning, layoutTree, LONE_KEY, shapeOf, stateCounts, TREE,
+  arrange, buildForest, clip, depotLine, fitText, flatten, harnessName, isBranch, isOpen, isRunning, layoutTree, LONE_KEY, shapeOf, staleKey, stateCounts, TREE,
   type Box, type Cell, type Count, type Forest, type Group, type MoreCell, type TreeNode,
 } from "../strategy-tree";
 
@@ -50,32 +50,35 @@ export function TreeLegend({ forest }: { forest: Forest }) {
 
 type Common = { selected: string | null; onSelect: (key: string) => void };
 type Variant = "super" | "director" | "worker";
-// 유닛 상자 하나. 누르면 옆 칸이 열린다.
-function UnitBox({ cell, variant, sup, lines, selected, onSelect }: Common & { cell: Cell; variant: Variant; sup: string | null; lines?: string[] }) {
-  const { unit, x, y, w, h } = cell, on = selected === unit.role, tall = h > 40;
-  const rx = variant === "director" ? h / 2 : variant === "super" ? 8 : 6, pick = () => onSelect(unit.role);
-  const name = variant === "super" ? unit.role : shortName(unit.role, sup);
-  const reserve = variant === "super" && lines ? 54 : 34; // 판 상자는 접기 단추 자리를 비운다
-  const textY = lines ? y + h / 2 - 6 : y + (tall ? 16 : 14);
+// 글자 덩어리(이름 n줄 + 아래 줄들)를 칸 세로 가운데에 놓을 때 첫 줄의 기준선.
+const firstLine = (box: Box, lines: number) => box.y + (box.h - lines * TREE.LINE) / 2 + 10;
+// 유닛 상자 하나. 누르면 옆 칸이 열린다. 이름은 배치 계산이 나눈 줄 그대로 그린다(전체 이름은 툴팁·읽기 이름에).
+// lines가 있으면 판 상자다(상태 줄 아래에 유닛 수 줄, 오른쪽 위에 접기 단추).
+function UnitBox({ cell, variant, lines, selected, onSelect }: Common & { cell: Cell; variant: Variant; lines?: string[] }) {
+  const { unit, x, y, w, h, name } = cell, on = selected === unit.role, pick = () => onSelect(unit.role);
+  const rx = variant === "director" ? Math.min(h / 2, 16) : variant === "super" ? 8 : 6;
+  const tail = lines ?? [unitLine(unit)], first = firstLine(cell, name.length + tail.length), tx = x + (lines ? 29 : 27);
   return <g className={`smt-unit smt-${variant}${on ? " smt-on" : ""}`} role="button" tabIndex={0} aria-label={unitTitle(unit)} aria-pressed={on}
     onClick={pick} onKeyDown={press(pick)}>
     <title>{unitTitle(unit)}</title>
     <rect className="smt-frame" x={x} y={y} width={w} height={h} rx={rx} />
-    <ShapeMark harness={harnessName(unit)} state={unit.state} cx={x + (lines ? 16 : 14)} cy={lines ? y + h / 2 - 10 : y + h / 2} r={5.5} />
-    <text className="smt-t1" x={x + (lines ? 29 : 27)} y={textY}>{fitText(name, w - reserve, 11.5)}</text>
-    {(lines ?? [unitLine(unit)]).map((line, i) => <text key={i} className="smt-t2" x={x + (lines ? 29 : 27)} y={lines ? textY + 14 + i * 13 : y + (tall ? 30 : 26)}>
+    <ShapeMark harness={harnessName(unit)} state={unit.state} cx={x + (lines ? 16 : 14)} cy={lines ? first - 4 : y + h / 2} r={5.5} />
+    {name.map((line, i) => <text key={i} className="smt-t1" x={tx} y={first + i * TREE.LINE}>{line}</text>)}
+    {tail.map((line, i) => <text key={i} className="smt-t2" x={tx} y={first + (name.length + i) * TREE.LINE}>
       {fitLine(line, STATE_LABEL[unit.state], w - (lines ? 36 : variant === "director" ? 40 : 30))}</text>)}
     {on && <rect className="smt-sel" x={x - 3} y={y - 3} width={w + 6} height={h + 6} rx={rx + 2} />}
   </g>;
 }
-function MoreBox({ cell, onMore }: { cell: MoreCell; onMore: (key: string) => void }) {
-  const label = `+${cell.units.length} 더 보기`, names = cell.units.map((u) => u.role).join(", "), run = () => onMore(cell.key);
-  return <g className="smt-more" role="button" tabIndex={0} aria-label={`${label}: ${names}`} onClick={run} onKeyDown={press(run)}>
+// 묶음 칸: "+N 더 보기"(넘친 작업자·검수자)와 "오래된 미확정 N". 누르면 그 자리에 펼친다.
+function MoreBox({ cell, label, stale, onMore }: { cell: MoreCell; label: string; stale?: boolean; onMore: (key: string) => void }) {
+  const names = cell.units.map((u) => u.role).join(", "), run = () => onMore(cell.key);
+  return <g className={stale ? "smt-stale" : "smt-more"} role="button" tabIndex={0} aria-label={`${label}: ${names}`} onClick={run} onKeyDown={press(run)}>
     <title>{`${label}: ${names}`}</title>
     <rect className="smt-frame" x={cell.x} y={cell.y} width={cell.w} height={cell.h} rx={6} />
     <text className="smt-t1" x={cell.x + cell.w / 2} y={cell.y + cell.h / 2 + 4} textAnchor="middle">{label}</text>
   </g>;
 }
+const moreLabel = (n: number) => `+${n} 더 보기`, staleLabel = (n: number) => `${STATE_LABEL.stale} ${n}`;
 function FoldMark({ box, open, label, onToggle }: { box: Box; open: boolean; label: string; onToggle: () => void }) {
   const x = box.x + box.w - 28, y = box.y + 4;
   return <g className="smt-fold" role="button" tabIndex={0} aria-expanded={open} aria-label={`${label} 하위 역할`} onClick={onToggle} onKeyDown={press(onToggle)}>
@@ -88,15 +91,15 @@ type TreeProps = Common & {
   forest: Forest; model: MapModel; sessions: LiveSession[] | null; width: number;
   fold: Record<string, boolean>; expanded: ReadonlySet<string>; onFold: (key: string, open: boolean) => void; onMore: (key: string) => void; depotKey: string;
 };
-function TreeSvg({ forest, model, sessions, width, fold, expanded, selected, onSelect, onFold, onMore, depotKey }: TreeProps) {
-  const T = TREE, layout = layoutTree(forest, { width, fold, expanded, selected, depot: model.depot, system: sessions?.length ?? 0 });
+export function TreeSvg({ forest, model, sessions, width, fold, expanded, selected, onSelect, onFold, onMore, depotKey }: TreeProps) {
+  const T = TREE, layout = layoutTree(forest, { width, fold, expanded, depot: model.depot, system: sessions?.length ?? 0 });
   const W = layout.width, common = { selected, onSelect }, pickDepot = () => onSelect(depotKey);
   const rule = (y: number) => <line className="smt-rule" x1={0} x2={W} y1={y} y2={y} />;
   return <svg className="sm-svg smt-svg" width={W} height={layout.height} viewBox={`0 0 ${W} ${layout.height}`} role="group" aria-label="판과 역할 나무">
     <text className="smt-hd" x={0} y={16}>{KIND_LABEL.super}</text><text className="smt-hd" x={T.DX} y={16}>{KIND_LABEL.director}</text>
     <text className="smt-hd" x={T.CX} y={16}>{KIND_LABEL.worker}</text>{rule(24)}
-    {layout.groups.map(({ group, open, box, counts, running, rows }) => {
-      const midY = box.y + box.h / 2, total = `유닛 ${group.units.length}${running ? ` · 작업중 ${running}` : ""}`;
+    {layout.groups.map(({ group, open, box, name, counts, running, rows }) => {
+      const midY = box.y + box.h / 2, total = `유닛 ${group.units.length}${running ? ` · 작업중 ${running}` : ""}`, first = firstLine(box, name.length + 1);
       return <g key={group.id} className="smt-group">
         {rows.map((row) => {
           const dir = row.dir, from = dir ? dir.x : T.CX - 24, bend = dir ? 12 : 30;
@@ -104,18 +107,21 @@ function TreeSvg({ forest, model, sessions, width, fold, expanded, selected, onS
           return <g key={row.key}>
             {up?.dir ? <path className="smt-link" d={`M${up.dir.x + 10},${up.dir.y + up.dir.h} V${row.mid} H${from}`} />
               : <path className="smt-link" d={`M${box.w},${midY} C${box.w + bend},${midY} ${from - bend},${row.mid} ${from},${row.mid}`} />}
-            {dir && (row.workers.length > 0 || row.more) && <g className="smt-arrow">
+            {dir && (row.workers.length > 0 || row.old.length > 0 || row.more || row.stale) && <g className="smt-arrow">
               <line x1={dir.x + dir.w} y1={row.mid} x2={T.CX - 6} y2={row.mid} />
               <polygon points={`${T.CX - 6},${row.mid - 4} ${T.CX},${row.mid} ${T.CX - 6},${row.mid + 4}`} />
               <text className="smt-t2" x={(dir.x + dir.w + T.CX) / 2 - 10} y={row.mid - 4}>지시</text></g>}
-            {dir && <UnitBox cell={dir} variant="director" sup={group.root?.role ?? null} {...common} />}
-            {row.workers.map((cell) => <UnitBox key={cell.unit.role} cell={cell} variant="worker" sup={group.root?.role ?? null} {...common} />)}
-            {row.more && <MoreBox cell={row.more} onMore={onMore} />}
+            {dir && <UnitBox cell={dir} variant="director" {...common} />}
+            {row.workers.map((cell) => <UnitBox key={cell.unit.role} cell={cell} variant="worker" {...common} />)}
+            {row.more && <MoreBox cell={row.more} label={moreLabel(row.more.units.length)} onMore={onMore} />}
+            {row.old.map((cell) => <UnitBox key={cell.unit.role} cell={cell} variant="worker" {...common} />)}
+            {row.stale && <MoreBox cell={row.stale} label={staleLabel(row.stale.units.length)} stale onMore={onMore} />}
           </g>;
         })}
-        {group.root ? <UnitBox cell={{ unit: group.root, ...box }} variant="super" sup={null} lines={[unitLine(group.root), total]} {...common} />
-          : <g className="smt-unit smt-super smt-outside"><rect className="smt-frame" x={box.x} y={box.y} width={box.w} height={box.h} rx={8} />
-            <text className="smt-t1" x={14} y={midY - 2}>{fitText(group.label, box.w - 44, 11.5)}</text><text className="smt-t2" x={14} y={midY + 12}>{total}</text></g>}
+        {group.root ? <UnitBox cell={{ unit: group.root, name, ...box }} variant="super" lines={[unitLine(group.root), total]} {...common} />
+          : <g className="smt-unit smt-super smt-outside"><title>{group.label}</title><rect className="smt-frame" x={box.x} y={box.y} width={box.w} height={box.h} rx={8} />
+            {name.map((line, i) => <text key={i} className="smt-t1" x={14} y={first + i * T.LINE}>{line}</text>)}
+            <text className="smt-t2" x={14} y={first + name.length * T.LINE}>{total}</text></g>}
         <FoldMark box={box} open={open} label={group.label} onToggle={() => onFold(group.id, !open)} />
         {!open && counts.map((c, i) => <g key={c.state} className="smt-count" transform={`translate(${T.DX + i * 44} ${midY})`}>
           <title>{STATE_LABEL[c.state]}</title><circle className={"smt-shape sm-s-" + c.state} r={5} cx={5} /><text className="smt-t1" x={15} y={4}>{c.n}</text></g>)}
@@ -123,8 +129,8 @@ function TreeSvg({ forest, model, sessions, width, fold, expanded, selected, onS
     })}
     {layout.lone && <g className="smt-lone">
       <text className="smt-hd" x={0} y={layout.lone.y + 10}>하위 역할 없는 슈퍼감독 {layout.lone.total}</text>{rule(layout.lone.y + 18)}
-      {layout.lone.cells.map((cell) => <UnitBox key={cell.unit.role} cell={cell} variant="super" sup={null} {...common} />)}
-      {layout.lone.more && <MoreBox cell={layout.lone.more} onMore={onMore} />}
+      {layout.lone.cells.map((cell) => <UnitBox key={cell.unit.role} cell={cell} variant="super" {...common} />)}
+      {layout.lone.more && <MoreBox cell={layout.lone.more} label={moreLabel(layout.lone.more.units.length)} onMore={onMore} />}
     </g>}
     {layout.depot && <g className={"smt-depot" + (selected === depotKey ? " smt-on" : "")} role="button" tabIndex={0} aria-pressed={selected === depotKey}
       aria-label={`발령 전 창고 · 담당이 아직 없는 실행(진행 전·일시정지) ${model.depot}건`} onClick={pickDepot} onKeyDown={press(pickDepot)}>
@@ -144,12 +150,13 @@ function TreeSvg({ forest, model, sessions, width, fold, expanded, selected, onS
         {sessions === null ? "세션 상태를 지금 알 수 없습니다." : "열린 기반 세션(감시기·대시보드)이 없습니다."}</text>}
       {(sessions ?? []).map((s, i) => { const c = layout.system.cells[i]; return <g key={s.role}><title>{s.role}</title>
         <rect className="smt-frame" x={c.x} y={c.y} width={c.w} height={c.h} rx={6} /><ShapeMark harness={null} state="idle" cx={c.x + 14} cy={c.y + c.h / 2} r={5.5} />
-        <text className="smt-t1" x={c.x + 27} y={c.y + 14}>{fitText(s.role, c.w - 34, 11.5)}</text><text className="smt-t2" x={c.x + 27} y={c.y + 26}>{fitText(sessionLife(s), c.w - 30, 9.5)}</text></g>; })}
+        <text className="smt-t1" x={c.x + 27} y={firstLine(c, 2)}>{fitText(s.role, c.w - 34, T.FONT)}</text>
+        <text className="smt-t2" x={c.x + 27} y={firstLine(c, 2) + T.LINE}>{fitText(sessionLife(s), c.w - 30, 9.5)}</text></g>; })}
     </g>
   </svg>;
 }
 
-// 좁은 화면: 같은 나무를 접는 목록으로. 접은 줄에는 하위 상태 개수가 합쳐 보인다.
+// 좁은 화면: 같은 나무를 접는 목록으로. 모두 펼친 채로 시작하고 줄마다 하위 상태 개수가 합쳐 보인다.
 export function TreeList({ forest, model, sessions, fold, expanded, selected, onSelect, onFold, onMore, depotKey }: Omit<TreeProps, "width">) {
   const line = (key: string, head: ReactNode, counts: Count[], open: boolean, label: string, body: () => ReactNode, big = false) => <div key={key} className={"smt-node" + (big ? " smt-big" : "")}>
     <div className="smt-row">
@@ -159,35 +166,41 @@ export function TreeList({ forest, model, sessions, fold, expanded, selected, on
     </div>
     {open && <div className="smt-kids">{body()}</div>}
   </div>;
-  const pick = (unit: Unit, name: string, tag: string) => <button type="button" className={"smt-pick" + (selected === unit.role ? " smt-on" : "")}
+  // 이름은 역할 이름 전체를 적고 줄바꿈·줄 수 제한은 CSS가 한다(작업자·검수자 세 줄, 그 밖 두 줄). 전체 이름은 title에도 둔다.
+  const pick = (unit: Unit, tag: string) => <button type="button" className={`smt-pick smt-k-${unit.kind}${selected === unit.role ? " smt-on" : ""}`}
     aria-pressed={selected === unit.role} title={unit.role} onClick={() => onSelect(unit.role)}>
-    <ShapeIcon harness={harnessName(unit)} state={unit.state} /><span className="smt-nm">{name}</span><span className="smt-tag">{tag}</span></button>;
-  // 감독 줄(가지)은 접지 않고 전부 보인다. 넘침 묶음은 작업자·검수자(잎)만 — 그림의 감독 줄·작업자 칸과 같은 규칙이다.
-  // 하위 없는 슈퍼감독 묶음(bundle)은 그림처럼 전부를 묶음 대상으로 본다.
-  const kids = (key: string, nodes: TreeNode[], sup: string | null, bundle = false) => {
-    const branches = bundle ? [] : nodes.filter(isBranch), leaves = bundle ? nodes : nodes.filter((n) => !isBranch(n));
-    const { shown, more } = clip(leaves, LIST_LIMIT, LIST_KEEP, expanded.has(key), (n) => isRunning(n.unit));
-    return <>{branches.map((n) => node(n, sup))}{shown.map((n) => node(n, sup))}{more.length > 0 && <button type="button" className="smt-more-row" onClick={() => onMore(key)}>+{more.length} 더 보기</button>}</>;
+    <ShapeIcon harness={harnessName(unit)} state={unit.state} /><span className="smt-nm">{unit.role}</span><span className="smt-tag">{tag}</span></button>;
+  const leaf = (unit: Unit) => <div key={unit.role} className="smt-row smt-leaf">{pick(unit, unitLine(unit))}</div>;
+  // 감독 줄(가지)은 접지 않고 전부 보인다. 작업자·검수자(잎)는 그림의 한 줄과 같은 순서다(arrange):
+  // 살아 있는 것 → "+N 더 보기" → 줄 끝의 "오래된 미확정 N" 묶음(누르면 그 자리에 펼침).
+  // 하위 없는 슈퍼감독 묶음(bundle)은 그림처럼 전부를 넘침 대상으로만 본다.
+  const kids = (key: string, nodes: TreeNode[], bundle = false) => {
+    const branches = bundle ? [] : nodes.filter(isBranch), leaves = (bundle ? nodes : nodes.filter((n) => !isBranch(n))).map((n) => n.unit);
+    const { shown, more, old, oldOpen } = bundle ? { ...clip(leaves, LIST_LIMIT, LIST_KEEP, expanded.has(key), isRunning), old: [], oldOpen: false }
+      : arrange(leaves, key, LIST_LIMIT, LIST_KEEP, expanded);
+    return <>{branches.map(node)}{shown.map(leaf)}
+      {more.length > 0 && <button type="button" className="smt-more-row" onClick={() => onMore(key)}>{moreLabel(more.length)}</button>}
+      {oldOpen ? old.map(leaf) : old.length > 0 && <button type="button" className="smt-more-row smt-stale-row"
+        aria-label={`${staleLabel(old.length)}: ${old.map((u) => u.role).join(", ")}`} onClick={() => onMore(staleKey(key))}>{staleLabel(old.length)}</button>}</>;
   };
-  const node = (n: TreeNode, sup: string | null): ReactNode => {
-    const name = shortName(n.unit.role, sup);
-    if (!n.children.length) return <div key={n.unit.role} className="smt-row smt-leaf">{pick(n.unit, name, unitLine(n.unit))}</div>;
+  const node = (n: TreeNode): ReactNode => {
+    if (!n.children.length) return leaf(n.unit);
     const below = n.children.flatMap(flatten);
-    return line(n.unit.role, pick(n.unit, name, `${unitLine(n.unit)} · 하위 ${below.length}`), stateCounts(below), isOpen(fold, n.unit.role, defaultOpen(below, selected)),
-      `${n.unit.role} 하위 역할`, () => kids(n.unit.role, n.children, sup));
+    return line(n.unit.role, pick(n.unit, `${unitLine(n.unit)} · 하위 ${below.length}`), stateCounts(below), isOpen(fold, n.unit.role),
+      `${n.unit.role} 하위 역할`, () => kids(n.unit.role, n.children));
   };
   const group = (g: Group) => {
-    const open = isOpen(fold, g.id, defaultOpen(g.units, selected)), sup = g.root?.role ?? null, count = `유닛 ${g.units.length}`;
-    const head = g.root ? pick(g.root, g.root.role, `${KIND_LABEL.super} · ${harnessLabel(g.root)} · ${count}`)
+    const count = `유닛 ${g.units.length}`;
+    const head = g.root ? pick(g.root, `${KIND_LABEL.super} · ${harnessLabel(g.root)} · ${count}`)
       : <span className="smt-pick smt-plain"><span className="smt-nm">{g.label}</span><span className="smt-tag">{count}</span></span>;
-    return line(g.id, head, g.counts, open, `${g.label} 하위 역할`, () => kids(g.id, g.tops, sup), true);
+    return line(g.id, head, g.counts, isOpen(fold, g.id), `${g.label} 하위 역할`, () => kids(g.id, g.tops), true);
   };
-  const loneOpen = isOpen(fold, LONE_KEY, defaultOpen(forest.lone, selected)), systemOpen = isOpen(fold, SYSTEM_KEY, true);
+  const loneOpen = isOpen(fold, LONE_KEY), systemOpen = isOpen(fold, SYSTEM_KEY);
   const title = (text: string) => <span className="smt-pick smt-plain"><span className="smt-nm">{text}</span></span>;
   return <div className="smt-list">
     {forest.groups.map(group)}
     {forest.lone.length > 0 && line(LONE_KEY, title(`하위 역할 없는 슈퍼감독 ${forest.lone.length}`), stateCounts(forest.lone), loneOpen, "하위 역할 없는 슈퍼감독",
-      () => kids(LONE_KEY, forest.lone.map((unit) => ({ unit, children: [] })), null, true))}
+      () => kids(LONE_KEY, forest.lone.map((unit) => ({ unit, children: [] })), true))}
     {model.depot > 0 && <div className="smt-node"><div className="smt-row smt-leaf">
       <button type="button" className={"smt-pick" + (selected === depotKey ? " smt-on" : "")} aria-pressed={selected === depotKey} onClick={() => onSelect(depotKey)}>
         <span className="smt-nm">발령 전 창고 {model.depot}</span><span className="smt-tag">{depotLine(model.depotRows)}</span></button></div>

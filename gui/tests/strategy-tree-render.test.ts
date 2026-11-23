@@ -39,7 +39,7 @@ for (const ext of [".ts", ".tsx"]) M._extensions[ext] = (module, filename) => {
   module._compile(code, filename);
 };
 const StrategyMap = req("./src/pages/StrategyMap.tsx").default;
-const { TreeList } = req("./src/pages/StrategyTree.tsx");
+const { TreeList, TreeSvg } = req("./src/pages/StrategyTree.tsx");
 const { buildMap } = req("./src/strategy-map.ts");
 const { buildForest } = req("./src/strategy-tree.ts");
 const { AppContext } = req("./src/ui.tsx");
@@ -70,8 +70,9 @@ test("전략 맵은 나무 보기 하나: 보기 전환 단추가 없고 나무 
   assert.match(html, /발령 전 창고/);
   assert.match(html, /담당이 정해지지 않은 카드 \(누르면 옆 칸에 목록\)/);
   assert.match(html, /aria-label="a-작업1 · 작업자·검수자 · codex · 작업중"/);
-  assert.match(html, /aria-expanded="false" aria-label="b-슈퍼 하위 역할"/, "작업중이 없는 판은 접힌 채로 시작");
-  assert.doesNotMatch(html, /aria-label="b-작업 ·/, "접은 판의 하위 역할은 그리지 않는다");
+  assert.match(html, /aria-expanded="true" aria-label="b-슈퍼 하위 역할"/, "작업중이 없는 판도 펼친 채로 시작(kyle 피드백 표 1행)");
+  assert.match(html, /aria-label="b-작업 · 작업자·검수자 · agy · 대기"/);
+  assert.doesNotMatch(html, /class="smt-count"/, "접힌 판이 없으니 접은 줄의 상태 개수도 없다");
   assert.match(html, /aria-label="기반 세션"/, "지도 아래 기반 세션 표는 그대로");
   assert.match(html, /유닛이나 발령 전 창고를 누르면 상태와 카드가 여기에 보입니다\./, "옆 칸 자리는 그대로");
 });
@@ -82,46 +83,46 @@ test("옛 보기 값(2d·3d)이 저장된 브라우저도 같은 나무 보기�
   for (const view of ["2d", "3d", "tree", "4d"]) assert.equal(stage(page(view)), base, `저장값 ${view}`);
 });
 
-test("좁은 화면의 접는 목록: 접은 줄에 하위 상태 개수, 펼친 줄에 하위 역할, 넘치면 '+N 더 보기'", () => {
+test("좁은 화면의 접는 목록: 모두 펼친 채로 시작하고, 사람이 접은 줄에는 하위 상태 개수만 남는다", () => {
   const map = buildMap({ hierarchy: status.hierarchy, rows: status.rows, live: status.live, alerts: null });
   const list = (fold: Record<string, boolean>, expanded: string[] = []) => renderToStaticMarkup(React.createElement(TreeList, {
     forest: buildForest(map.bases, false), model: map, sessions: [status.live.at(-1)], fold, expanded: new Set(expanded),
     selected: "a-작업1", depotKey: "depot", onSelect: () => {}, onFold: () => {}, onMore: () => {},
   }));
   const html = list({});
-  assert.match(html, /aria-expanded="true" aria-label="a-슈퍼 하위 역할"/);
-  assert.match(html, /aria-expanded="false" aria-label="b-슈퍼 하위 역할"/);
+  for (const label of ["a-슈퍼 하위 역할", "b-슈퍼 하위 역할", "a-감독 하위 역할", "b-감독 하위 역할", "하위 역할 없는 슈퍼감독", "기반 세션"])
+    assert.match(html, new RegExp(`aria-expanded="true" aria-label="${label}"`), `${label}: 펼친 채`);
+  assert.doesNotMatch(html, /aria-expanded="false"/);
   assert.match(html, /슈퍼감독 · claude · 유닛 9/);
   assert.match(html, /claude · 대기 · 하위 7/);
   assert.match(html, /aria-pressed="true" title="a-작업1"/);
-  assert.doesNotMatch(html, /title="b-작업"/, "접은 판의 하위 역할은 그리지 않는다");
-  assert.match(html, /title="대기"><i class="sm-dot sm-s-idle"><\/i>2</, "접은 b 판: 슈퍼감독 자신은 빼고 감독·작업자 2명이 대기");
-  assert.doesNotMatch(html, /title="대기"><i class="sm-dot sm-s-idle"><\/i>3</);
+  assert.match(html, /title="b-작업"/, "작업중이 없는 판의 하위 역할도 보인다");
+  assert.match(html, /agy · 대기/);
+  assert.match(html, /title="c-슈퍼"/, "하위 없는 슈퍼감독 묶음도 펼친 채");
   assert.match(html, /발령 전 창고 1/);
   assert.match(html, /기반 세션 1/);
   assert.doesNotMatch(html, /더 보기/, "하위 7명은 8명 이하라 그대로");
-  assert.match(html, /aria-expanded="false" aria-label="하위 역할 없는 슈퍼감독"/);
-  assert.match(html, /aria-expanded="true" aria-label="기반 세션"/);
-  assert.doesNotMatch(list({ "b-슈퍼": true }), /title="b-작업"/, "판을 펴도 작업중이 없는 감독 가지는 접힌 채");
-  const open = list({ "b-슈퍼": true, "b-감독": true });
-  assert.match(open, /title="b-작업"/);
-  assert.match(open, /agy · 대기/);
+  const folded = list({ "b-슈퍼": false });
+  assert.match(folded, /aria-expanded="false" aria-label="b-슈퍼 하위 역할"/);
+  assert.doesNotMatch(folded, /title="b-작업"|title="b-감독"/, "접은 판의 하위 역할은 그리지 않는다");
+  assert.match(folded, /title="대기"><i class="sm-dot sm-s-idle"><\/i>2</, "접은 b 판: 슈퍼감독 자신은 빼고 감독·작업자 2명이 대기");
+  assert.doesNotMatch(folded, /title="대기"><i class="sm-dot sm-s-idle"><\/i>3</);
+  assert.doesNotMatch(list({ "b-감독": false }), /title="b-작업"/, "감독 줄을 접으면 그 아래만 숨는다");
 });
 
 // PR #464 검수 발견(2026-11-23): 같은 자료를 넓은 그림과 좁은 목록이 다르게 보이면 안 된다.
 type Fake = { hierarchy: Record<string, string>; live: ReturnType<typeof on>[]; rows: { key: string; owner: string; bucket: string; title: string }[] };
-const both = (data: Fake) => {
+// 같은 자료·같은 접기 상태로 넓은 그림(TreeSvg, 폭 980)과 좁은 목록(TreeList)을 그린다.
+const both = (data: Fake, fold: Record<string, boolean> = {}, expanded: string[] = []) => {
   const map = buildMap({ ...data, alerts: null });
-  current = { ...data, alerts: null, collectedAt: status.collectedAt };
-  try {
-    return {
-      wide: page(null),
-      narrow: renderToStaticMarkup(React.createElement(TreeList, {
-        forest: buildForest(map.bases, false), model: map, sessions: [], fold: {}, expanded: new Set(),
-        selected: null, depotKey: "depot", onSelect: () => {}, onFold: () => {}, onMore: () => {},
-      })) as string,
-    };
-  } finally { current = status; }
+  const props = {
+    forest: buildForest(map.bases, false), model: map, sessions: [], fold, expanded: new Set(expanded),
+    selected: null, depotKey: "depot", onSelect: () => {}, onFold: () => {}, onMore: () => {},
+  };
+  return {
+    wide: renderToStaticMarkup(React.createElement(TreeSvg, { ...props, width: 980 })) as string,
+    narrow: renderToStaticMarkup(React.createElement(TreeList, props)) as string,
+  };
 };
 
 test("접힌 판의 하위 상태 수: 슈퍼감독 자신은 빼고, 넓은 그림과 좁은 목록이 같은 값", () => {
@@ -129,7 +130,7 @@ test("접힌 판의 하위 상태 수: 슈퍼감독 자신은 빼고, 넓은 그
     hierarchy: { "p-슈퍼": "@user", "p-감독": "p-슈퍼", "p-작업": "p-감독" },
     live: [on("p-슈퍼", "claude"), on("p-감독", "claude")],
     rows: [{ key: "r/1", owner: "p-작업", bucket: "stale", title: "t" }],
-  });
+  }, { "p-슈퍼": false });
   const inWide = [...wide.matchAll(/class="smt-count"[^>]*><title>([^<]+)<\/title><circle[^>]*><\/circle><text[^>]*>(\d+)<\/text>/g)].map((m) => `${m[1]} ${m[2]}`);
   const inNarrow = [...narrow.matchAll(/<span title="([^"]+)"><i class="sm-dot sm-s-[a-z]+"><\/i>(\d+)<\/span>/g)].map((m) => `${m[1]} ${m[2]}`);
   assert.deepEqual(inWide, ["오래된 미확정 1", "대기 1"], "대기는 감독 1명 — 대기 중인 슈퍼감독은 세지 않는다");
@@ -148,11 +149,73 @@ test("작업중인 가지와 역할은 '더 보기' 뒤에 숨지 않는다: 감
     rows: [{ key: "r/1", owner: "p-일꾼10", bucket: "running", title: "t" }],
   });
   for (const n of ten) assert.match(narrow, new RegExp(`title="p-감독${n}"`), `좁은 목록에 감독 ${n} 줄이 보인다`);
-  assert.match(narrow, /aria-expanded="true" aria-label="p-감독10 하위 역할"/, "작업중이 든 열째 감독 가지는 펼친 채");
+  assert.match(narrow, /aria-expanded="true" aria-label="p-감독10 하위 역할"/, "열째 감독 가지는 펼친 채");
   assert.match(narrow, /title="p-일꾼10"/, "열째 작업자(작업중)가 묶음 앞에 보인다");
   assert.deepEqual([...narrow.matchAll(/title="p-일꾼(\d+)"/g)].map((m) => m[1]), ["10", "01", "02", "03", "04", "05"]);
   assert.deepEqual([...narrow.matchAll(/>(\+\d+ 더 보기)</g)].map((m) => m[1]), ["+4 더 보기"], "묶음은 감독 아래 작업자 줄 하나뿐");
   for (const n of ten) assert.match(wide, new RegExp(`aria-label="p-감독${n} · 감독 ·`), `넓은 그림에 감독 ${n} 줄이 보인다`);
   assert.deepEqual([...wide.matchAll(/aria-label="p-일꾼(\d+) ·/g)].map((m) => m[1]), ["10", "01", "02", "03"], "넓은 그림도 작업중을 앞으로");
   assert.match(wide, />\+6 더 보기</);
+});
+
+// ---- kyle 피드백 3가지(2026-11-23) 기대 결과 표: 화면에 그려진 꼴 ----
+const names = (n: number, f: (k: number) => string) => Array.from({ length: n }, (_, i) => f(i + 1));
+const stale = (owner: string, i: number) => ({ key: `s/${owner}/${i}`, owner, bucket: "stale", title: "t" });
+const running = (owner: string, i: number) => ({ key: `r/${owner}/${i}`, owner, bucket: "running", title: "t" });
+// 넓은 그림: 칸·묶음을 그려진 순서대로. 좁은 목록: 줄을 순서대로.
+const wideOrder = (html: string) => [...html.matchAll(/class="smt-unit[^"]*" role="button" tabindex="0" aria-label="([^"·]+) ·|class="smt-(?:more|stale)"[^>]*aria-label="([^":]+):/g)].map((m) => m[1] ?? `[${m[2]}]`);
+const narrowOrder = (html: string) => [...html.matchAll(/<button type="button" class="smt-pick[^"]*"[^>]*title="([^"]+)"|<button type="button" class="smt-more-row[^"]*"[^>]*>([^<]+)</g)].map((m) => m[1] ?? `[${m[2]}]`);
+const bundle: Fake = {
+  hierarchy: {
+    "t-슈퍼": "@user", "t-감독": "t-슈퍼", "u-감독": "t-슈퍼",
+    ...Object.fromEntries(["t-작업1", "t-작업2", "t-대기1", "t-옛1", "t-옛2", "t-옛3"].map((r) => [r, "t-감독"])),
+    ...Object.fromEntries([...names(6, (k) => `u-${k}`), "u-옛1", "u-옛2"].map((r) => [r, "u-감독"])),
+  },
+  live: ["t-슈퍼", "t-감독", "u-감독", "t-작업1", "t-작업2", "t-대기1", ...names(6, (k) => `u-${k}`)].map((r) => on(r, "claude")),
+  rows: [running("t-작업1", 1), running("t-작업2", 2), ...["t-옛1", "t-옛2", "t-옛3", "u-옛1", "u-옛2"].map(stale)],
+};
+
+test("표 6·7행: 오래된 미확정은 살아 있는 칸 뒤 줄 끝의 묶음 한 칸으로 — 넓은 그림과 좁은 목록이 같은 순서", () => {
+  const { wide, narrow } = both(bundle);
+  assert.deepEqual(wideOrder(wide), [
+    "t-감독", "t-대기1", "t-작업1", "t-작업2", "[오래된 미확정 3]",
+    "u-감독", "u-1", "u-2", "u-3", "u-4", "[+2 더 보기]", "[오래된 미확정 2]", "t-슈퍼",
+  ]);
+  assert.deepEqual(narrowOrder(narrow), [
+    "t-슈퍼", "t-감독", "t-대기1", "t-작업1", "t-작업2", "[오래된 미확정 3]",
+    "u-감독", "u-1", "u-2", "u-3", "u-4", "u-5", "u-6", "[오래된 미확정 2]",
+  ], "좁은 목록은 넘침 기준이 8줄이라 살아 있는 6명이 다 보인다");
+  assert.match(wide, /class="smt-stale" role="button" tabindex="0" aria-label="오래된 미확정 3: t-옛1, t-옛2, t-옛3"/);
+  assert.match(narrow, /aria-label="오래된 미확정 3: t-옛1, t-옛2, t-옛3"/);
+  assert.doesNotMatch(wide + narrow, /t-옛1 ·|title="t-옛1"/, "묶인 역할의 칸은 그리지 않는다");
+});
+
+test("표 8행: 묶음을 누르면(펼침 상태) 그 자리에 오래된 미확정 칸이 놓이고, 칸마다 누를 수 있다", () => {
+  const { wide, narrow } = both(bundle, {}, ["t-감독\u0000stale"]);
+  assert.deepEqual(wideOrder(wide).slice(0, 8), ["t-감독", "t-대기1", "t-작업1", "t-작업2", "t-옛1", "t-옛2", "t-옛3", "u-감독"]);
+  assert.deepEqual(narrowOrder(narrow).slice(0, 8), ["t-슈퍼", "t-감독", "t-대기1", "t-작업1", "t-작업2", "t-옛1", "t-옛2", "t-옛3"]);
+  assert.match(wide, /class="smt-unit smt-worker" role="button" tabindex="0" aria-label="t-옛2 · 작업자·검수자 · 세션 · 오래된 미확정" aria-pressed="false"/);
+  assert.match(narrow, /<button type="button" class="smt-pick smt-k-worker" aria-pressed="false" title="t-옛2">/);
+  assert.match(wide + narrow, /오래된 미확정 2/, "다른 줄의 묶음은 그대로");
+});
+
+test("표 3·4·5행: 이름은 앞을 떼지 않고 줄을 나눠 그리며, 잘린 이름도 툴팁·읽기 이름에는 전체가 있다", () => {
+  const long = "shopfront-파트너스감사-후속정리-검수-감독-2", worker = "home-board-신호수집-작업자";
+  const { wide, narrow } = both({
+    // long은 관계표에 하위가 있어 감독이다(하위는 창도 일도 없어 지도에 오르지 않는다).
+    hierarchy: { "home-board-슈퍼감독": "@user", "home-board-투자감독": "home-board-슈퍼감독", [worker]: "home-board-투자감독", [long]: "home-board-슈퍼감독", "옛-작업자": long },
+    live: ["home-board-슈퍼감독", "home-board-투자감독", worker, long].map((r) => on(r, "claude")),
+    rows: [running(worker, 1)],
+  });
+  const lines = (role: string) => [...(wide.match(new RegExp(`aria-label="${role} ·[^"]*"[^>]*>(.*?)</g>`))?.[1] ?? "").matchAll(/<text class="smt-t1"[^>]*>([^<]*)<\/text>/g)].map((m) => m[1]);
+  assert.deepEqual(lines("home-board-투자감독"), ["home-board-투자감독"]);
+  assert.deepEqual(lines("home-board-슈퍼감독"), ["home-board-", "슈퍼감독"]);
+  assert.deepEqual(lines(worker), ["home-board-", "신호수집-", "작업자"]);
+  assert.deepEqual(lines(long), ["shopfront-", "파트너스감사-후속정리…"]);
+  assert.match(wide, new RegExp(`<title>${long} · 감독 · claude · 대기</title>`), "전체 이름은 툴팁에");
+  assert.match(wide, new RegExp(`aria-label="${long} · 감독 · claude · 대기"`), "읽기 이름에도");
+  assert.doesNotMatch(wide + narrow, />board-투자감독</, "앞 낱말을 뗀 옛 이름이 아니다");
+  // 좁은 목록은 전체 이름을 그대로 적고 줄바꿈·줄 수 제한은 CSS(.smt-nm)가 한다.
+  for (const role of ["home-board-투자감독", worker, long]) assert.match(narrow, new RegExp(`title="${role}"[^>]*>.*?<span class="smt-nm">${role}</span>`));
+  assert.match(narrow, new RegExp(`class="smt-pick smt-k-worker" aria-pressed="false" title="${worker}"`), "작업자·검수자 줄은 세 줄까지(.smt-k-worker)");
 });

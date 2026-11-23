@@ -449,6 +449,10 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .smt-chev { fill: none; stroke: #536159; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .smt-more .smt-frame { fill: #eef5f1; stroke: #21684e; stroke-dasharray: 3 3; }
 .smt-more .smt-t1 { fill: #21684e; }
+.smt-stale { cursor: pointer; outline: none; }
+.smt-stale .smt-frame { fill: #f3efe6; stroke: #a58a5c; stroke-dasharray: 3 3; }
+.smt-stale .smt-t1 { fill: #6b5a3a; }
+.smt-stale:focus-visible .smt-frame { stroke: #2b47a8; stroke-width: 2.5; }
 .smt-depot .smt-frame { fill: none; stroke: #202724; stroke-width: 1.6; stroke-dasharray: 5 4; }
 .smt-crate { fill: #b9c7bd; }
 .smt-system > .smt-frame { fill: none; stroke-width: 1.4; }
@@ -477,12 +481,15 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .smt-list button { border: 0; background: transparent; min-height: 30px; padding: 3px 0; justify-content: flex-start; text-align: left; cursor: pointer; }
 .smt-list .smt-toggle { flex: none; width: 24px; justify-content: center; color: #536159; font-size: 13px; }
 .smt-pick { display: flex; flex: 1 1 0; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 2px 7px; min-width: 0; min-height: 30px; }
-.smt-nm { font-weight: 600; overflow-wrap: anywhere; }
+/* 이름: 낱말 중간에서 끊지 않고(-·공백 뒤에서만) 두 줄까지, 작업자·검수자는 세 줄까지. 넘치면 마지막 줄 끝이 …로 잘린다(전체 이름은 title). 폭은 모양 표시(13px+간격)와 한 줄에 놓이게 그만큼 뺀다. */
+.smt-nm { font-weight: 600; min-width: 0; max-width: calc(100% - 20px); word-break: keep-all; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.smt-k-worker > .smt-nm { -webkit-line-clamp: 3; }
 .smt-big > .smt-row .smt-nm { font-size: 14px; }
 .smt-tag { color: #536159; font-size: 11.5px; }
 .smt-pick.smt-on .smt-nm { outline: 2px solid #21684e; outline-offset: 2px; border-radius: 3px; }
 .smt-list button:focus-visible { outline: 2px solid #2b47a8; outline-offset: 1px; border-radius: 4px; }
 .smt-more-row { margin-left: 30px; color: #21684e; font-size: 12px; }
+.smt-list .smt-stale-row { color: #6b5a3a; }
 .smt-note { margin: 0 0 4px 30px; color: #536159; font-size: 11.5px; }
 /* 비서 꺼짐 알림(2026-10-06). */
 .dw-secretary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid #e5c98a; background: #fdf6e6; border-radius: 10px; font-size: 13.5px; color: #5c4510; }

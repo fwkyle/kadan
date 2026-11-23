@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, lifeLabel, restartGeneration, runLabel, systemSessions, shortName, visibleUnits } from "../src/strategy-map.ts";
+import { buildMap, lifeLabel, restartGeneration, runLabel, systemSessions, visibleUnits } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;

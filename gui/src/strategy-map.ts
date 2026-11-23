@@ -140,11 +140,6 @@ export function buildMap({ hierarchy, rows, live, alerts, lastRuns }: MapInput):
   };
 }
 
-// 같은 기지 안에서 겹치는 접두사(예: "shop-")를 떼어 유닛 이름표를 짧게 한다. 전체 이름은 툴팁·옆 칸에 그대로.
-export function shortName(role: string, base: string | null) {
-  const prefix = base?.match(/^[^-]+-/)?.[0];
-  return prefix && role.startsWith(prefix) && role.length > prefix.length ? role.slice(prefix.length) : role;
-}
 
 // 쉬는 역할(창도 진행 카드도 없이 진행 전·일시정지 카드만 든 작업자)을 뺀 유닛. 슈퍼감독·감독은 기지의 뼈대라 늘 남긴다.
 // 옆 칸의 생존 줄. 옛 '담당자 상태' 표(2026-10-25 전략 맵으로 옮김)와 같은 낱말을 쓴다.
