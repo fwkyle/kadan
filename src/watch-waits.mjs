@@ -11,7 +11,7 @@ export function openDecisionContext(decisions, requester) {
   if (!requester) return [];
   return decisions.filter(d => d?.status === 'open' && d.requestedBy === requester).map(d => ({
     id: d.id, question: String(d.question ?? '').slice(0, 200), options: d.options, recommendation: d.recommendation,
-    at: d.at, work: d.work ?? null, card: d.card ?? null
+    at: d.at, work: d.work || null, card: d.card ?? null
   }));
 }
 

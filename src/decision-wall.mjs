@@ -21,7 +21,7 @@ export const splitQuestion=value=>{const text=String(value??'').trim(),line=text
 const time=x=>x?new Date(x).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false}):'모름';
 // 채팅 질문(decision request --chat)은 카드가 없다: 꼬리표 '채팅'과 업무, 안 닫힌 채 흐른 시간을 보인다.
 const chatAge=at=>{const m=Math.floor((Date.now()-Date.parse(at))/60000);return !(m>=0)?'':m<1?'방금':m<60?`${m}분 경과`:m<2880?`${Math.floor(m/60)}시간 경과`:`${Math.floor(m/1440)}일 경과`;};
-const keyLink=d=>d.chat===true?`<span class="dc-chat">채팅</span><span class="dc-key">업무 ${e(d.work)}</span>`:`<a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`;
+const keyLink=d=>d.chat===true?`<span class="dc-chat">채팅</span><span class="dc-key">${d.work?`업무 ${e(d.work)}`:'업무 없음'}</span>`:`<a class="dc-key" href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`;
 export const RUN_STATE_LABELS={failed:'실패 기록',unconfirmed:'완료 미확인',orphaned:'세션 없음·미완료',done:'완료 기록'};
 // 방금 답한 결정의 전달 결과를 오른쪽 위 토스트로 알린다. 성공·확인 중은 15초 뒤 사라지고(마우스를 올리면 멈춤),
 // 알림 전달 실패는 닫을 때까지 남긴다. 지난 결정은 오른쪽 드로어에서 본다(2026-09-24 [kyle]).
@@ -192,7 +192,7 @@ const historyItem=d=>{
   :failed?`<p>알림 실패: ${e(d.delivery.error)}</p>`:d.delivery?.status==='pending'?'<p>알림 확인 중</p>':'';
  const cancelled=d.status==='cancelled'?`<p>취소 이유: ${e(d.cancelReason||'모름')}${d.cancelledBy?` (${e(d.cancelledBy)})`:''}</p>`:'';
  return `<article class="dh-item" id="decision-${e(d.id)}"><div class="dh-meta">${badge}${d.answer?.at?`<span>${e(time(d.answer.at))}</span>`:''}</div><h3>${e(title)}</h3>${answer}${delivery}${cancelled}`+
-  `<p class="dh-meta">${d.chat===true?`<span class="dc-chat">채팅</span> <span>업무 ${e(d.work)}</span>`:`<a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`}<span>요청자 ${e(d.requestedBy)} · ${e(time(d.at))}</span></p>`+
+  `<p class="dh-meta">${d.chat===true?`<span class="dc-chat">채팅</span> <span>${d.work?`업무 ${e(d.work)}`:'업무 없음'}</span>`:`<a href="?card=${encodeURIComponent(d.card)}#detail">${e(d.card)}</a>`}<span>요청자 ${e(d.requestedBy)} · ${e(time(d.at))}</span></p>`+
   `<details><summary>원문 보기</summary>${body?`<p style="white-space:pre-line">${linked(body)}</p>`:''}<p><strong>추천: ${e(d.recommendation)}</strong></p>${d.proceeded?`<p>추천대로 진행함 (${e(d.proceeded.at)}, ${e(d.proceeded.by)}) — 되돌리는 방법: ${e(d.proceeded.reversible)}</p>`:''}<p style="white-space:pre-wrap">${linked(d.reason)}</p></details></article>`;
 };
 const renderDecisionHistory=past=>{

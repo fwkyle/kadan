@@ -55,6 +55,8 @@ export function peerResponsibilities(entries, parents, works = [], cards = []) {
       }));
     return [{ kind: 'send', role: q.currentRecipient, taskId: `mail:${q.mailId}`, t: q.t,
       peerRequest: true, mailId: q.mailId, asker: q.currentSender, activityRoles,
+      // 보낼 때 업무·실행 주소를 직접 붙였는가(그 업무·실행을 못 찾아도 붙인 것이다). 무업무 채팅 결정이 가리는 우편을 가르는 데 쓴다.
+      attached: Boolean(q.workKey || q.executionKey),
       linkedWorkIds: linked.map(w => `work:${w.key}`) }];
   });
 }

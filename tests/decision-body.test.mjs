@@ -129,7 +129,7 @@ test('각 통지 실패는 다른 통지를 막지 않으며 실제 인계 수�
   }
 });
 
-test('chat만 done 업무를 받고 cancelled와 카드 결정은 거절하며 업무 없는 경우 기존 길을 안내한다', () => {
+test('chat만 done 업무를 받고 cancelled와 카드 결정은 거절한다', () => {
   const f = fixture();
   for (const [key, action] of [['repo/done', 'complete'], ['repo/cancelled', 'cancel']]) {
     f.works.create({key, title: key, goal: '목표', scope: '범위', acceptance: '조건', owner: ORIGINAL, repoPath: f.home});
@@ -140,8 +140,6 @@ test('chat만 done 업무를 받고 cancelled와 카드 결정은 거절하며 �
   assert.ok(d.reason.endsWith(f.body));
   assert.throws(() => f.store.request(null, {chat: true, question: 'x', work: 'repo/cancelled'}, SUPER), /열린 업무만/);
   assert.throws(() => ask(f, {work: 'repo/done'}), /열린 업무만/);
-  for (const work of [undefined, '없음']) assert.throws(() => f.store.request(null,
-    {chat: true, question: 'x', work}, SUPER), /업무와 무관한 결정은 관련 카드 키 \+ --work 없음으로 등록/);
 });
 
 test('원문 누락/지문 불일치는 show와 단건에 표시하고 답과 기존 결정 조회는 유지한다', () => {
