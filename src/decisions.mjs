@@ -98,9 +98,8 @@ export class DecisionStore {
    if(!/[\p{L}\p{N}\p{Extended_Pictographic}_]/u.test(replyTo)
      ||!isKnownRole(rows,readActiveHierarchy(rows),replyTo))throw new Error(`알 수 없는 역할: ${replyTo}`);
   }
-  chat=chat===true;if(chat&&card!=null)throw new Error('--chat 결정은 카드 없이 업무로만 등록');
+  chat=chat===true;if(chat&&card!=null)throw new Error('--chat 결정은 카드 없이 등록');
   const c=chat?null:new CardStore(this.home).get(card);this.list();
-  if(chat){if(work===undefined||String(work).trim()==='없음')throw new Error('--chat 결정은 --work <업무주소> 필요\n업무와 무관한 결정은 관련 카드 키 + --work 없음으로 등록');}
   if(work!==undefined&&String(work).trim()==='없음')work=undefined;
   else if(work!==undefined){
    work=required(work,'업무 주소').replace(/^work:/,'');
@@ -113,6 +112,8 @@ export class DecisionStore {
    const candidates=open.some(w=>w.executions.some(x=>x.key===card))?[]:open.filter(w=>c.board&&w.board===c.board).map(w=>w.key);
    if(candidates.length)throw new Error(`업무 연결 필요: 이 카드는 업무의 실행이 아닙니다. 이 결정이 막는 업무를 --work로 적으세요: ${candidates.join(', ')}. 막는 업무가 없으면 --work 없음`);
   }
+  // 업무 없는 채팅 결정(2026-11-23): 저장 꼴은 work:''다. 옛 판독기(latestDecisions)는 chat:true에 work 문자열을 요구해, 칸이 없으면 목록 전체를 손상으로 버린다.
+  if(chat)work??='';
   question=required(question,'질문');
   if(chat){ // 선택지를 안 주면 고정 선택지, 이유를 안 주면 고정 문구, 확인 경로가 없으면 '확인 경로 없음: 채팅 질문' 줄을 채운다.
    if(options===undefined){options=[...CHAT_OPTIONS];recommendation??=CHAT_OPTIONS[0];}
@@ -147,7 +148,7 @@ export class DecisionStore {
   if(existing){if(JSON.stringify(existing.options)!==JSON.stringify(options)||existing.reason!==reason||existing.recommendation!==recommendation||(existing.reversible??null)!==(reversible??null)||Boolean(existing.notProhibited)!==Boolean(notProhibited))throw new Error('같은 질문의 다른 내용: 기존 요청을 취소한 뒤 새 요청');return existing;}
   created=true;
   const d=this.write({
-   id:randomUUID(),revision:1,card:chat?null:card,...(chat?{chat:true}:{}),...(work?{work}:{}),
+   id:randomUUID(),revision:1,card:chat?null:card,...(chat?{chat:true,work}:{}),...(!chat&&work?{work}:{}),
    ...(reversible?{reversible,notProhibited:{by,at:new Date().toISOString()}}:{}),
    to:'@user',requestedBy:by,question,options,recommendation,reason,status:'open',at:new Date().toISOString(),
    ...(body?{body:{bytes:body.bytes,sha256:body.sha256}}:{}),...(replyTo?{replyTo}:{}),
@@ -209,7 +210,7 @@ export class DecisionStore {
  const d=saved;
   let delivery,replyDelivery,role,receipt;
   const late=d.proceeded&&(choice??text)!==d.recommendation?` 추천대로 이미 진행됨 — 되돌리는 방법: ${d.proceeded.reversible}.`:'';
-  const message=`[kyle] 결정 답변 ${id} / ${d.chat===true?`업무 ${d.work}`:`카드 ${d.card}`}: ${text}${choice?` (선택: ${choice})`:''}.${late} decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`;
+  const message=`[kyle] 결정 답변 ${id} / ${d.chat===true?(d.work?`업무 ${d.work}`:'업무 없음'):`카드 ${d.card}`}: ${text}${choice?` (선택: ${choice})`:''}.${late} decision show로 질문/답변을 확인하고 기존 승인 범위에서 후속 처리하라.`;
   try{
    const rows=readLedger(this.home);if(rows.some(e=>e?.broken))throw new Error('원장 손상');
    role=d.chat===true?d.requestedBy:effectiveCardRole({key:d.card,role:d.requestedBy,id:d.card.split('/')[1],at:d.at},rows,new CardStore(this.home).list());
@@ -287,9 +288,9 @@ export class DecisionStore {
 const proceedNotified=r=>Boolean(r&&typeof r==='object'&&!r.skipped&&(r.posted===true||r.duplicate===true||(r.via==='system'&&!r.error)));
 export function decisionCommand(args,flags,{home,by,notify,now,userNotify}){
  const s=new DecisionStore(home,{notify,userNotify}),[cmd,key]=args;
- if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 [--reversible 되돌리는방법한줄 --not-prohibited(둘은 함께만 준다)] | request --chat --work <업무주소> --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음) | proceed <ID> --revision N (완전자율에서 대기 시간이 지난 --reversible을 붙인 결정만 추천대로 진행함 기록. 결정은 닫지 않음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
+ if(flags.help||!cmd)return 'kadan decision request <카드키> [--work <업무주소>|없음] --question 질문 --option 선택1 --option 선택2 --recommend 추천선택 --reason 이유 [--reversible 되돌리는방법한줄 --not-prohibited(둘은 함께만 준다)] | request --chat [--work <업무주소>] --question 질문 [--option 선택1 --option 선택2 --recommend 추천선택 --reason 이유] (kyle에게 채팅으로 이미 물은 질문 등록. 선택지 생략 시 추천대로 진행/보류. 알림 없음. --work를 생략하면 업무 없는 결정으로, 감시기는 요청 역할만 답 대기로 본다) | proceed <ID> --revision N (완전자율에서 대기 시간이 지난 --reversible을 붙인 결정만 추천대로 진행함 기록. 결정은 닫지 않음) | list [--status open] | show <ID> | answer <ID> --revision N (--text 답변 | --choice 선택) | cancel <ID> --revision N --reason 이유';
  if(cmd==='request'&&flags.chat){
-  if(key)throw new Error('--chat 결정은 카드키 없이 --work <업무주소>로 등록');
+  if(key)throw new Error('--chat 결정은 카드키 없이 등록(--work는 선택)');
   const d=s.request(null,{
    question:flags.question,options:flags.option,recommendation:flags.recommend,reason:flags.reason,
    work:flags.work,chat:true,reversible:flags.reversible,notProhibited:flags['not-prohibited'],

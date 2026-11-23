@@ -77,7 +77,7 @@ export function ciLineOf(decision) {
 // 머지 요청 결정 하나의 줄 정보. work: 결정의 work, 없으면 결정이 걸린 카드를 연결한 업무.
 // 연결 업무를 못 찾으면 검수 기록을 모른다고 한다(추측으로 통과를 붙이지 않는다).
 export function mergeLineInfo(snapshot, decision, ctx = mergeContext(snapshot)) {
-  const workKey = decision.work ?? ctx.byCard.get(decision.card) ?? null;
+  const workKey = decision.work || ctx.byCard.get(decision.card) || null;
   const work = workKey ? ctx.byKey.get(String(workKey).replace(/^work:/, "")) : null;
   const head = prHeadOf(decision);
   const base = { prs: prNumbers(decision), head, ci: ciLineOf(decision), ciAt: decision.at ?? null };
