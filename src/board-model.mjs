@@ -36,7 +36,8 @@ export function fit(text, width) {
 // ---- 🌙 Autopilot 중 자동 머지 글자 ----
 // gui/src/autopilot-repos.ts의 badgeOf와 같은 대응이다(TypeScript라 가져올 수 없어 문구만 맞춘다).
 export function autopilotWord(line) {
-  const { reason, exceptBranch } = line?.verdict ?? {};
+  const { reason, exceptBranch, exceptReason } = line?.verdict ?? {};
+  if (reason === "deploy-unset" || (reason === "allowed" && exceptReason === "deploy-unset")) return "안 함(자동 배포·배포 브랜치 미설정)";
   if (reason === "allowed") return exceptBranch ? `안 함(배포 브랜치 ${exceptBranch})` : "함";
   if (reason === "night-merge-forbidden") return "금지";
   if (reason === "setup-needed") return "설정 필요";

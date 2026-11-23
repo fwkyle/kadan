@@ -40,16 +40,19 @@ ln -s ~/notes/projects "$KADAN_HOME/ontology/notes"   # 폴더 링크. 파일 �
 - `type: project`인 문서만 판정에 쓴다. 다른 type(account·device·rule…) 문서와 앞머리가 없는 일반 문서(README 등)는 읽고 무시한다.
 - type 값은 소문자 낱말 하나이고, 따옴표는 짝이 맞을 때만 벗긴다(`project`·`"project"`). 닫지 않은 따옴표·대문자·공백이 낀 값은 읽지 못함이다. `$KADAN_HOME/ontology` 자체가 깨진 링크이거나 폴더가 아닌 것을 가리켜도 읽지 못함이다(아예 없을 때만 빈 상태).
 - 앞머리는 있는데 `type` 칸이 없거나 형식이 틀리면(`type`이 두 번 나옴·`Project`·`project # 메모` 등) 읽지 못함이다. project 문서일 수 있기 때문이다. 닫는 `---`가 없는 앞머리도 읽지 못함이다.
-- project 문서에서 읽는 칸은 셋이고 정확히 `키: 값` 형식이어야 한다. 형식이 틀리거나 같은 칸이 두 번 나오면 그 문서는 못 읽은 것이다.
+- project 문서에서 읽는 칸은 넷이고 정확히 `키: 값` 형식이어야 한다. 형식이 틀리거나 같은 칸이 두 번 나오면 그 문서는 못 읽은 것이다.
 
 ```
 ---
 type: project
-remote: github.com/소유자/이름 (또는 git@github.com:소유자/이름.git, 맨 소유자/이름. 첫 낱말만 읽는다)
+remote: github.com/소유자/이름 (또는 https://github.com/소유자/이름[.git], ssh://git@github.com/소유자/이름.git, git@github.com:소유자/이름.git, 맨 소유자/이름. 첫 낱말만 읽는다. `없음`이면 연결 없음)
 deploy_branch: main (낱말 하나, 뒤에는 괄호 설명만. 또는 {소유자/이름: 브랜치, …} 짝 목록)
 night_merge: 금지 (허용 | 금지. 칸이 없으면 허용)
+deploy: 자동 (자동 | 수동 | 없음. 첫 낱말만 읽는다. 칸이 없으면 허용. deploy_branch가 비어 있을 때만 쓰인다)
 ---
 ```
+
+`remote:`에 `없음`이 아닌 값이 있는데 위 꼴로 읽히지 않으면(예: `https://gitlab.com/…`, `ssh://example.com/…`) 그 문서가 어느 저장소 것인지 모르므로 **읽지 못한 문서**로 센다: 거기에 `night_merge: 금지` 같은 값이 있어도 알 수 없으니, 카단 설정에 두 칸 값이 없는 모든 저장소는 `setup-needed`로 보류한다(detail에 못 읽은 문서의 `ontology/` 기준 상대 경로 최대 3개). 설정에 값이 있는 칸은 그대로 설정으로 판정한다.
 
 설명은 괄호로 적는다. `#` 주석은 지원하지 않는다(`main # 설명`은 읽지 못한 것으로 본다).
 
@@ -62,11 +65,10 @@ night_merge: 금지 (허용 | 금지. 칸이 없으면 허용)
 0. 읽지 못한 문서가 하나라도 있으면, 두 칸을 카단 설정으로 다 정하지 않은 저장소는 설정 필요(`setup-needed`)
 1. 문서 쪽이 못 읽히는데 그 칸을 카단 설정이 채우지 않았으면 → 보류(`setup-needed`)
 2. `nightMerge`가 `금지` → 보류(`night-merge-forbidden`)
-3. `deployBranch`가 비어 있음 → 보류(`setup-needed`)
-4. 대상 브랜치 == `deployBranch` → 보류(`deploy-branch`)
-5. 그 밖 → Autopilot 중 자동 머지(`allowed`)
+3. `deployBranch`가 적혀 있고 대상 브랜치 == `deployBranch` → 보류(`deploy-branch`). `없음`이면 막을 브랜치가 없다(명시값 우선: 문서 `deploy: 자동`이어도 허용). `deployBranch`가 비어 있으면(설정·문서 모두 값 없음) 기본 허용이지만, 문서 `deploy:` 첫 낱말이 `자동`이면 기본 브랜치 `main`으로 가는 PR만 보류(`deploy-unset`, 자동 배포·배포 브랜치 미설정)한다. `deploy:`가 `수동`·`없음`이거나 칸·문서가 없으면 허용, 첫 낱말이 `자동|수동|없음`이 아니면 `setup-needed`다. 막을 브랜치가 있는데 대상 브랜치를 모르면 `setup-needed`
+4. 그 밖 → Autopilot 중 자동 머지(`allowed`)
 
-`kadan autopilot on [--level autopilot] --allow <소유자/이름> --quote "<kyle 원문>"`은 이번 켜짐 동안에 한해 2번(`night-merge-forbidden`)과 4번(`deploy-branch`) 보류만 푼다. 0·1·3번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
+`kadan autopilot on [--level autopilot] --allow <소유자/이름> --quote "<kyle 원문>"`은 이번 켜짐 동안에 한해 2번(`night-merge-forbidden`)과 3번(`deploy-branch`·`deploy-unset`) 보류만 푼다. 0·1번(`setup-needed`)은 풀지 않는다. 정책 파일 자체는 바뀌지 않는다.
 
 관문 입력 예시(세 칸을 `jq`로 합쳐 stdin으로 넘긴다; 파일 목록은 이름을 바꾼 옛 경로까지 받으려고 REST를 쓴다):
 `jq -n --argjson pr "$(gh pr view N --json url,number,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,changedFiles)" --argjson files "$(gh api --paginate --slurp repos/<소유자>/<이름>/pulls/N/files)" --argjson requiredChecks "$(gh pr checks N --required --json name,state,bucket)" --argjson repo "$(gh repo view <소유자/이름> --json mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed)" '{pr:$pr,files:$files,requiredChecks:$requiredChecks,repo:$repo}' | kadan merge-gate <업무>`

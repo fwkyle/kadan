@@ -12,6 +12,7 @@ import {readMailBody} from '../ledger.mjs';
 import {picksCommand} from '../autopilot-picks.mjs';
 import {readDefaultWingman, setDefaultWingman, clearDefaultWingman, wingmanPath, NO_WINGMAN} from '../autopilot-wingman.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../autopilot-repo-policy.mjs';
+import {lateRoles, receivedRoles, lateMessage, finishDelivery} from '../autopilot-late.mjs';
 import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL, atLeast} from '../autopilot-terms.mjs';
 
 export const MAX_TEXT = 4000;
@@ -20,9 +21,9 @@ export const MAX_TEXT = 4000;
 const AUTO_MERGE_FLAG = 'auto-merge';
 const AUTO_MERGE_FLAG_LEGACY = 'night-merge';
 const ON_FLAGS = new Set(['help', 'until', 'for', 'quote', 'level', 'allow', 'wingman', 'decide-after', 'discord-message']);
-const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음] | --level full [--allow …] [--wingman …] [--decide-after 2h(기본 2h, 30m~24h)]] [--discord-message <글 id>] | off [--reason 이유] | status | repo [<소유자/이름> --deploy-branch <브랜치|없음> --' + AUTO_MERGE_FLAG + ' 허용|금지 (옛 이름 --' + AUTO_MERGE_FLAG_LEGACY + '도 받음) | --clear deployBranch|nightMerge] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
+const USAGE = 'kadan autopilot on "<문구>" [--until HH:MM | --for 8h (둘 다 없으면 끝 시각 없음: off로 끌 때까지)] [--quote "<kyle 원문>"] [--level cruise [--allow <소유자/이름>]… | --level autopilot [--allow <소유자/이름>]… [--wingman <슈퍼감독>|없음] | --level full [--allow …] [--wingman …] [--decide-after 2h(기본 2h, 30m~24h)]] [--discord-message <글 id>] | off [--reason 이유] | status | deliver [<슈퍼감독>] (켜진 뒤 못 받은 슈퍼감독에게 켜짐 우편 한 번) | repo [<소유자/이름> --deploy-branch <브랜치|없음> --' + AUTO_MERGE_FLAG + ' 허용|금지 (옛 이름 --' + AUTO_MERGE_FLAG_LEGACY + '도 받음) | --clear deployBranch|nightMerge] [--quote "<kyle 원문>" (역할 세션이 쓸 때)] | repo list | repo show <소유자/이름> | wingman [<슈퍼감독> | --clear] | picks --todo <절대경로>… [--json] | summary [--json] | note <decision|hold|gate|merge|start> "<한 줄>" [--work 키] [--pr 저장소#번호] [--sha …] [--reason …] [--hold-kind decision|gate|deploy-repo] [--verdict pass|reject]';
 
-function describeOn(state, now, missing) {
+function describeOn(state, now, missing, lateDelivered = []) {
   const on = state.start, end = endOf(on), ended = end.kind === 'at', untilMs = ended ? end.ms : null;
   return {
     on: true, text: on.text, by: on.by, viaChat: on.viaChat === true, ...(on.quote ? {quote: on.quote} : {}),
@@ -31,15 +32,16 @@ function describeOn(state, now, missing) {
     level: on.level ?? LEVEL_CRUISE, allow: on.allow ?? [],
     ...(atLeast(on.level, LEVEL_FULL) ? {decideAfterMs: storedDecideAfterMs(on), decideAfter: storedDecideAfterMs(on) == null ? '값 없음/깨짐 — 추천대로 넘어가지 않음' : decideAfterText(storedDecideAfterMs(on))} : {}),
     wingman: on.wingman ?? null, wingmanSource: on.wingmanSource ?? 'none', ...(on.wingmanNote ? {wingmanNote: on.wingmanNote} : {}),
-    to: on.to ?? [], delivered: on.delivered ?? [], missing,
+    to: on.to ?? [], delivered: on.delivered ?? [], ...(lateDelivered?.length ? {lateDelivered} : {}), missing,
   };
 }
 
 // 열린 업무를 가진 슈퍼감독 중 문구를 받지 못한 이름. 관계표나 업무를 못 읽으면 모른다(null).
-function missingSupers(home, entries, on) {
+function missingSupers(home, entries, on, deps = {}) {
   try {
-    const {to} = autopilotTargets({works: new WorkStore(home).list(), entries, by: on.by});
-    return to.filter(role => !(on.to ?? []).includes(role));
+    const {to} = autopilotTargets({works: deps.readWorks ? deps.readWorks() : new WorkStore(home).list(), entries, by: on.by});
+    const received = receivedRoles(entries, on);
+    return to.filter(role => !received.has(role));
   } catch { return null; }
 }
 
@@ -76,7 +78,7 @@ function repoLines(info) {
   const from = x => (x.from === 'kadan' ? '카단 설정' : x.from === 'ontology' ? '온톨로지 문서' : '값 없음');
   return [
     `${name}${where}: 카단 설정 deployBranch ${s.deployBranch ?? '(미설정)'}, nightMerge ${s.nightMerge ?? '(미설정)'}${s.at ? ` (${s.at}, ${s.by})` : ''}`,
-    `${name}: 온톨로지 문서 ${card ? card.path : '없음'}`,
+    `${name}: 온톨로지 문서 ${card ? `${card.path}${card.deploy ? ` (deploy: ${card.deploy})` : ''}` : '없음'}`,
     `${name}: 적용값 deployBranch ${e.deployBranch.value ?? '(비어 있음)'} [${from(e.deployBranch)}], Autopilot 중 자동 머지(nightMerge) ${e.nightMerge.value ?? '(비어 있음=허용)'} [${from(e.nightMerge)}]`,
     `${name}: 최종 판정 ${word} (${v.reason}${v.detail ? `, ${v.detail}` : ''}${v.exceptBranch ? `, ${v.exceptBranch}으로 가는 PR만 보류` : ''})`,
   ];
@@ -108,7 +110,7 @@ const flagText = v => (typeof v === 'string' ? v : undefined);
 function repoCommand(args, flags, {home, by, deps}) {
   const [name, value] = args;
   const works = () => (deps.readWorks ?? (() => new WorkStore(home).list()))();
-  const usage = `kadan autopilot repo <소유자/이름> [--deploy-branch <브랜치|없음>] [--${AUTO_MERGE_FLAG} 허용|금지 (옛 이름 --${AUTO_MERGE_FLAG_LEGACY}도 받음)] [--clear deployBranch|nightMerge] | list | show <소유자/이름>`;
+  const usage = `kadan autopilot repo <소유자/이름> [--deploy-branch <브랜치|없음>] [--${AUTO_MERGE_FLAG} 허용|금지 (옛 이름 --${AUTO_MERGE_FLAG_LEGACY}도 받음)] [--clear deployBranch|nightMerge] [--quote "<kyle 원문>" (역할 세션이 쓸 때 필수)] | list | show <소유자/이름>`;
   if (name === undefined) return `정책 파일: ${policyPath(home)}\n사용법: ${usage}`;
   const listOpts = deps.origin ? {origin: deps.origin} : {};
   if (name === 'list') {
@@ -135,7 +137,10 @@ function repoCommand(args, flags, {home, by, deps}) {
   const autoMergeKey = flags[AUTO_MERGE_FLAG] !== undefined ? AUTO_MERGE_FLAG : AUTO_MERGE_FLAG_LEGACY;
   const [deployBranch, nightMerge, clear] = [flagText(flags['deploy-branch']), flagText(flags[autoMergeKey]), flagText(flags.clear)];
   for (const key of ['deploy-branch', autoMergeKey, 'clear']) if (flags[key] !== undefined && typeof flags[key] !== 'string') throw new Error(`--${key}에는 값이 하나 필요합니다. ${usage}`);
-  const saved = setRepoPolicy(home, {repo: name, deployBranch, nightMerge, clear, by, record: deps.record ?? (entry => appendLedger(entry, home))});
+  // 역할 세션(사람 아님)이 --quote로 kyle 원문을 가져오면 사건에 원문을 남긴다. 사람 쓰기는 그대로다.
+  const quote = !isUserActor(by) && typeof flags.quote === 'string' ? flags.quote.trim() : '';
+  if (quote.length > MAX_TEXT) throw new Error(`kyle 원문이 ${MAX_TEXT}자를 넘습니다(${quote.length}자): 줄여서 다시 쓰세요`);
+  const saved = setRepoPolicy(home, {repo: name, deployBranch, nightMerge, clear, by, ...(quote ? {quote} : {}), record: deps.record ?? (entry => appendLedger(entry, home))});
   return [`저장: ${saved.repo} deployBranch ${saved.deployBranch ?? '(미설정)'}, nightMerge ${saved.nightMerge ?? '(미설정)'} (이전 deployBranch ${saved.before.deployBranch ?? '(미설정)'}, nightMerge ${saved.before.nightMerge ?? '(미설정)'})`,
     ...repoLines(evaluateGithub(home, saved.repo))].join('\n');
 }
@@ -165,6 +170,37 @@ function summaryCommand(flags, {home, deps}) {
   return {state: kind, phase, startedAt: start.t, endedAt: new Date(endedAt).toISOString(), counts: summary.counts, text: summary.text};
 }
 
+// `autopilot deliver [<슈퍼감독>]`: 켜진 Autopilot을 아직 못 받은 슈퍼감독(status의 missing)에게 켜짐 우편을 한 번 보내고 전달 사건을 남긴다.
+// 새 감시 주기를 만들지 않는다: 켜진 뒤 업무를 받았거나 첫 안내가 못 간 슈퍼감독을 사람이나 슈퍼감독이 이 명령 한 번으로 채운다.
+// 같은 켜짐에 이미 받은 역할(켤 때 우편·첫 안내·앞선 deliver)은 건너뛴다. 확실히 안 간 것(not-sent)만 기록하지 않아 다시 시도할 수 있다.
+function deliverCommand(args, {home, by, now, entries, state, deps}) {
+  const usage = 'kadan autopilot deliver [<슈퍼감독>]';
+  if (args.length > 1) throw new Error(`슈퍼감독 이름은 하나만 줄 수 있습니다. ${usage}`);
+  if (!isUserActor(by) && !isSupervisorActor(by)) throw new Error('켜짐 안내 전달은 사람 또는 슈퍼감독만 합니다');
+  if (!state.on) throw Object.assign(new Error('Autopilot이 켜져 있을 때만 전달할 수 있습니다'), {exitCode: 2});
+  const on = state.start, missing = missingSupers(home, entries, on, deps);
+  if (missing === null) throw new Error('관계표나 업무를 읽지 못해 받지 못한 슈퍼감독을 정할 수 없습니다: 보내지 않았습니다');
+  const [only] = args;
+  if (only !== undefined && !isSupervisorActor(only)) throw new Error(`슈퍼감독 이름이 아닙니다: ${only}. ${usage}`);
+  // 이름을 주면 업무가 없어도 그 슈퍼감독에게 보낸다(이미 받았으면 건너뜀). 안 주면 missing 전체.
+  const targets = only !== undefined ? (receivedRoles(entries, on).has(only) ? [] : [only]) : missing;
+  const send = deps.sendMail ?? sendAutopilotMail(home, by);
+  const record = deps.record ?? (entry => appendLedger(entry, home));
+  // 보내기 직전에 원장을 한 번 다시 읽어 이미 받았으면 건너뛰고, 아니면 보낸 뒤 실제 결과를 기록한다(예약·잠금 없음).
+  // 순서대로 도는 두 번은 1건이다. 정확히 동시에 겹친 두 실행의 중복 1통은 받아들인다.
+  const readNow = deps.readEntries ?? (() => readLedger(home));
+  const results = [], skipped = [];
+  for (const role of targets) {
+    if (receivedRoles(readNow(), on).has(role)) { skipped.push(role); continue; }
+    let result;
+    try { result = {role, ...send(role, lateMessage(on, role))}; } catch (error) { result = {role, ok: false, delivery: error.delivery ?? 'unknown', error: String(error.message).slice(0, 200)}; }
+    finishDelivery({on, role, via: 'deliver', by, result, now, record});
+    results.push(result);
+  }
+  if (only !== undefined && !targets.length) skipped.push(only);
+  return {on: true, delivered: results, skipped};
+}
+
 // deps(시험용 주입): now, sendMail(role, message), readWorks, readEntries, readDecisions, record, notify, readBody.
 export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const [sub, ...rest] = args;
@@ -178,10 +214,11 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
   const state = autopilotState(entries, now);
 
   if (sub === 'status') {
-    if (state.on) return describeOn(state, now, missingSupers(home, entries, state.start));
+    if (state.on) return describeOn(state, now, missingSupers(home, entries, state.start, deps), lateRoles(entries, state.start));
     return {on: false, ...(state.pending ? {pendingEnd: state.pending.phase, note: '끝났지만 아직 요약 전입니다(감시기 다음 주기나 다음 autopilot 명령이 마무리합니다)'} : {}),
       last: lastRun(entries, state)};
   }
+  if (sub === 'deliver') return deliverCommand(rest, {home, by, now, entries, state, deps});
   if (sub === 'note') {
     // 켜져 있을 때만 받는다. 끝났지만 요약 전인 켜짐도 꺼짐으로 보고 거절한다(마무리는 on/off/감시기 몫). 역할 세션·사람 모두 쓸 수 있다.
     if (!state.on) throw Object.assign(new Error('Autopilot이 켜져 있을 때만 기록할 수 있습니다'), {exitCode: 2});
@@ -232,7 +269,7 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
     try { decideAfterMs = parseDecideAfter(flags['decide-after']); } catch (error) { throw Object.assign(error, {exitCode: 2}); }
   }
 
-  // --allow: 이번 켜짐 동안만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. 켜진 모든 단계(Cruise 포함)에서 받는다. 값마다 올바른 키, kyle 원문 필수.
+  // --allow: 이번 켜짐 동안만 정책 보류(금지·배포 브랜치·자동 배포인데 배포 브랜치 미설정) 세 가지를 푸는 kyle의 허용. 켜진 모든 단계(Cruise 포함)에서 받는다. 값마다 올바른 키, kyle 원문 필수.
   let allow;
   if (flags.allow !== undefined) {
     const keys = (Array.isArray(flags.allow) ? flags.allow : [flags.allow]).map(v => {

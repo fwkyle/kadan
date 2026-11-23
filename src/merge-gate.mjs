@@ -14,8 +14,9 @@ import {decideNightMerge, gitOriginGithub, normalizeGithub} from './autopilot-re
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const PR_URL = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/(\d+)(?:[/?#].*)?$/i;
 const CLEAN_STATES = ['CLEAN', 'HAS_HOOKS'];
-// `--allow`가 풀어 주는 정책 보류 이유는 이 둘뿐이다. setup-needed는 정책 파일 손상·잘못된 키도 같은 이유로 나오므로 풀지 않는다.
-export const ALLOW_RELEASES = ['night-merge-forbidden', 'deploy-branch'];
+// `--allow`가 풀어 주는 정책 보류 이유는 이 셋뿐이다. setup-needed는 정책 파일 손상·잘못된 키도 같은 이유로 나오므로 풀지 않는다.
+// deploy-unset(카드 `deploy: 자동`인데 배포 브랜치 미설정, 2026-11-23)은 deploy-branch와 같은 갈래(배포 브랜치로 가는 PR 보류)이고 kyle 원문이 있어야만 푸는 `--allow`라 함께 푼다.
+export const ALLOW_RELEASES = ['night-merge-forbidden', 'deploy-branch', 'deploy-unset'];
 
 const LOCK_FILES = ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock', 'cargo.lock', 'go.sum', 'poetry.lock', 'pipfile.lock', 'uv.lock'];
 // 금지 경로는 경로 이름만으로 본다(저장소 이름으로 나누지 않는다). diff를 못 보므로 의존성 파일은 바뀐 것만으로 보류한다.
@@ -150,7 +151,7 @@ export function mergeGate(workKey, raw, {home, by = '사람', deps = {}} = {}) {
     policy = decideNightMerge(home, {github, baseBranch: pr.baseRefName});
     if (policy.action !== 'merge') {
       if (ALLOW_RELEASES.includes(policy.reason) && allow.includes(github)) allowApplied = policy.reason;
-      else reject(`저장소 정책이 Autopilot 중 자동 머지를 안 함(${policy.reason})${ALLOW_RELEASES.includes(policy.reason) ? ` — autopilot on --allow ${github}로 풀 수 있음` : ''}`);
+      else reject(`저장소 정책이 Autopilot 중 자동 머지를 안 함(${policy.reason})${policy.detail ? `: ${policy.detail}` : ''}${ALLOW_RELEASES.includes(policy.reason) ? ` — autopilot on --allow ${github}로 풀 수 있음` : ''}`);
     }
   }
 
