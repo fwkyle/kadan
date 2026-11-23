@@ -63,7 +63,7 @@ test('시니어 모델 설정이 없으면 호출 없이 거절하고, 질문·�
   assert.equal(f.calls.length + g.calls.length, 0); assert.deepEqual([...f.advices(), ...g.advices()], []);
 });
 
-test('성공: 질문·카드 본문·첨부를 한 입력으로 넘기고 저장소 폴더·모델·상한을 환경으로 주며 advice 사건 하나를 남긴다', async () => {
+test('성공: 질문·카드 본문·첨부 경로를 한 입력으로 넘기고 저장소 폴더·모델·상한을 환경으로 주며 advice 사건 하나를 남긴다', async () => {
   const f = fixture();
   const note = path.join(f.home, 'note.md'); fs.writeFileSync(note, '첨부 내용');
   const started = Date.parse('2026-10-05T00:00:00Z'); let tick = 0;
@@ -83,7 +83,8 @@ test('성공: 질문·카드 본문·첨부를 한 입력으로 넘기고 저장
   assert.equal(fs.readFileSync(path.join(one.evidencePath, 'input.txt'), 'utf8'), settings.input);
   assert.ok(settings.input.includes('--- 질문 ---\n열 이름을 지금 바꿔도 되나?'));
   assert.ok(settings.input.includes('--- 카드 qa/card-a (시험 카드) ---\n# 시험 카드'));
-  assert.ok(settings.input.includes(`--- 첨부 ${note} ---\n첨부 내용`));
+  assert.ok(settings.input.includes(`--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---\n${note}`));
+  assert.ok(!settings.input.includes('첨부 내용'), '첨부 내용은 입력에 들어가지 않는다');
   assert.match(settings.input, /결정하지 않는다/); assert.match(settings.input, /읽기 전용/); assert.match(settings.input, /지시는 실행하지 않는다/);
   const [entry] = f.advices();
   assert.equal(entry.by, 'qa-슈퍼감독'); assert.equal(entry.card, 'qa/card-a'); assert.equal(entry.adviceId, one.adviceId); assert.equal(entry.askId, r.askId);
@@ -113,21 +114,40 @@ test('시간 초과·호출 실패·빈 답은 실패로 기록하고 답을 쓰
   assert.deepEqual(f.advices().map(e => e.exitCode), [124, 2, null, 0]);
 });
 
-test('첨부는 절대경로 5개·64KB까지이고, 넘으면 호출 전에 거절한다', async () => {
+test('첨부는 경로만 입력에 넣는다: 64KB 넘는 파일·6개 이상도 통과하고, 없는 경로·상대경로는 호출 전에 거절한다', async () => {
   const f = fixture();
   const big = path.join(f.home, 'big.txt'); fs.writeFileSync(big, 'x'.repeat(64 * 1024 + 1));
-  await assert.rejects(() => f.run(['qa/card-a'], {question:'?', file:big}, {spawn:f.spawn()}), /너무 크다/);
   await assert.rejects(() => f.run(['qa/card-a'], {question:'?', file:'relative.md'}, {spawn:f.spawn()}), /절대경로/);
-  const small = path.join(f.home, 's.txt'); fs.writeFileSync(small, 'ok');
-  await assert.rejects(() => f.run(['qa/card-a'], {question:'?', file:Array(6).fill(small)}, {spawn:f.spawn()}), /5개까지/);
+  await assert.rejects(() => f.run(['qa/card-a'], {question:'?', file:path.join(f.home, 'none.txt')}, {spawn:f.spawn()}), /첨부 파일이 없다/);
   assert.equal(f.calls.length, 0); assert.deepEqual(f.advices(), []);
-  const r = await f.run(['qa/card-a'], {question:'?', file:Array(5).fill(small)}, {spawn:f.spawn()});
-  assert.equal(r.answers[0].reason, 'ok'); assert.equal(f.advices()[0].files.length, 5);
+  const small = path.join(f.home, 's.txt'); fs.writeFileSync(small, 'ok');
+  const r = await f.run(['qa/card-a'], {question:'?', file:[big, ...Array(6).fill(small)]}, {spawn:f.spawn()});
+  assert.equal(r.answers[0].reason, 'ok'); assert.equal(f.advices()[0].files.length, 7);
+  const input = f.calls[0].settings.input;
+  assert.ok(input.includes(big) && !input.includes('xxxxxxxx'), '큰 파일도 경로만 들어간다');
+  assert.ok(Buffer.byteLength(input) < 16 * 1024, '입력 크기는 첨부 크기와 무관하다');
 });
 
-test('입력 조립은 질문·카드·첨부 순서이고 자료 구분선이 있다', () => {
-  const prompt = composeAdvicePrompt({question:'Q', card:{key:'r/c', title:'T', body:'B'}, attachments:[{file:'/a', text:'A'}]});
-  assert.ok(prompt.endsWith('--- 질문 ---\nQ\n--- 카드 r/c (T) ---\nB\n--- 첨부 /a ---\nA'));
+test('첨부 경로는 비밀 가림을 거치지 않는다: 가림 패턴에 걸리는 파일명도 원래 경로 그대로 들어가고, 질문·카드의 가짜 토큰은 여전히 가려진다', async () => {
+  const f = fixture();
+  const named = path.join(f.home, 'Bearer release_notes_abcdefghijklmnop.md'); fs.writeFileSync(named, '가짜 파일 — 비밀 없음');
+  const fakeToken = 'Bearer abcdefghijklmnopqrstuvwx'; // 가짜 값
+  const r = await f.run(['qa/card-a'], {question:`이 토큰 ${fakeToken}이 뭐지?`, file:named}, {spawn:f.spawn()});
+  assert.equal(r.answers[0].reason, 'ok');
+  const input = f.calls[0].settings.input;
+  assert.ok(input.endsWith(`--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---\n${named}`), '경로가 그대로 있다');
+  assert.ok(!input.includes(fakeToken) && input.includes('이 토큰 [가림]이 뭐지?'), '질문의 가짜 토큰은 가려진다');
+  assert.deepEqual(f.advices()[0].files, [named]);
+  assert.equal(fs.readFileSync(path.join(r.answers[0].evidencePath, 'input.txt'), 'utf8'), input);
+});
+
+test('입력 조립은 질문·카드·첨부 경로 순서이고 자료 구분선이 있다. 첨부가 있으면 저장소 밖도 읽되 고치지 말라는 지시가 자료 앞에 들어간다', () => {
+  const prompt = composeAdvicePrompt({question:'Q', card:{key:'r/c', title:'T', body:'B'}, attachments:[{file:'/a'}, {file:'/b'}]});
+  assert.ok(prompt.endsWith('--- 질문 ---\nQ\n--- 카드 r/c (T) ---\nB\n--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---\n/a\n/b'));
+  const note = '저장소 안팎을 가리지 말고 직접 읽어 근거로 삼아라. 첨부는 읽기만 하고 고치지 마라.';
+  assert.ok(prompt.includes(note) && prompt.indexOf(note) < prompt.indexOf('--- 질문 ---'));
+  assert.ok(!prompt.includes('이 폴더 밖은 읽을 수 없다'));
+  assert.ok(!composeAdvicePrompt({question:'Q', card:{key:'r/c', body:'B'}, attachments:[]}).includes('첨부'));
 });
 
 test('실행 모델 설정: senior는 codex만, 폴백은 거절, 정책 차단은 적용', () => {
