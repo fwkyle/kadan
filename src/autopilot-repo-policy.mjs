@@ -262,7 +262,8 @@ export function loadOntology(home, {limits = ONTOLOGY_LIMITS} = {}) {
     const mapBroken = deployBranch?.kind === 'unreadable' && String(fields.deploy_branch).trim().startsWith('{');
     // 원격 주소 값이 있는데(없음 제외) 해석되지 않으면 이 문서가 어느 저장소 것인지 모른다: 거기에 금지 값이 있어도 알 수 없으므로 읽지 못한 문서로 센다.
     const github = parseRemote(fields.remote), remoteWord = firstWord(fields.remote);
-    const remoteBad = remoteWord !== null && remoteWord !== '없음' && github === null;
+    // 짝 목록이 정상으로 읽힌 우산 문서는 키가 저장소를 정하므로 remote(자유 글일 수 있음)를 해석하지 않는다.
+    const remoteBad = deployBranch?.kind !== 'map' && remoteWord !== null && remoteWord !== '없음' && github === null;
     const reason = problems.length ? '판정 칸 형식이 틀림' : mapBroken ? 'deploy_branch 짝 목록 형식이 틀림' : remoteBad ? 'remote 주소 형식을 읽을 수 없음' : null;
     if (reason) bad(rel, reason);
     cards.push({id: path.basename(rel, '.md'), path: rel, broken: false, problems,
