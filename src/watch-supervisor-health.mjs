@@ -3,6 +3,7 @@ import {workEntries} from './handover-state.mjs';
 import {taskIdentity} from './task-identity.mjs';
 import {SUPERVISOR_ERROR_PATTERN} from './watch-stop-phrases.mjs';
 import {statusProgress} from './watch-status-line.mjs';
+import {readToolTimeout} from './watch-tool-timeout.mjs';
 import {changeDigest} from './watch-roles.mjs';
 import {decisionFields} from './watch-waits.mjs';
 import {resultOfDispatch} from './watch-scope.mjs';
@@ -12,6 +13,8 @@ export const SUPERVISOR_CHECK_MS = 60 * 60_000;
 export const SUPERVISOR_ERROR_MS = 5 * 60_000;
 // 같은 화면 재사용: 원장의 마지막 요청 뒤 이 시간이 지나면 같은 화면이어도 정기 확인을 한 번 부른다(재시작해도 유지).
 export const SUPERVISOR_REUSE_MS = 4 * 60 * 60_000;
+// 도구 줄 `Running… (… · timeout T)`이 화면 끝 상태 구역에 있는 동안, 처음 본 시각 + T(최대 60분) + 이 여유까지는 정기 후보를 내지 않는다.
+export const SUPERVISOR_TOOL_GRACE_MS = 60_000;
 const REUSABLE_VERDICTS = new Set(['입력대기', '실행완료']);
 const errorPattern = SUPERVISOR_ERROR_PATTERN; // 작업자 감시와 같은 목록(watch-stop-phrases.mjs)
 
@@ -85,7 +88,7 @@ export class SupervisorHealth {
       let state = this.states.get(session);
       if (!state || String(state.pid) !== String(seen.pid)) {
         const previous = entries.findLast(e => e.kind === 'watch-ai-request' && e.source === 'supervisor-health' && e.session === session && Date.parse(e.t) >= Date.parse(seen.startedAt));
-        state = {pid:seen.pid,at:now,screen:seen.screen.slice(-8000),lastCheck:Number.isFinite(Date.parse(previous?.t))?Date.parse(previous.t):now,errorSince:null,errorChecked:false,workClock:null,prevScreen:seen.screen.slice(-8000)};
+        state = {pid:seen.pid,at:now,screen:seen.screen.slice(-8000),lastCheck:Number.isFinite(Date.parse(previous?.t))?Date.parse(previous.t):now,errorSince:null,errorChecked:false,workClock:null,prevScreen:seen.screen.slice(-8000),tool:null};
         this.states.set(session,state);
       }
       const error = errorPattern.test(seen.screen.split('\n').slice(-20).join('\n'));
@@ -96,10 +99,15 @@ export class SupervisorHealth {
       const previousScreen = state.prevScreen, previousClockSec = state.workClock;
       state.workClock = progress.status?.kind === 'working' ? progress.status.clockSec : null;
       state.prevScreen = seen.screen.slice(-8000);
+      // 도구 줄 timeout 안: 상태 구역(실제 입력창 바로 위 스피너 + 그 위 도구 줄)이 확정될 때만 읽는다. 같은 도구 = 경과 표시를 뺀 도구 줄 + T라서 경과만 바뀌어도 처음 본 감시기 시각은 그대로고, 쓰는 T는 최대 60분이라 한 도구의 억제는 처음 본 뒤 최대 61분이다. 도구 줄이 없어지거나 T가 달라지면 다시 센다. 오류 화면·구역 미확정·T 못 읽음은 억제하지 않는다. 상태는 후보 여부와 무관하게 매 순회 갱신한다.
+      const tool = readToolTimeout(seen.screen);
+      if (!tool) state.tool = null;
+      else if (state.tool?.key !== tool.key) state.tool = {key:tool.key,since:now,timeoutMs:tool.timeoutMs};
+      const inToolTimeout = !error && state.tool != null && now < state.tool.since + state.tool.timeoutMs + SUPERVISOR_TOOL_GRACE_MS;
       const early = error && !state.errorChecked && now-state.errorSince >= SUPERVISOR_ERROR_MS;
       // 같은 화면 재사용: 지난 관찰AI가 정상으로 판정한 그 화면(changeDigest 같음)이고 오류·본인 차례가 없으면 정기 확인을 부르지 않는다. 화면 모양은 해석하지 않는다. 하나라도 아니면 그대로 부른다.
       const quiet = !error && now-state.lastCheck >= SUPERVISOR_CHECK_MS && ownTurn != null && !ownTurn.has(role) && sameAsJudgedNormal(entries, session, seen.screen, now);
-      if (enabled && (early || (error || !progress.moving) && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
+      if (enabled && (early || (error || !progress.moving) && !inToolTimeout && !quiet && now-state.lastCheck >= SUPERVISOR_CHECK_MS)) {
         candidates.push({state,early,source:'supervisor-health',role,session,input:{
           ...observationContext(role,seen,mailEntries,cards,scope.entries,decisions),
           check:early?'persistent-error':'hourly',minutes:Math.floor((now-state.at)/60000),
