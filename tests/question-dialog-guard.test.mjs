@@ -155,3 +155,14 @@ test('[발견 3] 고정 입력에 마스크 경로·금융 용어가 남아 있�
     assert.doesNotMatch(value, /ETF|\/aaaaaa/u, name);
   }
 });
+
+test('[재판정 중요 1] 편집기 이름이 41자를 넘어도(80자) 보류하고, 앞 안내 묶음 없이 편집기 안내만 있는 화면은 전달한다', () => {
+  const longName = 'e'.repeat(80);
+  const screen = screens.TYPE_SOMETHING.replace('edit in Vim', `edit in ${longName}`);
+  assert.equal(hasQuestionDialog(screen), true);
+  for (const [name, options] of Object.entries(VARIANTS)) assertHeld(screen, `${name} / 80자`, options);
+  const alone = `⏺ 응답\n  ctrl+g to edit in ${longName} · Esc to cancel\n`;
+  assert.equal(hasQuestionDialog(alone), false);
+  const calls = [];
+  assert.equal(sendTmux('kadan-qd', '본문', {run: fakeRun(alone, calls), spawn: noopSpawn}).keyDelivery, 'sent');
+});

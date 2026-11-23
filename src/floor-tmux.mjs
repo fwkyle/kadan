@@ -812,8 +812,10 @@ export function hasTrustPrompt(screen) {
 //   (다) `Enter to select · ↑/↓ to navigate · Esc to cancel` — 질문 하나짜리 창(탭 줄 없음). 다른 창(권한 확인 등)도 쓸 수 있는 문구라
 //        바로 위 12줄 안에 이 창의 선택지 줄 `N. Chat about this`(줄 처음부터)가 있을 때만 질문 창으로 본다.
 // 받아들인 한계: 붙여넣기와 Enter 사이 1초 안에 창이 새로 뜨는 경우는 못 막는다(검사는 전송 시작 때 한 번이다).
-const QUESTION_FOOTER = /Entertoselect[·•](Tab\/Arrowkeys|↑\/↓)tonavigate[·•](?:ctrl\+gtoeditin[^·•]{1,40}[·•])?Esc(?:tocancel)?$/u;
+const QUESTION_FOOTER = /Entertoselect[·•](Tab\/Arrowkeys|↑\/↓)tonavigate[·•](?:ctrl\+gtoeditin[^·•]+[·•])?Esc(?:tocancel)?$/u;
 // 선택지 줄: 번호가 붙은 `N. Chat about this`(커서 글자 있거나 없이)가 줄 처음부터. 앞선 응답에서 이 말을 인용만 한 줄은 아니다.
+// 받아들인 한계: 앞선 응답이 번호 붙은 `N. Chat about this` 한 줄을 줄 처음부터 그대로 인용한 뒤 다른 방향키 창이 오면 보류한다.
+// 안전한 쪽(늦게 전달)으로 틀리고, 보류된 우편은 감시기가 화면이 바뀐 뒤 다시 전달한다(신뢰 창 F8 한계와 같은 종류).
 const QUESTION_ARROW_EVIDENCE = /^[❯>]?\d+\.Chataboutthis$/u;
 const QUESTION_DIALOG_TAIL_LINES = 40;
 const QUESTION_ARROW_EVIDENCE_LINES = 12;
