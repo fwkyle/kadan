@@ -2,7 +2,7 @@
 import { proceedHint } from "./decision-proceed.mjs";
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
-import { phraseAction } from "./watch-stop-phrases.mjs";
+import { phraseAction, resumeHint } from "./watch-stop-phrases.mjs";
 import { idleCountsText, idleOwnText, idleRegisterHint, idleTurnHint, buildIdleNudge } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
 import { WATCH_ALERT_FOOTER } from "./watch-notice-format.mjs";
@@ -75,6 +75,8 @@ function watchAIErrorBody(alert) {
 
 // 대기 표시 실행의 정지 화면 경보(watch-waiting-stop.mjs) 근거: 대기 표시 시각·사유, 화면의 정지 줄, 왜 지금까지 조용했는지.
 // 재시작 뒤 원장에서 복원한 경보에는 시각·줄이 없다. 없는 값은 지어내지 않고 뺀다.
+const alertRole = (alert) => alert.role ?? String(alert.session ?? "").replace(/^kadan-/u, "");
+
 function waitingStopBasis(alert) {
   const at = new Date(alert.waitingAt);
   const when = Number.isFinite(at.getTime()) ? ` ${at.getMonth() + 1}/${at.getDate()} ${clockTime(at)}` : "";
@@ -156,7 +158,9 @@ export function formatAlertBody(alert) {
     const replace = phraseAction(alert.kind) === "replace-runner" ? " · 실행기 교체 필요(같은 세션 재시도 금지)" : "";
     // 대체 후보가 있을 때만 교대 명령 한 줄(watch-limit-fallback.mjs). 감시기는 세션을 바꾸지 않고 안내만 한다.
     const fallback = alert.kind === "한도" && alert.fallbackLine ? ` · ${alert.fallbackLine}` : "";
-    return `${alert.kind} ${alert.session} (${alert.line})${ocx}${fallback}${replace}`;
+    // 입력 한 번이면 이어가는 멈춤 줄(자동 계속 멈춤·로그인 시간 초과)에는 교대 대신 이어가기 명령 안내를 붙인다(보내는 것은 사람).
+    const resume = resumeHint(alert.line, alertRole(alert));
+    return `${alert.kind} ${alert.session} (${alert.line})${ocx}${fallback}${replace}${resume ? ` · ${resume}` : ""}`;
   }
   if (alert.kind === "보안필터") {
     return `보안 필터로 멈춤 ${alert.role ?? alert.session}${alert.taskId ? ` / ${alert.taskId}` : ""} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;
@@ -176,8 +180,9 @@ export function formatAlertBody(alert) {
   }
   if (alert.kind === "대기중정지") {
     const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";
+    const resume = resumeHint(alert.line, alertRole(alert));
     return `대기 표시 중 오류 화면으로 멈춤 ${alert.session} / ${alert.executionKey ?? alert.taskId}`
-      + ` (${waitingStopBasis(alert)}${dispatcher} — 감독 확인 필요)`;
+      + ` (${waitingStopBasis(alert)}${dispatcher} — 감독 확인 필요${resume ? `; ${resume}` : ""})`;
   }
   if (alert.kind === "대기중장기정지") {
     const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";

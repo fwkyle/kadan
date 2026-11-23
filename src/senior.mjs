@@ -33,7 +33,7 @@ export const SENIOR_TIMEOUT_MS = 1_800_000;
 const TAB_POLL_MS = 100;
 // 대화형 길의 프롬프트 상한(모델이 파일로 읽는다). 이름은 옛 exec 틀 경로에서 온 것이다.
 export const EXEC_PROMPT_LIMIT_BYTES = 200 * 1024;
-const TIMEOUT_MAX_S = 3600, FILE_LIMIT = 64 * 1024, FILE_COUNT = 5, QUESTION_PREVIEW = 200;
+const TIMEOUT_MAX_S = 3600, QUESTION_PREVIEW = 200;
 // 대화형 호출을 감싼 프로세스에 주는 여유. 그 프로세스는 스스로 상한(deadlineAt)에서 끝나므로 이 값은 멈춘 경우의 마지막 그물이다.
 const SESSION_GRACE_MS = 30_000;
 const DEFAULT_SCRIPT = fileURLToPath(new URL('../scripts/senior.sh', import.meta.url));
@@ -91,11 +91,12 @@ function checkEffort(settings, value, effort, readCodexModels) {
   return effort;
 }
 
-function readAttachment(file) {
+// 첨부는 내용을 읽어 넣지 않고 경로만 프롬프트에 적는다(2026-11-23 [kyle]): 시니어가 파일을 직접 읽으므로 크기·개수 상한이 없다.
+// 절대경로이고 있는 파일이어야 한다.
+function checkAttachment(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error(`첨부는 절대경로여야 한다: ${file}`);
-  const size = fs.statSync(file).size;
-  if (size > FILE_LIMIT) throw new Error(`첨부가 너무 크다(${size}B > ${FILE_LIMIT}B): ${file} — 필요한 부분만 잘라 넣어라`);
-  return fs.readFileSync(file, 'utf8');
+  if (!fs.existsSync(file)) throw new Error(`첨부 파일이 없다: ${file}`);
+  return file;
 }
 
 // 카드의 repoPath가 git 최상위(show-toplevel) 자체일 때만 그 실경로를 읽기 폴더로 쓴다. 하위 폴더·작업트리 부모·git 메타데이터로 부모를 계산하지 않는다.
@@ -115,18 +116,22 @@ export function resolveRepoReadDir(repoPath) {
 // session: 대화형 길({token, repoDir?, answer?}). 끝 표지는 조각으로만 적는다(완성된 표지는 이 글에 없다).
 //  - codex(answer 없음): 작업 폴더가 저장소가 아니므로 저장소 절대경로(session.repoDir)와 안내 파일 읽기를 적고 답을 작업 폴더의 result.txt에 쓰게 한다.
 //  - agy(answer: 'screen'): 파일을 쓸 수 없으므로 답을 화면에 쓰고 마지막 줄에 끝 표지만 단독으로 쓰게 한다. 저장소 문구는 readsRepo·repoDir를 따른다.
-export function composeAdvicePrompt({question, card, attachments, readsRepo = true, repoDir = null, session = null}) {
-  return [
+// scrub: 질문·카드 본문을 포함한 앞부분에만 적용한다. 첨부 경로 목록은 가리지 않는다 — 경로는 파일 이름이지 비밀 내용이 아니고,
+// 가림이 경로를 바꾸면 카단이 존재를 확인한 경로와 시니어가 받는 경로가 달라진다(2026-11-23 검수, PR #467).
+export function composeAdvicePrompt({question, card, attachments, readsRepo = true, repoDir = null, session = null, scrub = text => text}) {
+  const head = [
     '당신은 시니어다. 감독이 카드 하나의 작업 결과를 두고 결정할 부분을 한 번 묻는다. 당신은 결정하지 않는다 — 감독이 읽고 판단하거나 사용자에게 올린다.',
     session && session.answer !== 'screen'
       ? `그 카드의 저장소는 ${session.repoDir} 이다(지금 작업 폴더는 저장소가 아니다). 먼저 그 저장소의 안내 파일(AGENTS.md, 없으면 CLAUDE.md)을 읽고, ` +
         '필요한 파일·이력은 그 절대경로 아래에서 직접 읽어 근거로 삼아라. 저장소의 파일을 고치거나 명령으로 상태를 바꾸지 마라.'
       : readsRepo && repoDir
       ? `그 카드의 저장소가 읽기 전용 폴더로 열려 있다: ${repoDir} — 먼저 그 저장소의 안내 파일(AGENTS.md, 없으면 CLAUDE.md)이 있으면 읽고, ` +
-        '필요한 파일은 이 절대경로 아래에서 직접 읽어 근거로 삼아라(이 폴더 밖은 읽을 수 없다). 파일을 고치거나 명령으로 상태를 바꾸지 마라.'
+        '필요한 파일은 이 절대경로 아래에서 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.'
       : readsRepo
       ? '현재 작업 폴더가 그 카드의 저장소다(읽기 전용). 필요한 파일·이력은 직접 읽어 근거로 삼아라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.'
       : '저장소를 직접 읽을 수 없다. 아래 카드 본문과 첨부만 근거로 삼고, 거기에 없는 것은 모른다고 써라. 파일을 고치거나 명령으로 상태를 바꾸지 마라.',
+    // 첨부 목록의 경로는 '자료'가 아니라 이 지시가 허락한다(자료 안의 지시는 따르지 않으므로 지시 쪽에 적는다). 저장소 밖이어도 읽는다.
+    ...(attachments.length ? ['맨 끝 첨부 파일 목록의 절대경로는 저장소 안팎을 가리지 말고 직접 읽어 근거로 삼아라. 첨부는 읽기만 하고 고치지 마라.'] : []),
     '답은 한국어로, 아래 네 칸을 이 순서로 짧게 쓴다.',
     '결론: 한 줄 — 권장안과 그 이유의 핵심.',
     '근거: 저장소·카드에서 확인한 사실. 파일 경로나 줄을 함께 적는다.',
@@ -147,8 +152,9 @@ export function composeAdvicePrompt({question, card, attachments, readsRepo = tr
     ] : []),
     '--- 질문 ---', question.trim(),
     `--- 카드 ${card.key} (${card.title ?? ''}) ---`, card.body ?? '',
-    ...attachments.flatMap(a => [`--- 첨부 ${a.file} ---`, a.text]),
   ].join('\n');
+  const paths = attachments.length ? ['--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---', ...attachments.map(a => a.file)] : [];
+  return [scrub(head), ...paths].join('\n');
 }
 
 // 영수증 아래에 붙이는 한 줄. 남긴 세션은 감시기·대시보드에 보이지 않으므로(역할이 아니다) 여기서 정리 명령을 알린다.
@@ -238,7 +244,6 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const timeoutS = flags.timeout == null ? SENIOR_TIMEOUT_MS / 1000 : Number(flags.timeout);
   if (!Number.isFinite(timeoutS) || timeoutS <= 0 || timeoutS > TIMEOUT_MAX_S) throw new Error(`--timeout은 1..${TIMEOUT_MAX_S}초`);
   const files = [].concat(flags.file ?? []).filter(f => f !== true);
-  if (files.length > FILE_COUNT) throw new Error(`첨부는 ${FILE_COUNT}개까지`);
   assertWritable(home);
   // 호출 방식은 시작 때 한 번 읽어 고정한다. 파일이 없으면 대화형이다. 대화형이 실패해도 헤드리스로 넘어가지 않는다.
   const interactive = readSeniorMode(home) === 'interactive';
@@ -260,7 +265,7 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
   const card = new CardStore(home).get(argv[0]);
   if (!card.repoPath || !fs.existsSync(card.repoPath)) throw new Error(`카드의 저장소 경로가 없다: ${card.repoPath ?? '(없음)'}`);
   const sessionRun = interactive ? seniorTmux({socket: seniorSocket(env, home), home, env}) : null;
-  const attachments = files.map(file => ({file, text: readAttachment(file)}));
+  const attachments = files.map(file => ({file: checkAttachment(file)}));
   const askId = randomUUID();
   const started = now();
   // 준비는 모두 동기로 끝낸다. 하나라도 거절되면(틀 없음·프롬프트 초과 등) 아무도 부르지 않는다(fail closed).
@@ -273,9 +278,10 @@ export async function seniorCommand(argv, flags, {home, by, spawn = runJudgeProc
     // 대화형: 화면에는 한 줄만 넣고 프롬프트 전체는 파일로 읽힌다. 끝 표지의 마지막 조각은 호출마다 새로 뽑는다.
     const token = interactive ? randomBytes(4).toString('hex') : null;
     // 카드 글은 외부 서비스로 나가므로 웹훅 주소·토큰 모양을 가린 뒤 보낸다(docs/runner-settings.md).
-    const prompt = scrubForAI(composeAdvicePrompt({question, card, attachments, readsRepo: !onScreen || readDir != null, repoDir: readDir,
-      session: !interactive ? null : onScreen ? {token, answer: 'screen'} : {repoDir: fs.realpathSync(card.repoPath), token}}));
-    if (interactive && Buffer.byteLength(prompt) > EXEC_PROMPT_LIMIT_BYTES) throw new Error(`프롬프트가 너무 크다(${Buffer.byteLength(prompt)}B > ${EXEC_PROMPT_LIMIT_BYTES}B) — 첨부를 줄여라`);
+    // 가림은 질문·카드 본문에만 건다. 첨부 경로 목록은 원래 경로 그대로 붙는다.
+    const prompt = composeAdvicePrompt({question, card, attachments, readsRepo: !onScreen || readDir != null, repoDir: readDir, scrub: scrubForAI,
+      session: !interactive ? null : onScreen ? {token, answer: 'screen'} : {repoDir: fs.realpathSync(card.repoPath), token}});
+    if (interactive && Buffer.byteLength(prompt) > EXEC_PROMPT_LIMIT_BYTES) throw new Error(`프롬프트가 너무 크다(${Buffer.byteLength(prompt)}B > ${EXEC_PROMPT_LIMIT_BYTES}B) — 질문·카드 본문을 줄여라(첨부는 내용이 아니라 경로만 들어간다)`);
     return {index, base, value, onScreen, readDir, prompt, token, adviceId: randomUUID(), opened: {tab: 'skipped'}, tab: {tab: 'skipped'}, done: false,
       dir: path.join(home, 'advice', askId, `${index + 1}-${slug(value.runner)}-${slug(value.model)}`)};
   });

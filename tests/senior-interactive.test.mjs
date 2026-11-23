@@ -115,7 +115,8 @@ test('명시한 headless에서 agy가 등록돼 있으면 codex도 부르지 않
 
 test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답·advice·영수증이 같은 글을 가리킨다. 세션은 끄지 않고 남기며(키 0회) 정리 명령이 끈다. 기본 소켓 호출은 0회다', {skip}, async t => {
   const f = fixture(t);
-  const note = path.join(f.home, 'note.md'); fs.writeFileSync(note, '첨부 내용');
+  // 파일명이 비밀 가림 패턴(Bearer …)에 걸려도 첨부 경로는 가리지 않고 원래 경로 그대로 들어간다(가짜 이름, 비밀 없음).
+  const note = path.join(f.home, 'Bearer note_abcdefghijklmnop.md'); fs.writeFileSync(note, '첨부 내용');
   const r = await f.run({file: note, timeout: '60'});
   assert.deepEqual(r.answers.map(a => [a.model, a.reason, a.status, a.mode]), [['gpt-6-astra', 'ok', 'ok', 'interactive'], ['gpt-6-sol', 'ok', 'ok', 'interactive']]);
   const advices = f.advices();
@@ -133,7 +134,8 @@ test('대화형 성공: 등록된 두 명에게 동시에 묻고 표지 뗀 답�
     const input = fs.readFileSync(path.join(a.evidencePath, 'input.txt'), 'utf8');
     assert.ok(input.includes(`그 카드의 저장소는 ${f.repo} 이다`)); assert.match(input, /안내 파일\(AGENTS\.md/);
     assert.ok(!input.includes('현재 작업 폴더가 그 카드의 저장소다'));
-    assert.ok(input.includes(`--- 첨부 ${note} ---\n첨부 내용`));
+    assert.ok(input.includes(`--- 첨부 파일(내용은 넣지 않았다 — 경로만 적는다) ---\n${note}`));
+    assert.ok(!input.includes('첨부 내용'), '첨부 내용은 입력 파일에 들어가지 않는다');
     assert.ok(record.marker.startsWith('KADAN-SENIOR-END-') && !input.includes(record.marker), '완성된 표지는 input.txt에 없다');
     assert.ok(fs.readFileSync(path.join(a.evidencePath, 'out', 'result.txt'), 'utf8').includes(record.marker));
     assert.deepEqual(f.fakeLog(a.model, 'submitted'), [ASK_LINE], '/mcp는 넣지 않고 질문 한 줄만 들어갔다');
@@ -688,8 +690,9 @@ test('자리가 모자라면 아무도 부르지 않고(advice 0줄) 입력이 2
   assert.deepEqual(f.sessions().sort(), ['held-a', 'held-b', 'held-c']);
   assert.equal(fs.existsSync(path.join(f.log, 'gpt-6-astra.env.json')), false);
   const big = fixture(t, {seniors: [ASTRA]});
+  // 첨부는 경로만 들어가므로 큰 첨부로는 상한에 걸리지 않고, 질문이 200KB를 넘으면 거절한다.
   const files = [1, 2, 3, 4].map(n => { const file = path.join(big.home, `big-${n}.txt`); fs.writeFileSync(file, 'x'.repeat(60_000)); return file; });
-  await assert.rejects(() => big.run({file: files}), /프롬프트가 너무 크다/);
+  await assert.rejects(() => big.run({file: files, question: 'q'.repeat(210_000)}), /프롬프트가 너무 크다/);
   assert.equal(fs.existsSync(path.join(big.home, 'advice')), false);
 });
 
