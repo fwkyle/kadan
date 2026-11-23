@@ -807,11 +807,11 @@ export function hasTrustPrompt(screen) {
 // Claude Code 2.1.330 실측 화면(고정 입력 tests/fixtures/question-dialog-screens.mjs)의 바닥 안내 세 꼴:
 //   (가) `Enter to select · Tab/Arrow keys to navigate · Esc to cancel` — 여러 질문 창, 선택지 커서
 //   (나) 위에 `ctrl+g to edit in Vim`이 끼는 꼴 — 직접 입력 칸("Type something.") 커서(사고의 실제 경우)
-//   (다) `Enter to select · ↑/↓ to navigate · Esc to cancel` — 검토·제출 단계 등. 다른 창(권한 확인 등)도 쓸 수 있는 문구라
-//        바로 위 12줄에 이 창의 선택지(`Chat about this`·`Submit answers`)가 있을 때만 질문 창으로 본다.
+//   (다) `Enter to select · ↑/↓ to navigate · Esc to cancel` — 질문 하나짜리 창(탭 줄 없음). 다른 창(권한 확인 등)도 쓸 수 있는 문구라
+//        바로 위 12줄에 이 창의 선택지 `Chat about this`가 있을 때만 질문 창으로 본다.
 // 받아들인 한계: 붙여넣기와 Enter 사이 1초 안에 창이 새로 뜨는 경우는 못 막는다(검사는 전송 시작 때 한 번이다).
 const QUESTION_FOOTER = /Entertoselect[·•](Tab\/Arrowkeys|↑\/↓)tonavigate[·•](?:ctrl\+gtoeditinVim[·•])?Esc(?:tocancel)?$/u;
-const QUESTION_ARROW_EVIDENCE = ["Chataboutthis", "Submitanswers"];
+const QUESTION_ARROW_EVIDENCE = "Chataboutthis";
 const QUESTION_DIALOG_TAIL_LINES = 40;
 const QUESTION_ARROW_EVIDENCE_LINES = 12;
 export function hasQuestionDialog(screen) {
@@ -826,7 +826,7 @@ export function hasQuestionDialog(screen) {
   if (row < 0) return false; // 안내가 줄 처음에서 시작하지 않는다(다른 글 끝에 붙은 인용)
   if (match[1] !== "↑/↓") return true;
   const above = lines.slice(Math.max(0, row - QUESTION_ARROW_EVIDENCE_LINES), row).join("");
-  return QUESTION_ARROW_EVIDENCE.some(word => above.includes(word));
+  return above.includes(QUESTION_ARROW_EVIDENCE);
 }
 
 // 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회, 두 창 판정이 같은 화면을 쓴다). 읽기에 실패하면 지금까지처럼 보낸다 —

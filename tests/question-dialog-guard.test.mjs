@@ -53,9 +53,9 @@ test('[표 2] 직접 입력 칸(Type something.) 커서도 같다(이번 사고�
   }
 });
 
-test('[표 3] ↑/↓ 꼴: 이 창의 선택지가 위에 있으면 같고, 다른 창으로 보이면 지금처럼 보낸다', () => {
-  assert.equal(hasQuestionDialog(screens.REVIEW_ARROW), true);
-  assertHeld(screens.REVIEW_ARROW, '검토·제출 단계');
+test('[표 3] ↑/↓ 꼴: 질문 하나짜리 창(선택지 `Chat about this`가 위에 있음)이면 같고, 다른 창으로 보이면 지금처럼 보낸다', () => {
+  assert.equal(hasQuestionDialog(screens.SINGLE_ARROW), true);
+  assertHeld(screens.SINGLE_ARROW, '질문 하나짜리 창');
   assert.equal(hasQuestionDialog(screens.ARROW_OTHER_DIALOG), false);
   const calls = [];
   assert.equal(sendTmux('kadan-qd', '본문', {run: fakeRun(screens.ARROW_OTHER_DIALOG, calls), spawn: noopSpawn}).keyDelivery, 'sent');
@@ -93,7 +93,7 @@ test('[표 6] 화면 읽기(capture-pane)가 실패하면 지금처럼 전달한
 });
 
 test('[표 7] 일반 우편·카드 발령·감시 알림(5번째 강제 차례) 모두 같은 검사로 키 0회 보류', () => {
-  for (const screen of [screens.MULTI_CHOICE, screens.TYPE_SOMETHING, screens.REVIEW_ARROW]) {
+  for (const screen of [screens.MULTI_CHOICE, screens.TYPE_SOMETHING, screens.SINGLE_ARROW]) {
     for (const [name, options] of Object.entries(VARIANTS)) assertHeld(screen, name, options);
   }
 });
