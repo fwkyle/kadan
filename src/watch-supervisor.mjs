@@ -108,7 +108,7 @@ export function assessSupervisorIdle(
   idleMs,
   ledgerError = null,
   parents = new Map(),
-  { works = [], cards = [], waits = [], decisionReleases = [], peerEntries = entries, ownTurn = null, executionEntries = null, liveRoleSessions = null } = {}
+  { works = [], cards = [], waits = [], roleWaits = new Set(), decisionReleases = [], peerEntries = entries, ownTurn = null, executionEntries = null, liveRoleSessions = null } = {}
 ) {
   const excluded = waitingExcluder(waits, parents);
   if (ledgerError) {
@@ -183,7 +183,11 @@ export function assessSupervisorIdle(
     alerts.push(idleAlert(`idle:${board}`, role, session, cards.size, idleFor, idleMs));
   }
   const requests = peerResponsibilities(peerEntries, parents, works, cards);
-  const waiting = (id, role) => excluded(id, role)
+  // roleWaits: 업무·카드 없는 열린 채팅 결정(work:'')을 연 역할(2026-11-23). 그 역할이 답할 질문 우편 가운데 업무에 이어지지 않은 것(`mail:<우편ID>`)만
+  // 사용자 답 대기로 뺀다. 업무·카드에 걸린 항목, 다른 역할의 항목, 다른 판정(완료후보·정체)은 가리지 않는다.
+  const roleWaitsMail = (id, role) => roleWaits.has(role)
+    && requests.some(r => r.taskId === id && r.role === role && !r.linkedWorkIds.length);
+  const waiting = (id, role) => excluded(id, role) || roleWaitsMail(id, role)
     || requests.find(r => r.taskId === id)?.linkedWorkIds.some(key => excluded.linked(key, role));
   // 묻힌 일의 연결 id(요청 우편이 이은 워크)까지 같은 판정을 쓴다.
   const linked = (id, check) => check(id) || Boolean(requests.find(r => r.taskId === id)?.linkedWorkIds.some(check));

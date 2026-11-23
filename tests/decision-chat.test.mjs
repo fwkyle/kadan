@@ -44,9 +44,7 @@ test('채팅 등록: 업무만 있으면 되고 기본 선택지·확인 경로�
   const own=f.store.request(null,{question:'다른 질문',options:['A','B'],recommendation:'B',reason:'- PR: https://github.com/o/r/pull/1',work:'repo/w1',chat:true},SUPER);
   assert.deepEqual(own.options,['A','B']);assert.ok(!own.reason.includes('확인 경로 없음'));
   assert.throws(()=>f.store.request(null,{question:'x',work:'repo/w1',options:['A'],recommendation:'A',chat:true},SUPER),/선택지/);
-  // 업무가 필요하고, 카드와 같이 쓰지 못하고, 슈퍼감독만 쓴다
-  assert.throws(()=>f.store.request(null,{question:'x',chat:true},SUPER),/--work/);
-  assert.throws(()=>f.store.request(null,{question:'x',work:'없음',chat:true},SUPER),/--work/);
+  // 카드와 같이 쓰지 못하고, 슈퍼감독만 쓴다(업무 없는 채팅 결정은 tests/decision-chat-no-work.test.mjs)
   assert.throws(()=>f.store.request('repo/card-a',{...chatInput,chat:true},SUPER),/카드 없이/);
   assert.throws(()=>f.store.request(null,{...chatInput,chat:true},'작업자'),/슈퍼감독/);
 });

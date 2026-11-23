@@ -686,6 +686,9 @@ export async function runWatch({
     // 걸린 카드·워크는 묻는 쪽에게 할 일이 아니다. 답할 쪽에게는 그대로 할 일이다. 감독을 통째로 빼지 않는다 — 다른 일은 그대로 판정한다.
     // 목록을 못 읽으면 아무것도 빼지 않는다(판정을 숨기지 않는다).
     let waits = [], waitsRead = false;
+    // 업무·카드 없는 열린 채팅 결정(work:'')을 연 역할. 걸 항목 ID가 없어 waits에 못 넣으므로 놀고 있음 계산에만 따로 넘긴다
+    // (assessSupervisorIdle이 그 역할의 업무에 안 이어진 질문 우편만 뺀다).
+    let roleWaits = new Set();
     userTurnWaits = [];
     try {
       const idOf = key => (cards ?? []).find(c => c.key === key)?.id ?? null;
@@ -709,7 +712,8 @@ export async function runWatch({
         // 요청한 역할이 관계표에 없으면 맡길 곳이 없어 진행 기록이 붙을 때까지 책임 감독의 할 일로 둔다(아래 한계: 결과 파일).
         return d.proceeded || !parents.has(d.requestedBy) ? "free" : "duty";
       };
-      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && typeof d.work === "string"))) {
+      for (const d of decisionsNow ?? []) if (d?.status === "open" && d.chat === true && d.card === null && d.work === "" && typeof d.requestedBy === "string") roleWaits.add(d.requestedBy);
+      for (const d of decisionsNow ?? []) if (d?.status === "open" && (typeof d.card === "string" || (d.chat === true && d.work))) {
         const released = releasedDecision(d);
         if (released === "free") continue;
         waits.push({ ...item(d.card ?? null, null, d.work ?? null, released === "duty" ? d.requestedBy : "@user"), kind: "decision", ref: d.id });
@@ -727,7 +731,7 @@ export async function runWatch({
       if (cards && decisionsNow !== null) for (const w of waitUntilList(works, cycleAt)) { userTurnWaits.push(w); waits.push({ ids: [`work:${w.work}`], answerer: "@wait-until", kind: "wait-until" }); }
       // 결정 목록을 못 읽었으면 결정 대기를 모른 채 거르는 것이라 waits 전체를 못 읽은 것으로 본다(아무것도 빼지 않는다).
       waitsRead = decisionsNow !== null;
-    } catch { waits = []; userTurnWaits = []; waitsRead = false; }
+    } catch { waits = []; roleWaits = new Set(); userTurnWaits = []; waitsRead = false; }
     const progressWaits = waits.filter(w => w.kind !== "wait-until");
     // 결과를 등록해 감시에 남은 실행(scope의 awaitsConfirmation) 가운데 답 대기가 등록된 것은 화면이 멈춰 있는 것이 정상이다.
     //  - 감독의 답 대기(사용자 결정·감독이 물은 질문 우편): 완료후보·멈춤·정체를 내지 않는다. 답이 닫히면 그때 난다(놀고 있음이 같은 답 대기로 조용한 것과 맞춘다).
@@ -806,7 +810,7 @@ export async function runWatch({
       idleMs,
       ledgerError,
       parents,
-      { works, cards: cards ?? [], waits, decisionReleases, peerEntries: observationError ? [] : mailEntries, ownTurn,
+      { works, cards: cards ?? [], waits, roleWaits, decisionReleases, peerEntries: observationError ? [] : mailEntries, ownTurn,
         executionEntries: observationError || !cards ? null : entries, liveRoleSessions: observationError ? null : roles.liveSessions }
     );
     const supervisorCheck=supervisorScope&&!observationError
