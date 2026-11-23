@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildMap } from "../src/strategy-map.ts";
 import {
-  buildForest, clip, defaultOpen, depotLine, fitText, flatten, harnessName, isBranch, layoutTree, LONE_KEY, shapeOf, stateCounts, TREE,
+  buildForest, clip, defaultOpen, isRunning, depotLine, fitText, flatten, harnessName, isBranch, layoutTree, LONE_KEY, shapeOf, stateCounts, TREE,
   type Forest, type TreeLayout,
 } from "../src/strategy-tree.ts";
 import type { Row } from "../src/types.ts";
@@ -166,4 +166,27 @@ test("글자 자르기와 창고 한 줄", () => {
   assert.equal(depotLine(map.depotRows), "진행 전 2장 · 일시정지 1장 · 판 미지정");
   assert.equal(depotLine([{ bucket: "planned", board: "판" }, { bucket: "etc", board: "" }]), "진행 전 1장 · 그 밖 1장");
   assert.equal(depotLine([]), "");
+});
+
+// PR #464 검수 발견(2026-11-23)
+test("접힌 판의 상태 수는 한 곳(buildForest)에서 슈퍼감독을 빼고 세고, 그림 배치는 그 값을 그대로 쓴다", () => {
+  const m = buildMap({ hierarchy: { "p-슈퍼": "@user", "p-감독": "p-슈퍼" }, rows: [], live: [on("p-슈퍼", "claude"), on("p-감독", "claude")], alerts: null });
+  const f = buildForest(m.bases, false);
+  assert.deepEqual(f.groups[0].counts, [{ state: "idle", n: 1 }], "대기 중인 슈퍼감독과 감독 한 명 → 하위 대기 1");
+  assert.equal(layout({}, f).groups[0].counts, f.groups[0].counts, "같은 배열");
+  assert.deepEqual(forest.groups[2].counts, [{ state: "dead", n: 1 }, { state: "idle", n: 2 }], "슈퍼감독 없는 판은 전부 센다");
+});
+
+test("넘칠 때 작업중인 것은 앞으로 옮겨 '더 보기' 뒤에 숨기지 않는다", () => {
+  const seven = [1, 2, 3, 4, 5, 6, 7];
+  assert.deepEqual(clip(seven, 5, 4, false, (n) => n === 7), { shown: [7, 1, 2, 3], more: [4, 5, 6] });
+  assert.deepEqual(clip(seven, 5, 4, true, (n) => n === 7), { shown: [7, 1, 2, 3, 4, 5, 6], more: [] }, "펼쳐도 순서는 그대로");
+  assert.deepEqual(clip([...seven, 8], 5, 4, false, (n) => n >= 3), { shown: [3, 4, 5, 6, 7, 8], more: [1, 2] }, "작업중이 keep보다 많으면 전부 보인다");
+  assert.deepEqual(clip(seven, 5, 4, false, (n) => n >= 2), { shown: [2, 3, 4, 5, 6, 7, 1], more: [] }, "남은 하나는 묶지 않는다");
+  assert.deepEqual(clip([1, 2, 3], 5, 4, false, (n) => n === 3), { shown: [1, 2, 3], more: [] }, "넘치지 않으면 순서를 바꾸지 않는다");
+  const busy = buildMap({ hierarchy, rows: [...rows, row("r/7", "a-작업6", "running")], live, alerts: null });
+  const a = group(layout({}, buildForest(busy.bases, false)), "a-슈퍼").rows[1];
+  assert.deepEqual(roles(a.workers), ["a-작업1", "a-작업6", "a-작업2", "a-작업3"]);
+  assert.deepEqual(a.more!.units.map((u) => u.role), ["a-작업4", "a-작업5", "a-작업7"]);
+  assert.equal(a.more!.units.some(isRunning), false);
 });

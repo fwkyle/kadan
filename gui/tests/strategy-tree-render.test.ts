@@ -24,11 +24,12 @@ const status = {
     on("b-슈퍼", "claude"), on("b-감독", "claude"), on("b-작업", "agy"), on("c-슈퍼", "claude"), on("watch", null)],
   rows: [{ key: "r/1", owner: "a-작업1", bucket: "running", title: "t" }, { key: "r/2", owner: "", bucket: "planned", title: "t" }],
 };
+let current: object = status; // 화면이 읽는 자료. 시험마다 바꿔 끼운다
 const M = Module as unknown as { _load: (...a: unknown[]) => unknown; _extensions: Record<string, (m: { _compile: (c: string, f: string) => void }, f: string) => void> };
 const original = M._load;
 M._load = function (request: string, parent: { filename?: string } | null, isMain: boolean) {
   if (parent?.filename?.startsWith(path.join(root, "src") + path.sep) && /^\.\.?\/resource$/.test(request))
-    return { useResource: () => ({ data: status, error: null, refresh: () => {} }), save: () => { throw new Error("writes disabled"); } };
+    return { useResource: () => ({ data: current, error: null, refresh: () => {} }), save: () => { throw new Error("writes disabled"); } };
   if (parent?.filename?.startsWith(path.join(root, "src") + path.sep) && /^\.\.?\/navigation$/.test(request))
     return new Proxy({}, { get: (_, key) => (key === "__esModule" ? false : () => "/") });
   return original.call(this, request, parent, isMain);
@@ -91,7 +92,8 @@ test("좁은 화면의 접는 목록: 접은 줄에 하위 상태 개수, 펼친
   assert.match(html, /claude · 대기 · 하위 7/);
   assert.match(html, /aria-pressed="true" title="a-작업1"/);
   assert.doesNotMatch(html, /title="b-작업"/, "접은 판의 하위 역할은 그리지 않는다");
-  assert.match(html, /title="대기"><i class="sm-dot sm-s-idle"><\/i>3</, "접은 b 판: 슈퍼감독·감독·작업자 3명이 대기");
+  assert.match(html, /title="대기"><i class="sm-dot sm-s-idle"><\/i>2</, "접은 b 판: 슈퍼감독 자신은 빼고 감독·작업자 2명이 대기");
+  assert.doesNotMatch(html, /title="대기"><i class="sm-dot sm-s-idle"><\/i>3</);
   assert.match(html, /발령 전 창고 1/);
   assert.match(html, /기반 세션 1/);
   assert.doesNotMatch(html, /더 보기/, "하위 7명은 8명 이하라 그대로");
@@ -101,4 +103,53 @@ test("좁은 화면의 접는 목록: 접은 줄에 하위 상태 개수, 펼친
   const open = list({ "b-슈퍼": true, "b-감독": true });
   assert.match(open, /title="b-작업"/);
   assert.match(open, /agy · 대기/);
+});
+
+// PR #464 검수 발견(2026-11-23): 같은 자료를 넓은 그림과 좁은 목록이 다르게 보이면 안 된다.
+type Fake = { hierarchy: Record<string, string>; live: ReturnType<typeof on>[]; rows: { key: string; owner: string; bucket: string; title: string }[] };
+const both = (data: Fake) => {
+  const map = buildMap({ ...data, alerts: null });
+  current = { ...data, alerts: null, collectedAt: status.collectedAt };
+  try {
+    return {
+      wide: page("tree"),
+      narrow: renderToStaticMarkup(React.createElement(TreeList, {
+        forest: buildForest(map.bases, false), model: map, sessions: [], fold: {}, expanded: new Set(),
+        selected: null, depotKey: "depot", onSelect: () => {}, onFold: () => {}, onMore: () => {},
+      })) as string,
+    };
+  } finally { current = status; }
+};
+
+test("접힌 판의 하위 상태 수: 슈퍼감독 자신은 빼고, 넓은 그림과 좁은 목록이 같은 값", () => {
+  const { wide, narrow } = both({
+    hierarchy: { "p-슈퍼": "@user", "p-감독": "p-슈퍼", "p-작업": "p-감독" },
+    live: [on("p-슈퍼", "claude"), on("p-감독", "claude")],
+    rows: [{ key: "r/1", owner: "p-작업", bucket: "stale", title: "t" }],
+  });
+  const inWide = [...wide.matchAll(/class="smt-count"[^>]*><title>([^<]+)<\/title><circle[^>]*><\/circle><text[^>]*>(\d+)<\/text>/g)].map((m) => `${m[1]} ${m[2]}`);
+  const inNarrow = [...narrow.matchAll(/<span title="([^"]+)"><i class="sm-dot sm-s-[a-z]+"><\/i>(\d+)<\/span>/g)].map((m) => `${m[1]} ${m[2]}`);
+  assert.deepEqual(inWide, ["오래된 미확정 1", "대기 1"], "대기는 감독 1명 — 대기 중인 슈퍼감독은 세지 않는다");
+  assert.deepEqual(inNarrow, inWide);
+});
+
+test("작업중인 가지와 역할은 '더 보기' 뒤에 숨지 않는다: 감독 줄은 전부, 작업자는 작업중을 앞으로", () => {
+  const two = (n: number) => String(n).padStart(2, "0"), ten = Array.from({ length: 10 }, (_, i) => two(i + 1));
+  const { wide, narrow } = both({
+    hierarchy: {
+      "p-슈퍼": "@user",
+      ...Object.fromEntries(ten.flatMap((n) => [[`p-감독${n}`, "p-슈퍼"], [`p-옛작업${n}`, `p-감독${n}`]])),
+      ...Object.fromEntries(ten.map((n) => [`p-일꾼${n}`, "p-감독10"])),
+    },
+    live: [on("p-슈퍼", "claude"), ...ten.map((n) => on(`p-감독${n}`, "claude")), ...ten.map((n) => on(`p-일꾼${n}`, "codex"))],
+    rows: [{ key: "r/1", owner: "p-일꾼10", bucket: "running", title: "t" }],
+  });
+  for (const n of ten) assert.match(narrow, new RegExp(`title="p-감독${n}"`), `좁은 목록에 감독 ${n} 줄이 보인다`);
+  assert.match(narrow, /aria-expanded="true" aria-label="p-감독10 하위 역할"/, "작업중이 든 열째 감독 가지는 펼친 채");
+  assert.match(narrow, /title="p-일꾼10"/, "열째 작업자(작업중)가 묶음 앞에 보인다");
+  assert.deepEqual([...narrow.matchAll(/title="p-일꾼(\d+)"/g)].map((m) => m[1]), ["10", "01", "02", "03", "04", "05"]);
+  assert.deepEqual([...narrow.matchAll(/>(\+\d+ 더 보기)</g)].map((m) => m[1]), ["+4 더 보기"], "묶음은 감독 아래 작업자 줄 하나뿐");
+  for (const n of ten) assert.match(wide, new RegExp(`aria-label="p-감독${n} · 감독 ·`), `넓은 그림에 감독 ${n} 줄이 보인다`);
+  assert.deepEqual([...wide.matchAll(/aria-label="p-일꾼(\d+) ·/g)].map((m) => m[1]), ["10", "01", "02", "03"], "넓은 그림도 작업중을 앞으로");
+  assert.match(wide, />\+6 더 보기</);
 });

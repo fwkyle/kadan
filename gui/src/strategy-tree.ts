@@ -23,7 +23,8 @@ export function stateCounts(units: Unit[]): Count[] {
 
 // 판 하나의 나무. root는 슈퍼감독(없으면 null — '관계표 밖'), tops는 그 바로 아래(와 상위를 못 찾은 역할).
 export type TreeNode = { unit: Unit; children: TreeNode[] };
-export type Group = { id: string; label: string; root: Unit | null; tops: TreeNode[]; units: Unit[] };
+// counts는 접은 줄에 보이는 하위 상태 개수다. 슈퍼감독 자신은 빼고 센다. 그림과 목록이 이 값 하나를 같이 쓴다.
+export type Group = { id: string; label: string; root: Unit | null; tops: TreeNode[]; units: Unit[]; counts: Count[] };
 export type Forest = {
   groups: Group[]; // 하위 역할이 있는 판(과 '관계표 밖')
   lone: Unit[]; // 하위 역할 없는 슈퍼감독 — 한 줄 묶음
@@ -57,7 +58,7 @@ export function buildForest(bases: Base[], showResting: boolean): Forest {
     };
     const nodes = tops.map(place);
     for (const u of units) if (!seen.has(u.role)) nodes.push(place(u));
-    groups.push({ id: base.id, label: base.label, root, tops: nodes, units });
+    groups.push({ id: base.id, label: base.label, root, tops: nodes, units, counts: stateCounts(units.filter((u) => u !== root)) });
   }
   const harness = { claude: 0, codex: 0, agy: 0 };
   for (const u of all) { const h = harnessName(u); if (h === "claude" || h === "codex" || h === "agy") harness[h]++; }
@@ -72,9 +73,15 @@ export function isOpen(fold: Record<string, boolean>, key: string, fallback: boo
   return fold[key] ?? fallback;
 }
 // 넘침: limit을 넘으면 keep개만 보이고 나머지는 "+N 더 보기"로 접는다. 펼친 줄(all)은 전부 보인다.
-export function clip<T>(items: T[], limit: number, keep: number, all: boolean): { shown: T[]; more: T[] } {
-  return items.length > limit && !all ? { shown: items.slice(0, keep), more: items.slice(keep) } : { shown: items, more: [] };
+// 넘칠 때는 작업중(first)인 것을 앞으로 옮기고 전부 보인다 — 지금 일하는 역할이 "더 보기" 뒤에 숨지 않는다.
+// 그러고 남은 것이 묶을 만큼(limit - keep 초과)이 못 되면 묶지 않는다.
+export function clip<T>(items: T[], limit: number, keep: number, all: boolean, first: (item: T) => boolean = () => false): { shown: T[]; more: T[] } {
+  if (items.length <= limit) return { shown: items, more: [] };
+  const hot = items.filter(first), ordered = hot.length ? [...hot, ...items.filter((item) => !first(item))] : items;
+  const cut = Math.max(keep, hot.length);
+  return all || ordered.length - cut <= limit - keep ? { shown: ordered, more: [] } : { shown: ordered.slice(0, cut), more: ordered.slice(cut) };
 }
+export const isRunning = (unit: Unit) => unit.state === "running";
 // 가지인가(감독 줄로 그린다) 잎인가(작업자·검수자 칸으로 그린다).
 export function isBranch(node: TreeNode) {
   return node.unit.kind !== "worker" || node.children.length > 0;
@@ -138,13 +145,13 @@ export function layoutTree(forest: Forest, { width, fold, expanded, selected, de
   const groups: GroupLayout[] = [];
   for (const group of forest.groups) {
     const top = y, open = isOpen(fold, group.id, defaultOpen(group.units, selected));
-    const counts = stateCounts(group.units.filter((u) => u !== group.root));
+    const counts = group.counts;
     const running = group.units.filter((u) => u.state === "running").length;
     const rows: RowLayout[] = [];
     if (open) {
       let rowY = top;
       const add = (key: string, dir: Unit | null, level: number, parent: number, units: Unit[]) => {
-        const { shown, more } = clip(units, T.WORKERS, T.WORKERS - 1, expanded.has(key));
+        const { shown, more } = clip(units, T.WORKERS, T.WORKERS - 1, expanded.has(key), isRunning);
         rows.push({
           key, parent, mid: rowY + T.BH / 2,
           dir: dir && { unit: dir, x: T.DX + Math.min(level, 2) * T.INDENT, y: rowY, w: T.DW, h: T.BH },
@@ -175,7 +182,7 @@ export function layoutTree(forest: Forest, { width, fold, expanded, selected, de
   let lone: TreeLayout["lone"] = null;
   if (forest.lone.length) {
     const pitch = T.LONE_W + 8, perRow = Math.max(1, Math.floor((w + 8) / pitch)), limit = perRow * T.LONE_ROWS;
-    const { shown, more } = clip(forest.lone, limit, limit - 1, expanded.has(LONE_KEY));
+    const { shown, more } = clip(forest.lone, limit, limit - 1, expanded.has(LONE_KEY), isRunning);
     const titleY = y, at = (i: number): Box => ({ x: (i % perRow) * pitch, y: titleY + 28 + Math.floor(i / perRow) * (T.LONE_H + 10), w: T.LONE_W, h: T.LONE_H });
     lone = {
       y: titleY, total: forest.lone.length, cells: shown.map((unit, i) => ({ unit, ...at(i) })),
