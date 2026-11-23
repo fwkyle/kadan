@@ -14,7 +14,8 @@ const RULE = /^─{3,}$/u;
 const SPINNER = /^[✻✶✳✢✽·*⏺]\s+\S+(?:…|\.\.\.)\s*\(/u;
 const TOOL_LINE = /^ {2}⎿ {2}Running(?:…|\.\.\.)\s*\(([^()]*)\)\s*$/u;
 const TIP_LINE = /^ {2}⎿ {2}Tip: /u;
-const BACKGROUND_HINT = /^ {5}\(ctrl\+b .*run in background\)$/u;
+// 실측 글자 그대로의 고정 문자열 둘만 받는다(정규식·`.*` 없음). 공백 5칸 + 안내.
+const BACKGROUND_HINTS = new Set(['     (ctrl+b ctrl+b (twice) to run in background)', '     (ctrl+b to run in background)']);
 const DURATION =/^(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?$/u;
 
 // `4m` `6m 40s` `1h 2m` `30s`를 밀리초로. 다른 모양·빈 값·0·유한하지 않은 값(아주 큰 숫자 → Infinity)은 null이다.
@@ -42,12 +43,13 @@ export function readToolTimeout(screen) {
   let i = input - 2;
   while (i >= 0 && all[i].trim() === '') i--;
   // 실측 화면(tests/fixtures/waiting-cap-screens.json)에는 스피너 바로 아래의 팁 줄과 도구 줄 바로 아래의 백그라운드 안내 줄이 낀다.
-  // 이 두 줄 모양에 정확히 맞는 한 줄씩만 건너뛴다. 다른 글이 끼면 구역을 확정하지 못한 것이다.
+  // 안내 줄은 실측 글자와 정확히 같을 때만, 팁 줄은 접두어(`  ⎿  Tip: `)로 한 줄씩만 건너뛴다. 다른 글이 끼면 구역을 확정하지 못한 것이다.
+  // 감독이 받아들인 남는 위험: 스피너 바로 아래 `Tip:` 모양의 지난 출력 + 그 위 지난 `Running… (… · timeout T)` 줄이 입력창 바로 위에 붙은 화면은 정기 확인이 최대 61분(T 상한 60분 + 1분) 늦어진다.
   if (i >= 0 && TIP_LINE.test(all[i])) i--;
   if (i < 0 || !SPINNER.test(all[i])) return null;
   i--;
   while (i >= 0 && all[i].trim() === '') i--;
-  if (i >= 0 && BACKGROUND_HINT.test(all[i])) i--;
+  if (i >= 0 && BACKGROUND_HINTS.has(all[i])) i--;
   const hit = i >= 0 ? TOOL_LINE.exec(all[i]) : null;
   if (!hit) return null;
   const segment = hit[1].split('·').map(s => s.trim()).find(s => /^timeout\s/iu.test(s));

@@ -380,3 +380,16 @@ test('실측 Claude 화면(공백 U+00A0·백그라운드 안내·팁 줄 포함
   assert.equal(f.check(SUPERVISOR_CHECK_MS,bad).candidate.input.check,'hourly');
  }
 });
+// 4라운드: 안내 줄은 실측 글자 그대로만, 팁 줄은 접두어. 남는 위험(Tip 줄 지난 출력)은 최대 61분 유예 뒤 후보가 돌아온다.
+test('백그라운드 안내 줄은 실측 글자만 건너뛰고 비슷한 일반 문장은 건너뛰지 않는다',()=>{
+ const withHint=hint=>`⏺ Bash(sleep 100)\n  ⎿  Running… (7s · timeout 4m)\n${hint}\n\n✶ Processing… (55s · ↓ 3.7k tokens)\n\n${BOX}`;
+ for(const hint of ['     (ctrl+b ctrl+b (twice) to run in background)','     (ctrl+b to run in background)'])assertSuppressedUntil(withHint(hint),4*60_000,hint);
+ for(const hint of ['     (ctrl+b should not run in background)','     (ctrl+b ctrl+b (twice) to run in background) 끝','  (ctrl+b to run in background)','     (ctrl+b to run in the background)']){
+  const screen=withHint(hint),f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly',hint);
+ }
+});
+test('Tip 줄 지난 출력 + 지난 도구 줄(받아들인 위험)은 유예되지만 최대 61분 안에 후보가 돌아온다',()=>{
+ const risk=`⏺ Bash(sleep 100)\n  ⎿  Running… (7s · timeout 10h)\n\n✶ Processing… (55s · ↓ 3.7k tokens)\n  ⎿  Tip: 지난 출력의 일반 문장\n\n${BOX}`;
+ assertSuppressedUntil(risk,60*60_000,'tip risk');
+});
