@@ -180,10 +180,10 @@ test('9. allow는 다른 조건(검수·검사)을 풀지 않는다', () => {
   assert.equal(f.gate().verdict, 'reject');
 });
 
-test('10. 정책 setup-needed(값 없음)·정책 파일 손상은 allow가 있어도 거절한다', () => {
+test('10. 정책 파일 손상(setup-needed)은 allow가 있어도 거절한다. 값 없음은 setup-needed가 아니라 기본 허용(배포 설정이 없을 때)', () => {
   const unset = good(fixture({policy: null, autopilot: {allow: [GH]}}));
   const r = unset.gate();
-  assert.equal(r.verdict, 'reject'); assert.ok(r.reasons.some(x => x.includes('setup-needed')));
+  assert.equal(r.verdict, 'pass'); assert.equal(r.policy.action, 'merge');
   const broken = good(fixture({autopilot: {allow: [GH]}}));
   fs.writeFileSync(path.join(broken.home, 'autopilot-repo-policy.json'), '{손상');
   const r2 = broken.gate();
@@ -362,4 +362,31 @@ test('L1. Cruise(끝 시각 없음)에서도 관문이 같이 돈다: --allow �
   // 정책이 허용하는 저장소는 allow 없이 Cruise에서도 통과
   const open = good(fixture({autopilot: {level: 'cruise', until: undefined}}));
   assert.equal(open.gate().verdict, 'pass');
+});
+
+// ---- 카드 `deploy: 자동` + 배포 브랜치 비어 있음 보호(2026-11-23): 정책 판정이 main만 보류하고 관문은 그대로 따른다 ----
+const withAutoCard = (f, front = 'deploy: 자동') => {
+  const onto = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-mg-onto-'));
+  fs.writeFileSync(path.join(onto, 'app.md'), `---\ntype: project\nremote: ${GH}\n${front}\n---\n`);
+  fs.mkdirSync(path.join(f.home, 'ontology'), {recursive: true});
+  fs.symlinkSync(onto, path.join(f.home, 'ontology', 'notes'));
+  return f;
+};
+
+test('15. 카드 deploy: 자동 + 배포 브랜치 없음: main으로 가는 PR만 deploy-unset으로 거절, 다른 브랜치는 통과', () => {
+  const f = withAutoCard(good(fixture({policy: null})));
+  const held = f.gate(f.input({pr: f.pr({baseRefName: 'main'})}));
+  assert.equal(held.verdict, 'reject');
+  assert.deepEqual([held.policy.action, held.policy.reason], ['hold', 'deploy-unset']);
+  assert.ok(held.reasons.some(x => /\(deploy-unset\): 자동 배포·배포 브랜치 미설정/.test(x) && x.includes(`--allow ${GH}`)), held.reasons.join(' | '));
+  assert.equal(f.gate(f.input({pr: f.pr({baseRefName: 'dev'})})).verdict, 'pass');
+});
+
+test('16. deploy: 수동이면 값 없음이어도 통과. --allow(kyle 원문)는 deploy-unset 보류를 푼다', () => {
+  assert.equal(withAutoCard(good(fixture({policy: null})), 'deploy: 수동 (wrangler)').gate().verdict, 'pass');
+  const allowed = withAutoCard(good(fixture({policy: null, autopilot: {allow: [GH]}})));
+  const r = allowed.gate();
+  assert.equal(r.verdict, 'pass'); assert.equal(r.allowApplied, 'deploy-unset');
+  const denied = withAutoCard(good(fixture({policy: null, autopilot: {}})));
+  assert.equal(denied.gate().verdict, 'reject');
 });

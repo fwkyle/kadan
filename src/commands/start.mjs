@@ -21,6 +21,8 @@ import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import {sessionOwner} from '../session-ownership.mjs';
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { briefStartedRole } from "../start-brief.mjs";
+import { autopilotState } from "../autopilot.mjs";
+import { lateMessage, deliveryEvent } from "../autopilot-late.mjs";
 import { reuseOfFor } from "../role-conversation.mjs";
 import {
   requireWindowChoice,
@@ -341,8 +343,19 @@ export function cmdStart(argv, flags) {
   // 이번 start가 만든 세대(PID·로티 터미널)를 대기 전에 고정하고, 보내기 직전 현재 세대와 비교한다.
   const env = process.env;
   const pinnedPid = pid == null ? null : String(pid), pinnedTerminal = rottieTerminalId ?? evidence.rottieTerminalId ?? null;
+  // 슈퍼감독이 Autopilot이 켜진 동안 새로 뜨면 켜짐 우편 본문을 첫 안내에 붙이고, 나간 뒤 전달 사건을 남겨 status의 missing에서 뺀다(autopilot-late.mjs).
+  // 원장을 못 읽으면 안내만 보낸다(start는 막지 않는다).
+  let lateOn = null;
+  if (roleProfile === "super") {
+    try { const state = autopilotState(readLedger(ledgerHome()), Date.now()); if (state.on) lateOn = state.start; } catch { /* 켜짐을 모르면 붙이지 않는다 */ }
+  }
   briefStartedRole({
     role, session, roleProfile, reusing, cmd: startedCmd, noPrompt: flags["no-prompt"] === true, floor,
+    ...(lateOn ? {
+      autopilot: lateMessage(lateOn, role),
+      onSent: receipt => appendLedger(deliveryEvent({ on: lateOn, role, via: "start", by: resolveLedgerBy({ env: process.env }),
+        result: { ok: true, mailId: receipt.mailId }, now: Date.now() })),
+    } : {}),
     tries: Number(env.KADAN_START_BRIEF_TRIES) || undefined, intervalMs: Number(env.KADAN_START_BRIEF_INTERVAL_MS) || undefined,
     isCurrent: () => {
       if (pinnedPid === null || !floor.alive(session) || String(floor.pid(session)) !== pinnedPid) return false;

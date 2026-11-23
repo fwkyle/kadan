@@ -65,3 +65,10 @@ test("출처 문구: ontology·card는 연결 문서, kadan은 카단 설정, �
   assert.equal(sourceLabel("something-new"), "something-new");
   assert.equal(sourceLabel(null), "없음");
 });
+
+test("카드 deploy: 자동 + 배포 브랜치 미설정은 '안 함(자동 배포·배포 브랜치 미설정)'이다(서버 board-model autopilotWord와 같은 문구)", () => {
+  const unset = { action: "merge", reason: "allowed", exceptBranch: "main", exceptReason: "deploy-unset" };
+  const b = badgeOf(line("o/a", "a", unset));
+  assert.deepEqual([b.kind, b.text], ["except", "안 함(자동 배포·배포 브랜치 미설정)"]);
+  assert.equal(badgeOf(line("o/a", "a", { action: "hold", reason: "deploy-unset" })).text, "안 함(자동 배포·배포 브랜치 미설정)");
+});

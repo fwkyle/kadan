@@ -29,6 +29,8 @@ test("🌙 판정 문구·합산: 화면(autopilot-repos.ts badgeOf)과 같고 �
   assert.equal(autopilotWord(line("a", "allowed")), "함");
   assert.equal(autopilotWord(line("a", "allowed", "main")), "안 함(배포 브랜치 main)");
   assert.equal(autopilotWord(line("a", "night-merge-forbidden")), "금지");
+  assert.equal(autopilotWord({verdict: {reason: "allowed", exceptBranch: "main", exceptReason: "deploy-unset"}}), "안 함(자동 배포·배포 브랜치 미설정)");
+  assert.equal(autopilotWord({verdict: {reason: "deploy-unset"}}), "안 함(자동 배포·배포 브랜치 미설정)");
   assert.equal(autopilotWord(line("a", "뭔가 새 판정")), "판정 모름");
   const autopilot = { repos: [line("a", "allowed"), line("b", "allowed"), line("c", "night-merge-forbidden")] };
   assert.equal(autopilotFor(null, ["a"]), "?");

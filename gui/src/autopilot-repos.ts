@@ -7,7 +7,7 @@ export type AutopilotLine = {
   // 카단 설정에 실제로 저장된 값(연결 문서 값은 섞이지 않음). 양식은 이 값을 기준으로 한다.
   settings?: { deployBranch: string | null; nightMerge: string | null };
   effective: { deployBranch: { value: string | null; from: string | null }; nightMerge: { value: string | null; from: string | null } };
-  verdict: { action: string; reason: string; detail?: string | null; exceptBranch?: string | null };
+  verdict: { action: string; reason: string; detail?: string | null; exceptBranch?: string | null; exceptReason?: string | null };
 };
 // 단계 표기. 서버 src/autopilot-terms.mjs의 LEVEL_LABEL과 같은 대응이다(TypeScript라 가져올 수 없어 문구만 맞춘다).
 export const LEVEL_LABEL: Record<string, string> = { cruise: "Cruise", autopilot: "Autopilot", full: "완전자율" };
@@ -22,7 +22,10 @@ export type Badge = { kind: BadgeKind; text: string; detail: string | null };
 
 // 판정 → 뱃지 문구. 모르는 판정은 '함'으로 꾸미지 않고 "판정 모름"으로 둔다. '밤 머지'라는 말은 쓰지 않는다.
 export function badgeOf(line: AutopilotLine): Badge {
-  const { reason, exceptBranch, detail } = line.verdict;
+  const { reason, exceptBranch, exceptReason, detail } = line.verdict;
+  // 카드 `deploy: 자동`인데 배포 브랜치가 비어 있으면 main으로 가는 PR만 보류한다(서버 src/board-model.mjs의 autopilotWord와 같은 문구).
+  if (reason === "deploy-unset" || (reason === "allowed" && exceptReason === "deploy-unset"))
+    return { kind: "except", text: "안 함(자동 배포·배포 브랜치 미설정)", detail: `${exceptBranch ?? "main"} 브랜치로 가는 PR만 자동 머지하지 않습니다` };
   if (reason === "allowed") {
     return exceptBranch
       ? { kind: "except", text: `안 함(배포 브랜치 ${exceptBranch})`, detail: `${exceptBranch} 브랜치로 가는 PR만 자동 머지하지 않습니다` }

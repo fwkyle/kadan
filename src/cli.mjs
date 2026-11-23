@@ -336,7 +336,7 @@ export function main(argv) {
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])||
-      command==='autopilot'&&(['on','off'].includes(args[0])||args[0]==='repo'&&![undefined,'list','show'].includes(args[1])||args[0]==='wingman'&&(args[1]!==undefined||flags.clear!==undefined))||
+      command==='autopilot'&&(['on','off','deliver'].includes(args[0])||args[0]==='repo'&&![undefined,'list','show'].includes(args[1])||args[0]==='wingman'&&(args[1]!==undefined||flags.clear!==undefined))||
       command==='claude'&&flags.yes===true
     )assertWritable(ledgerHome());
     const result=fn(args, flags);

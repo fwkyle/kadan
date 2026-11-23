@@ -13,7 +13,13 @@ const NAME_OF = { super: "슈퍼감독", conductor: "감독", worker: "작업자
 
 export function briefSkill(profile) { return SKILL_OF[profile] ?? null; }
 
-export function briefMessage({ role, profile }) {
+export function briefMessage({ role, profile, autopilot }) {
+  const base = baseBrief({ role, profile });
+  // 켜진 Autopilot이 있으면 그 우편 본문(단계·kyle 문구·금지 목록)을 첫 안내 뒤에 붙인다(늦게 뜬 슈퍼감독, autopilot-late.mjs).
+  return autopilot ? `${base}\n\n${autopilot}` : base;
+}
+
+function baseBrief({ role, profile }) {
   if (profile === "secretary") return SECRETARY_BRIEF;
   const skill = SKILL_OF[profile];
   if (skill) {
@@ -45,8 +51,9 @@ export function briefSkipReason({ reusing, roleProfile, noPrompt, cmd, known }) 
 
 // 새로 만든 세션에 첫 안내를 보낸다. 실패해도 던지지 않는다(start는 성공으로 끝난다, 세션도 닫지 않는다).
 // 반환: 'sent' | 'not-ready' | 'failed' | 'skipped:<이유>'. tries·intervalMs·sleep은 시험에서 주입한다.
+// autopilot: 켜진 Autopilot 안내 본문(슈퍼감독일 때만 start가 준다). onSent(receipt): 첫 안내가 실제로 나간 뒤 한 번 부른다(전달 기록용, 던져도 start는 성공).
 export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, reusing, floor, send,
-  tries, intervalMs, sleep, known, isCurrent, log = console.log, warn = console.error } = {}) {
+  tries, intervalMs, sleep, known, isCurrent, autopilot, onSent, log = console.log, warn = console.error } = {}) {
   const skip = briefSkipReason({ reusing, roleProfile, noPrompt, cmd, known });
   if (skip) return `skipped:${skip}`;
   const skill = briefSkill(roleProfile);
@@ -63,8 +70,11 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
     if (current !== true) { warn("첫 안내 건너뜀 — 세대 확인 실패"); return "skipped:generation-unknown"; }
   }
   try {
-    const receipt = send({ role, session, message: briefMessage({ role, profile: roleProfile }), roleProfile });
+    const receipt = send({ role, session, message: briefMessage({ role, profile: roleProfile, autopilot }), roleProfile });
     log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
+    if (autopilot && onSent) {
+      try { onSent(receipt); log(`Autopilot 켜짐 안내 포함: ${role}`); } catch (error) { warn(`Autopilot 안내 전달 기록 실패(${error.message}) — kadan autopilot deliver로 다시 확인`); }
+    }
     return "sent";
   } catch (error) {
     warn(`첫 안내 못 보냄(${error.message}) — ${hint}`);

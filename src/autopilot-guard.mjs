@@ -20,6 +20,7 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 // - `autopilot wingman`: 인자 없음(보기)만 통과. 이름 저장·`--clear`는 거절.
 // - `autopilot summary`·`status`·`picks`: 읽기 전용이라 통과(목록에 없는 것만 거절하는 것이 아니라 위 쓰기 항목만 거절한다).
 // - `autopilot repo`: 인자 없음·`list`·`show`만 통과. `autopilot repo <저장소> …`(쓰기)는 거절(저장소 이름이 list·show면 읽기로 본다).
+//   예외(2026-11-23 kyle): `--quote "<kyle 원문>"`이 비어 있지 않으면 통과하고 명령이 원장에 원문과 쓴 역할을 남긴다.
 // 거절 검사는 `--help`와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하던 길이 샜다, F1).
 function runnersIsReadOnly(args, flags) {
   const [action, sub] = args;
@@ -41,7 +42,8 @@ export function guardedReason(command, args = [], flags = {}) {
   if (command === 'limit' && first === 'set') return 'limit set';
   if (command === 'autopilot' && first === 'on' && flags.level === LEVEL_FULL) return `autopilot on --level ${LEVEL_FULL}`;
   // `autopilot repo`: 인자 없음·list·show만 읽기다. 저장소 이름 뒤 값(쓰기)과 모르는 모양은 거절한다.
-  if (command === 'autopilot' && first === 'repo' && ![undefined, 'list', 'show'].includes(args[1])) return `autopilot repo ${args[1]}`;
+  const hasQuote = typeof flags.quote === 'string' && flags.quote.trim() !== '';
+  if (command === 'autopilot' && first === 'repo' && ![undefined, 'list', 'show'].includes(args[1]) && !hasQuote) return `autopilot repo ${args[1]}`;
   // `autopilot wingman`: 인자 없음이 읽기다. 이름을 주거나 --clear를 주는 쓰기는 거절한다.
   if (command === 'autopilot' && first === 'wingman' && (args[1] !== undefined || flags.clear !== undefined)) return 'autopilot wingman 저장';
   return null;
@@ -59,7 +61,8 @@ export function autopilotGuard({command, args, flags, home, env = process.env, n
   // 기반 프로세스를 끄고 끝내는 것은 막는다(자리를 비운 동안 끄고 못 살리면 아무도 못 본다). 감시기·대시보드는 끄고 다시 띄우는 한 명령이 있다.
   const infra = command === 'stop' && TARGETS.includes(args?.[0]);
   const hint = infra ? ` — 기반 프로세스를 끄고 끝내면 자리를 비운 동안 아무도 못 봅니다.${INFRA_RESTART_TARGETS.includes(args[0]) ? ` 다시 띄우려면 \`kadan restart ${args[0]}\`(끄고 같은 명령 안에서 다시 띄웁니다)를 쓰세요` : ' 이 대상은 역할 세션이 재시작할 수 없습니다'}` : '';
-  const error = new Error(base + hint);
+  const quoteHint = command === 'autopilot' && args?.[0] === 'repo' ? ' — kyle이 말한 그대로 `--quote "<kyle 원문>"`을 붙이면 역할 세션도 저장소 설정을 쓸 수 있습니다' : '';
+  const error = new Error(base + hint + quoteHint);
   error.exitCode = 2;
   throw error;
 }

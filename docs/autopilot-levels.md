@@ -52,13 +52,13 @@ kyle이 자리를 비울 때 켜는 Autopilot을 "켜고 끄는 스위치"로 �
 
 ## 새 저장소를 자동 머지에 넣는 순서
 
-**자동 머지는 두 스위치가 모두 켜져야 한다.** (1) 기계 전체 Autopilot 켜짐(`kadan autopilot on`, 새로 뜬 슈퍼감독에게도 적용) (2) 저장소별 정책 — 사용자만, 사람 셸에서 `kadan autopilot repo …`. Autopilot만 켜면 모든 저장소가 자동 머지되는 것이 아니다. (2)의 값(`deployBranch`·`nightMerge`)은 카단 설정이 원본이고, 설정에 없는 칸은 `$KADAN_HOME/ontology/`의 `type: project` 문서(`deploy_branch`·`night_merge`)가 채울 수 있다. 둘 다 없는 `deployBranch`는 `setup-needed` 보류다. 판정 순서와 온톨로지 문서 형식은 [Autopilot 저장소 정책](autopilot-repo-cards.md#합치기와-판정)이 원본이다.
+**기본은 허용이고, 막는 길은 정책 둘과 보호 하나다**(2026-11-23 kyle: "기본적으로 자동승인이고, 위험한것만 내가 막는건어때"). Autopilot이 켜져 있으면(`kadan autopilot on`) 값을 안 넣은 저장소도 관문을 통과하면 자동 머지된다. 켠 뒤에 새로 뜨거나 업무를 받은 슈퍼감독에게는 첫 안내나 `kadan autopilot deliver`가 켜짐 우편을 한 번 보낸다. 막으려면 저장소별 정책으로 (가) 자동 머지 금지(`--auto-merge 금지`) 또는 (나) 배포 브랜치를 적는다(그 브랜치로 가는 PR만 보류). 값은 `kadan autopilot repo …`로 정하는데, 사람 셸이 기본이고 역할 세션은 kyle 원문을 `--quote "<kyle 원문>"`으로 옮길 때만 쓸 수 있다(원장에 원문과 쓴 역할이 남는다). 값(`deployBranch`·`nightMerge`)은 카단 설정이 원본이고, 설정에 없는 칸은 `$KADAN_HOME/ontology/`의 `type: project` 문서(`deploy_branch`·`night_merge`)가 채울 수 있다. 읽지 못한 설정·문서(손상·잘못된 키·카드 못 읽음)는 값 없음이 아니라 `setup-needed` 보류다. 보호 하나(kyle "수동배포일수도있잖아"): 배포 브랜치 값이 비어 있고(설정·카드 모두) 온톨로지 카드의 `deploy:` 칸 첫 낱말이 `자동`이면 기본 브랜치 `main`으로 가는 PR만 `deploy-unset`(자동 배포·배포 브랜치 미설정)으로 보류한다(다른 브랜치는 허용). `deploy:`가 `수동`·`없음`이거나 칸·카드가 없으면 허용이고, 첫 낱말이 `자동|수동|없음`이 아니면 `setup-needed`다. `deploy_branch: 없음`을 **적어 둔** 저장소는 명시값이 이겨 허용이다. 파일(`wrangler.toml` 등)은 보지 않는다: 파일로는 자동·수동을 가리지 못한다. 판정 순서와 온톨로지 문서 형식은 [Autopilot 저장소 정책](autopilot-repo-cards.md#합치기와-판정)이 원본이다.
 
 ### 필요한 것
 
 (a) **기준 브랜치에 필수 검사(required status check)가 걸린 브랜치 보호.** 슈퍼감독이 관문에 넘기는 `requiredChecks`는 `gh pr checks N --required --json name,state,bucket`의 출력이다(입력 전체는 [`kadan merge-gate`](commands.md)). 이 목록이 비면 관문은 거절하고, 하나라도 `bucket`이 `pass`가 아니면 거절한다. CI가 있어도 필수 검사로 지정되지 않았으면 이 목록에 들어오지 않는다.
 
-(b) **저장소 정책.** 사용자가 사람 셸에서 한 번 친다.
+(b) **저장소 정책(선택).** 값이 없어도 자동 머지되므로 막을 저장소만 정한다. 사용자가 사람 셸에서 한 번 치거나, 역할 세션이 kyle 원문을 `--quote`로 옮겨 친다.
 
 ```
 kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --auto-merge 허용
@@ -66,7 +66,7 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --aut
 
 - `--deploy-branch <브랜치>`: 그 브랜치로 가는 PR만 자동 머지에서 빠진다(`deploy-branch` 보류).
 - `--deploy-branch 없음`: 배포 브랜치가 따로 없다는 값이다. 어떤 브랜치도 보류되지 않는다.
-- 값이 비어 있음(카단 설정·온톨로지 문서 모두): `setup-needed` 보류다. `없음`과 다르다.
+- 값이 비어 있음(카단 설정·온톨로지 문서 모두): 허용이다(기본). 막을 브랜치가 없다는 점에서 `없음`과 같게 판정되고, 화면에서만 "값 없음"으로 다르게 보인다.
 - `--auto-merge`(옛 이름 `--night-merge`도 같은 뜻으로 받는다. 둘을 함께 주면 종료 코드 2로 거절)를 생략하면 기존 설정을 유지하고, 설정에 없는 칸은 온톨로지 값을 따른다. 두 원본 모두 값이 없을 때만 허용으로 읽는다. `금지`일 때만 `night-merge-forbidden` 보류다. 허용을 분명히 남기려고 위 명령처럼 함께 준다.
 
 (c) **관문의 나머지 조건.** 새 규칙이 아니라 `src/merge-gate.mjs`가 이미 보는 것이다.
@@ -112,7 +112,8 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --aut
 | `PR 주소의 번호(…)와 pr.number(…)가 다름`·`PR 주소에서 저장소를 읽지 못함(…)` | 감독이 풀 수 있음 | 같은 PR을 조회해 입력을 다시 만든다 |
 | `PR 저장소(…)가 업무 저장소(…)와 다름` | 감독이 풀 수 있음 | 그 PR 저장소의 업무로 다시 요청한다. 맞는 업무가 없으면 결정 요청으로 올린다 |
 | `허용된 머지 방식 없음(mergeCommitAllowed·squashMergeAllowed·rebaseMergeAllowed 모두 false)` | 결정 요청 | 저장소 설정 변경이라 사용자 결정 뒤에만 한다 |
-| `저장소 정책이 Autopilot 중 자동 머지를 안 함(setup-needed)` | 결정 요청 | 먼저 `kadan autopilot repo list`·`show <소유자/이름>`로 원인을 확인해 결정 요청에 적는다. 원인별로 다르다. 두 원본(카단 설정·온톨로지 문서) 모두 배포 브랜치 값이 없음 → 사용자가 위 (b)를 친다. 정책 파일 손상 → 파일을 고치거나 옮기는 것은 사용자 결정이다. 온톨로지 읽기 실패 → 읽기 실패 내용을 확인해 결정 요청으로 올린다. 배포 브랜치는 정해졌는데 PR 대상 브랜치를 모름 → 관문 입력의 `pr.baseRefName`을 다시 받는다. 어느 경우든 `setup-needed`는 `--allow`로 풀리지 않는다. 판정 순서는 [Autopilot 저장소 정책](autopilot-repo-cards.md#합치기와-판정) |
+| `저장소 정책이 Autopilot 중 자동 머지를 안 함(setup-needed)` | 결정 요청 | 먼저 `kadan autopilot repo list`·`show <소유자/이름>`로 원인을 확인해 결정 요청에 적는다. 원인별로 다르다. 값이 없는 것만으로는 이 보류가 나오지 않는다(기본 허용). 정책 파일 손상 → 파일을 고치거나 옮기는 것은 사용자 결정이다. 온톨로지 읽기 실패 → 읽기 실패 내용을 확인해 결정 요청으로 올린다. 배포 브랜치는 정해졌는데 PR 대상 브랜치를 모름 → 관문 입력의 `pr.baseRefName`을 다시 받는다. 어느 경우든 `setup-needed`는 `--allow`로 풀리지 않는다. 판정 순서는 [Autopilot 저장소 정책](autopilot-repo-cards.md#합치기와-판정) |
+| `저장소 정책이 Autopilot 중 자동 머지를 안 함(deploy-unset)` — `자동 배포·배포 브랜치 미설정(카드 deploy: 자동, main으로 가는 PR만 보류)` | 결정 요청 | 배포 저장소인데 배포 브랜치를 안 적은 것이다. 보류 기록은 `--hold-kind deploy-repo`. kyle 원문이 있으면 `kadan autopilot repo <소유자/이름> --deploy-branch <브랜치\|없음> --quote "<kyle 원문>"`으로 값을 정하거나(그 뒤로 이 보류가 사라진다), 이번 켜짐 동안만 `autopilot on --allow <소유자/이름>`으로 푼다 |
 | `저장소 정책이 Autopilot 중 자동 머지를 안 함(night-merge-forbidden)` · `(deploy-branch)` | 결정 요청 | 사용자가 정책을 바꾸거나, 이번 켜짐 동안만 `autopilot on --allow <소유자/이름>`(사용자 원문 `--quote` 필요)으로 푼다. 이 문구에는 `— autopilot on --allow …로 풀 수 있음`이 붙는다 |
 
 `autopilot note hold`의 `--hold-kind`는 관문 거절이면 `gate`, 정책 보류면 `deploy-repo`다(고정 줄 (4)).
