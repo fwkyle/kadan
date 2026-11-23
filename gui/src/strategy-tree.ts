@@ -33,7 +33,7 @@ export type Forest = {
 export function flatten(node: TreeNode): Unit[] {
   return [node.unit, ...node.children.flatMap(flatten)];
 }
-// 쉬는 작업자는 2D·3D처럼 기본으로 숨긴다. 보이는 유닛이 없는 판은 뺀다.
+// 쉬는 작업자는 기본으로 숨긴다(쉬는 역할도 보기로 켠다). 보이는 유닛이 없는 판은 뺀다.
 export function buildForest(bases: Base[], showResting: boolean): Forest {
   const groups: Group[] = [], lone: Unit[] = [], all: Unit[] = [];
   for (const base of bases) {
@@ -65,12 +65,9 @@ export function buildForest(bases: Base[], showResting: boolean): Forest {
   return { groups, lone, boards: groups.length + lone.length, idle: all.filter((u) => u.state === "idle").length, harness };
 }
 
-// 접기: 사용자가 누른 값이 있으면 그 값, 없으면 "작업중이거나 고른 역할이 든 가지만 편다".
-export function defaultOpen(units: Unit[], selected: string | null) {
-  return units.some((u) => u.state === "running" || u.role === selected);
-}
-export function isOpen(fold: Record<string, boolean>, key: string, fallback: boolean) {
-  return fold[key] ?? fallback;
+// 접기: 모두 펼친 채로 시작하고(2026-11-23 [kyle]), 사람이 누른 값이 있으면 그 값을 따른다.
+export function isOpen(fold: Record<string, boolean>, key: string) {
+  return fold[key] ?? true;
 }
 // 넘침: limit을 넘으면 keep개만 보이고 나머지는 "+N 더 보기"로 접는다. 펼친 줄(all)은 전부 보인다.
 // 넘칠 때는 작업중(first)인 것을 앞으로 옮기고 전부 보인다 — 지금 일하는 역할이 "더 보기" 뒤에 숨지 않는다.
@@ -82,15 +79,24 @@ export function clip<T>(items: T[], limit: number, keep: number, all: boolean, f
   return all || ordered.length - cut <= limit - keep ? { shown: ordered, more: [] } : { shown: ordered.slice(0, cut), more: ordered.slice(cut) };
 }
 export const isRunning = (unit: Unit) => unit.state === "running";
+// 감독 아래 한 줄의 순서(2026-11-23 [kyle]): 오래된 미확정은 살아 있는 작업자·검수자와 섞지 않고 줄 끝의 묶음 하나로 둔다.
+// 넘침("+N 더 보기") 셈에서도 뺀다. 묶음은 누르면 그 자리에 펼친다(expanded에 staleKey). 그림과 목록이 이 함수 하나를 같이 쓴다.
+export const isStale = (unit: Unit) => unit.state === "stale";
+export const staleKey = (key: string) => key + "\u0000stale";
+export function arrange(units: Unit[], key: string, limit: number, keep: number, expanded: ReadonlySet<string>) {
+  const old = units.filter(isStale);
+  const { shown, more } = clip(units.filter((u) => !isStale(u)), limit, keep, expanded.has(key), isRunning);
+  return { shown, more, old, oldOpen: expanded.has(staleKey(key)) };
+}
 // 가지인가(감독 줄로 그린다) 잎인가(작업자·검수자 칸으로 그린다).
 export function isBranch(node: TreeNode) {
   return node.unit.kind !== "worker" || node.children.length > 0;
 }
 
-// SVG 글자는 스스로 줄이지 못한다. 한글은 글자 크기만큼, 그 밖은 0.58배로 어림해 넘치면 …로 자른다.
+// SVG 글자는 스스로 줄바꿈하지 못한다. 한글은 글자 크기만큼, 그 밖은 0.6배로 어림한다.
 function textWidth(text: string, size: number) {
   let width = 0;
-  for (const ch of text) width += ch.charCodeAt(0) > 0x2e7f ? size : size * 0.58;
+  for (const ch of text) width += ch.charCodeAt(0) > 0x2e7f ? size : size * 0.6;
   return width;
 }
 export function fitText(text: string, max: number, size: number) {
@@ -98,6 +104,26 @@ export function fitText(text: string, max: number, size: number) {
   let out = "";
   for (const ch of text) { if (textWidth(out + ch + "…", size) > max) break; out += ch; }
   return out + "…";
+}
+// 이름 줄바꿈(2026-11-23 [kyle] "이름 잘 보이게"): widths 개수만큼의 줄에 나눠 담는다. 줄은 `-`와 공백 뒤에서만 바꾸고
+// 낱말 중간에서는 끊지 않는다(한 낱말이 줄보다 길 때만 그 안에서 끊는다). 마지막 줄에도 안 들어가면 그 줄 끝을 …로 자른다.
+export function wrapText(text: string, widths: readonly number[], size: number): string[] {
+  const lines: string[] = [];
+  let rest = text;
+  for (let i = 0; i < widths.length && rest; i++) {
+    const max = widths[i];
+    if (textWidth(rest, size) <= max) { lines.push(rest); break; }
+    if (i === widths.length - 1) { lines.push(fitText(rest, max, size)); break; }
+    let line = "";
+    for (const token of rest.match(/[^\s-]*[-\s]*/g) ?? []) {
+      if (!token || textWidth((line + token).trimEnd(), size) > max) break;
+      line += token;
+    }
+    if (!line) for (const ch of rest) { if (line && textWidth(line + ch, size) > max) break; line += ch; }
+    lines.push(line.trimEnd());
+    rest = rest.slice(line.length).trimStart();
+  }
+  return lines;
 }
 
 // 발령 전 창고 한 줄: 묶음별 장수. 전부 판이 없을 때만 '판 미지정'을 붙인다.
@@ -109,23 +135,38 @@ export function depotLine(rows: Pick<Row, "bucket" | "board">[]) {
   return parts.join(" · ");
 }
 
-// 그림 배치. 칸 크기는 시안 1안을 따르고, 작업자 칸은 그림 폭에 들어가는 만큼만 한 줄에 놓고 다음 줄로 내린다.
+// 그림 배치. 칸 폭은 시안 1안을 따르고, 작업자 칸은 그림 폭에 들어가는 만큼만 한 줄에 놓고 다음 줄로 내린다.
 // 작업자 칸 폭만 시안(113)보다 3 좁다: 폭 1600 화면의 실제 그림 칸(964)에 다섯 칸이 들어가야 해서다.
 export const TREE = {
-  SW: 150, DX: 172, DW: 170, INDENT: 16, CX: 396, CW: 110, GAP: 4, RH: 40, BH: 32, FOLDED: 58,
-  WORKERS: 5, LONE_W: 152, LONE_H: 44, LONE_ROWS: 2, CRATE: 17, DEFAULT_WIDTH: 980,
+  SW: 150, DX: 172, DW: 170, INDENT: 16, CX: 396, CW: 110, GAP: 4, ROW_GAP: 8,
+  WORKERS: 5, LONE_W: 152, LONE_ROWS: 2, CRATE: 17, DEFAULT_WIDTH: 980,
   MIN_WIDTH: 620, // 작업자 칸 두 개(CX + 2 × CW + GAP)가 들어가는 폭. 이보다 좁으면 목록으로 보인다
+  FONT: 11.5, LINE: 13, // 이름 글자 크기와 줄 높이
 } as const;
+// 이름이 차지할 수 있는 줄별 폭(칸 폭에서 모양 표시와 여백을 뺀 값). 줄 수가 곧 이름의 최대 줄 수다:
+// 작업자·검수자 칸은 세 줄, 감독 칸·판 상자·단독 슈퍼감독 칸은 두 줄(2026-11-23 감독 결정). 판 상자 첫 줄은 접기 단추 자리를 비운다.
+export const NAME_WIDTHS = {
+  worker: [TREE.CW - 34, TREE.CW - 34, TREE.CW - 34],
+  director: [TREE.DW - 40, TREE.DW - 40],
+  lone: [TREE.LONE_W - 34, TREE.LONE_W - 34],
+  board: [TREE.SW - 52, TREE.SW - 37],
+} as const;
+export const nameLines = (text: string, kind: keyof typeof NAME_WIDTHS) => wrapText(text, NAME_WIDTHS[kind], TREE.FONT);
+// 칸 높이: 이름 n줄 + 상태 한 줄. 같은 줄의 칸은 그 줄에서 이름이 가장 긴 칸에 맞춘다. 한 줄 이름이면 32.
+export const cellHeight = (lines: number) => 6 + (lines + 1) * TREE.LINE;
+// 판 상자의 최소 높이: 이름 n줄 + 상태 + 유닛 수.
+const boardHeight = (lines: number) => 19 + (lines + 2) * TREE.LINE;
 export const LONE_KEY = "\u0000lone";
 export type Box = { x: number; y: number; w: number; h: number };
-export type Cell = Box & { unit: Unit };
+export type Cell = Box & { unit: Unit; name: string[] };
 export type MoreCell = Box & { key: string; units: Unit[] };
 export type RowLayout = {
   key: string; dir: Cell | null; mid: number;
   parent: number; // 상위 감독 줄의 번호. 슈퍼감독 상자에서 바로 나오면 -1
-  workers: Cell[]; more: MoreCell | null;
+  workers: Cell[]; more: MoreCell | null; // 살아 있는 작업자·검수자와 "+N 더 보기"
+  old: Cell[]; stale: MoreCell | null; // 펼친 오래된 미확정 칸들, 또는 접힌 "오래된 미확정 N" 묶음
 };
-export type GroupLayout = { group: Group; open: boolean; box: Box; counts: Count[]; running: number; rows: RowLayout[] };
+export type GroupLayout = { group: Group; open: boolean; box: Box; name: string[]; counts: Count[]; running: number; rows: RowLayout[] };
 export type TreeLayout = {
   width: number; height: number; cols: number;
   groups: GroupLayout[];
@@ -134,31 +175,37 @@ export type TreeLayout = {
   system: { box: Box; cells: Box[] };
 };
 export type TreeOptions = {
-  width: number; fold: Record<string, boolean>; expanded: ReadonlySet<string>; selected: string | null;
+  width: number; fold: Record<string, boolean>; expanded: ReadonlySet<string>;
   depot: number; system: number; // 창고 장수, 기반 세션 수
 };
-export function layoutTree(forest: Forest, { width, fold, expanded, selected, depot, system }: TreeOptions): TreeLayout {
+export function layoutTree(forest: Forest, { width, fold, expanded, depot, system }: TreeOptions): TreeLayout {
   const T = TREE, w = Math.max(T.MIN_WIDTH, Math.floor(width));
   const cols = Math.max(1, Math.floor((w - T.CX + T.GAP) / (T.CW + T.GAP)));
-  const cellAt = (i: number, top: number): Box => ({ x: T.CX + (i % cols) * (T.CW + T.GAP), y: top + Math.floor(i / cols) * T.RH, w: T.CW, h: T.BH });
+  const cellAt = (i: number, top: number, h: number): Box => ({ x: T.CX + (i % cols) * (T.CW + T.GAP), y: top + Math.floor(i / cols) * (h + T.ROW_GAP), w: T.CW, h });
   let y = 34; // 머리글(슈퍼감독 · 감독 · 작업자·검수자) 아래
   const groups: GroupLayout[] = [];
   for (const group of forest.groups) {
-    const top = y, open = isOpen(fold, group.id, defaultOpen(group.units, selected));
-    const counts = group.counts;
+    const top = y, open = isOpen(fold, group.id);
+    const name = nameLines(group.root?.role ?? group.label, "board"), min = boardHeight(name.length);
     const running = group.units.filter((u) => u.state === "running").length;
     const rows: RowLayout[] = [];
     if (open) {
       let rowY = top;
       const add = (key: string, dir: Unit | null, level: number, parent: number, units: Unit[]) => {
-        const { shown, more } = clip(units, T.WORKERS, T.WORKERS - 1, expanded.has(key), isRunning);
+        const { shown, more, old, oldOpen } = arrange(units, key, T.WORKERS, T.WORKERS - 1, expanded);
+        const named = [...shown, ...(oldOpen ? old : [])].map((unit) => ({ unit, name: nameLines(unit.role, "worker") }));
+        const dirName = dir && nameLines(dir.role, "director");
+        const h = cellHeight(Math.max(1, dirName?.length ?? 0, ...named.map((c) => c.name.length)));
+        let i = 0;
+        const workers = named.slice(0, shown.length).map((c) => ({ ...c, ...cellAt(i++, rowY, h) }));
+        const moreCell = more.length ? { key, units: more, ...cellAt(i++, rowY, h) } : null;
+        const oldCells = named.slice(shown.length).map((c) => ({ ...c, ...cellAt(i++, rowY, h) }));
+        const stale = old.length && !oldOpen ? { key: staleKey(key), units: old, ...cellAt(i++, rowY, h) } : null;
         rows.push({
-          key, parent, mid: rowY + T.BH / 2,
-          dir: dir && { unit: dir, x: T.DX + Math.min(level, 2) * T.INDENT, y: rowY, w: T.DW, h: T.BH },
-          workers: shown.map((unit, i) => ({ unit, ...cellAt(i, rowY) })),
-          more: more.length ? { key, units: more, ...cellAt(shown.length, rowY) } : null,
+          key, parent, mid: rowY + h / 2, workers, more: moreCell, old: oldCells, stale,
+          dir: dir && { unit: dir, name: dirName!, x: T.DX + Math.min(level, 2) * T.INDENT, y: rowY, w: T.DW, h },
         });
-        rowY += Math.max(1, Math.ceil((shown.length + (more.length ? 1 : 0)) / cols)) * T.RH;
+        rowY += Math.max(1, Math.ceil(i / cols)) * (h + T.ROW_GAP);
       };
       const leaves = (nodes: TreeNode[]) => nodes.filter((n) => !isBranch(n)).map((n) => n.unit);
       const walk = (nodes: TreeNode[], level: number, parent: number) => {
@@ -171,24 +218,26 @@ export function layoutTree(forest: Forest, { width, fold, expanded, selected, de
       const direct = leaves(group.tops);
       if (direct.length) add(group.id + "\u0000direct", null, 0, -1, direct);
       walk(group.tops, 0, -1);
-      const h = Math.max(T.FOLDED, rowY - top - (T.RH - T.BH));
-      groups.push({ group, open, counts, running, rows, box: { x: 0, y: top, w: T.SW, h } });
+      const h = Math.max(min, rowY - top - T.ROW_GAP);
+      groups.push({ group, open, name, counts: group.counts, running, rows, box: { x: 0, y: top, w: T.SW, h } });
       y = top + h + 20;
     } else {
-      groups.push({ group, open, counts, running, rows, box: { x: 0, y: top, w: T.SW, h: T.FOLDED } });
-      y = top + T.FOLDED + 12;
+      groups.push({ group, open, name, counts: group.counts, running, rows, box: { x: 0, y: top, w: T.SW, h: min } });
+      y = top + min + 12;
     }
   }
   let lone: TreeLayout["lone"] = null;
   if (forest.lone.length) {
     const pitch = T.LONE_W + 8, perRow = Math.max(1, Math.floor((w + 8) / pitch)), limit = perRow * T.LONE_ROWS;
     const { shown, more } = clip(forest.lone, limit, limit - 1, expanded.has(LONE_KEY), isRunning);
-    const titleY = y, at = (i: number): Box => ({ x: (i % perRow) * pitch, y: titleY + 28 + Math.floor(i / perRow) * (T.LONE_H + 10), w: T.LONE_W, h: T.LONE_H });
+    const named = shown.map((unit) => ({ unit, name: nameLines(unit.role, "lone") }));
+    const h = cellHeight(Math.max(1, ...named.map((c) => c.name.length)));
+    const titleY = y, at = (i: number): Box => ({ x: (i % perRow) * pitch, y: titleY + 28 + Math.floor(i / perRow) * (h + 10), w: T.LONE_W, h });
     lone = {
-      y: titleY, total: forest.lone.length, cells: shown.map((unit, i) => ({ unit, ...at(i) })),
+      y: titleY, total: forest.lone.length, cells: named.map((c, i) => ({ ...c, ...at(i) })),
       more: more.length ? { key: LONE_KEY, units: more, ...at(shown.length) } : null,
     };
-    y = titleY + 28 + Math.ceil((shown.length + (more.length ? 1 : 0)) / perRow) * (T.LONE_H + 10) + 12;
+    y = titleY + 28 + Math.ceil((shown.length + (more.length ? 1 : 0)) / perRow) * (h + 10) + 12;
   }
   let depotAt: TreeLayout["depot"] = null;
   if (depot > 0) {
@@ -196,8 +245,8 @@ export function layoutTree(forest: Forest, { width, fold, expanded, selected, de
     depotAt = { box: { x: 0, y, w: T.SW, h: 58 }, crates: Array.from({ length: n }, (_, i) => ({ x: T.CX + (i % perRow) * T.CRATE, y: y + 10 + Math.floor(i / perRow) * 18 })) };
     y += 58 + 20;
   }
-  const lines = Math.max(1, Math.ceil(system / cols));
-  const systemAt = { box: { x: 0, y, w: T.SW, h: lines * T.RH + 8 }, cells: Array.from({ length: system }, (_, i) => cellAt(i, y + 8)) };
+  const sessionH = cellHeight(1), lines = Math.max(1, Math.ceil(system / cols));
+  const systemAt = { box: { x: 0, y, w: T.SW, h: lines * (sessionH + T.ROW_GAP) + 8 }, cells: Array.from({ length: system }, (_, i) => cellAt(i, y + 8, sessionH)) };
   y += systemAt.box.h + 12;
   return { width: w, height: y, cols, groups, lone, depot: depotAt, system: systemAt };
 }

@@ -1,7 +1,7 @@
 // 전략 맵(2026-10-05 [kyle]): 여러 AI 역할의 상태를 전략 게임 지도처럼 한눈에 본다.
-// 이 모듈은 화면 없이 "어느 기지에 어느 유닛이 어떤 상태로 있는가"만 계산한다. 그리는 쪽(2D SVG든 나중의 3D든)은
+// 이 모듈은 화면 없이 "어느 기지에 어느 유닛이 어떤 상태로 있는가"만 계산한다. 그리는 쪽(나무 보기 — strategy-tree.ts)은
 // 이 결과를 그대로 그린다 — 데이터 해석을 화면마다 다시 만들지 않기 위해서다.
-// 미감 기준: 납작한 등각(2:1). 바닥은 저채도 한 색, 상태색만 채도 높게(현황판과 같은 색), 외곽선 없음.
+// 2D 등각·3D 배치와 2D 모션 계산은 2026-11-23 [kyle] 결정으로 뺐다(나무 보기만 남김).
 import type { Row } from "./types";
 import { liveLabel, type LiveSession, type OpenAlerts } from "./status-band.ts";
 
@@ -140,28 +140,6 @@ export function buildMap({ hierarchy, rows, live, alerts, lastRuns }: MapInput):
   };
 }
 
-// 등각 배치. 기지 안에서 슈퍼감독은 맨 앞 줄, 감독은 둘째 줄, 작업자는 그 뒤 줄들(한 줄에 cols개).
-export const TILE_W = 124, TILE_H = 62; // 2:1 등각 칸. 이름표가 옆 칸과 겹치지 않을 만큼 넓게
-export type Placed = { unit: Unit; gx: number; gy: number };
-export function placeUnits(units: Unit[], cols = 4): { placed: Placed[]; width: number; depth: number } {
-  const placed: Placed[] = [];
-  let gy = 0;
-  for (const kind of ["super", "director", "worker"] as UnitKind[]) {
-    const group = units.filter((u) => u.kind === kind);
-    for (let i = 0; i < group.length; i++) placed.push({ unit: group[i], gx: i % cols, gy: gy + Math.floor(i / cols) });
-    if (group.length) gy += Math.ceil(group.length / cols);
-  }
-  const width = Math.max(1, ...placed.map((p) => p.gx + 1));
-  return { placed, width, depth: Math.max(1, gy) };
-}
-export function iso(gx: number, gy: number) {
-  return { x: (gx - gy) * (TILE_W / 2), y: (gx + gy) * (TILE_H / 2) };
-}
-// 같은 기지 안에서 겹치는 접두사(예: "shop-")를 떼어 유닛 이름표를 짧게 한다. 전체 이름은 툴팁·옆 칸에 그대로.
-export function shortName(role: string, base: string | null) {
-  const prefix = base?.match(/^[^-]+-/)?.[0];
-  return prefix && role.startsWith(prefix) && role.length > prefix.length ? role.slice(prefix.length) : role;
-}
 
 // 쉬는 역할(창도 진행 카드도 없이 진행 전·일시정지 카드만 든 작업자)을 뺀 유닛. 슈퍼감독·감독은 기지의 뼈대라 늘 남긴다.
 // 옆 칸의 생존 줄. 옛 '담당자 상태' 표(2026-10-25 전략 맵으로 옮김)와 같은 낱말을 쓴다.
@@ -190,56 +168,4 @@ export function systemSessions(live: LiveSession[] | null) {
 
 export function visibleUnits(units: Unit[], showResting: boolean) {
   return showResting ? units : units.filter((u) => u.kind !== "worker" || u.state !== "off");
-}
-
-// 3D 배치(2026-10-06 [kyle] 2단계). 2D와 같은 칸(placeUnits)을 바닥 좌표로 옮긴다. x는 기지가 늘어선 방향, z는 앞뒤
-// (gy=0 슈퍼감독 줄이 가장 안쪽). 단위는 three.js 장면 단위다. 창고는 마지막 기지 오른쪽에 둔다.
-export const CELL = 1.7, BASE_GAP = 1.6;
-export type WorldBase = { base: Base; units: { unit: Unit; x: number; z: number }[]; x0: number; x1: number; depth: number; resting: number };
-export function worldLayout(bases: Base[], depot: number, showResting: boolean, cols = 4) {
-  let cursor = 0;
-  const out: WorldBase[] = [];
-  for (const base of bases) {
-    const shown = visibleUnits(base.units, showResting);
-    if (!shown.length) continue; // 2D와 같이, 보이는 유닛이 없는 기지는 숨긴다
-    const { placed, width, depth } = placeUnits(shown, cols);
-    out.push({ base, x0: cursor, x1: cursor + width * CELL, depth: depth * CELL, resting: base.units.length - shown.length,
-      units: placed.map(({ unit, gx, gy }) => ({ unit, x: cursor + (gx + 0.5) * CELL, z: (gy + 0.5) * CELL })) });
-    cursor += width * CELL + BASE_GAP;
-  }
-  const depotAt = depot > 0 ? { x: cursor + CELL / 2, z: CELL / 2 } : null;
-  const x1 = depotAt ? depotAt.x + CELL / 2 : Math.max(0, cursor - BASE_GAP);
-  return { bases: out, depot: depotAt, size: { x: x1, z: Math.max(CELL, ...out.map((b) => b.depth)) } };
-}
-
-// 모션(2026-10-07 [kyle]): 직전 지도와 새 지도를 비교해 "바뀐 것"만 뽑는다. 장식이 아니라 변화를 알리는 움직임이다.
-// 처음 그릴 때(직전 없음)는 아무것도 움직이지 않는다. 한 번에 너무 많이 움직이지 않게 limit개까지만.
-// fly: 카드가 창고(from=null)나 다른 유닛에서 이 유닛으로 왔다. 새로 생긴 카드도 창고에서 온 것으로 그린다.
-// leave: 유닛이 들고 있던 카드가 지도에서 빠졌다(완료·취소·대체 등 — 이유는 구분하지 않는다).
-// state: 유닛 상태가 바뀌었다.
-export type MapEvent =
-  | { kind: "fly"; key: string; from: string | null; to: string }
-  | { kind: "leave"; key: string; from: string }
-  | { kind: "state"; role: string; from: UnitState; to: UnitState };
-function cardPlaces(model: MapModel) {
-  const at = new Map<string, string | null>();
-  for (const row of model.depotRows) at.set(row.key, null);
-  for (const base of model.bases) for (const unit of base.units) for (const row of unit.rows) at.set(row.key, unit.role);
-  return at;
-}
-export function diffMap(prev: MapModel | null, next: MapModel, limit = 8): MapEvent[] {
-  if (!prev) return [];
-  const before = cardPlaces(prev), after = cardPlaces(next), events: MapEvent[] = [];
-  for (const [key, to] of after) {
-    if (to === null) continue;
-    const from = before.has(key) ? before.get(key)! : null;
-    if (!before.has(key) || from !== to) events.push({ kind: "fly", key, from, to });
-  }
-  for (const [key, from] of before) if (from !== null && !after.has(key)) events.push({ kind: "leave", key, from });
-  const states = new Map(prev.bases.flatMap((b) => b.units).map((u) => [u.role, u.state] as const));
-  for (const unit of next.bases.flatMap((b) => b.units)) {
-    const was = states.get(unit.role);
-    if (was && was !== unit.state) events.push({ kind: "state", role: unit.role, from: was, to: unit.state });
-  }
-  return events.slice(0, limit);
 }
