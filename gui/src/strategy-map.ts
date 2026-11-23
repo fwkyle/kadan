@@ -38,6 +38,7 @@ export type MapInput = {
 export const STATE_LABEL: Record<UnitState, string> = {
   dead: "창 없음", stuck: "막힘", running: "작업중", stale: "오래된 미확정", idle: "대기", unknown: "세션 모름", off: "쉬는 중",
 };
+export const KIND_LABEL: Record<UnitKind, string> = { super: "슈퍼감독", director: "감독", worker: "작업자·검수자" };
 // 카단 자체 세션(감시기·대시보드)은 역할 유닛이 아니다.
 const SYSTEM_ROLES = new Set(["watch", "대시보드"]);
 const OUTSIDE = "관계표 밖";

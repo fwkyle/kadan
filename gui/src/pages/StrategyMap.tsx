@@ -8,7 +8,9 @@ import type { LastRun } from "../strategy-map";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
 import { RestartRole } from "./RestartRole";
-import { buildMap, diffMap, iso, lifeLabel, placeUnits, restartGeneration, runLabel, systemSessions, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
+import { buildMap, diffMap, iso, KIND_LABEL, lifeLabel, placeUnits, restartGeneration, runLabel, systemSessions, shortName, STATE_LABEL, TILE_H, TILE_W, visibleUnits, type Base, type MapEvent, type MapModel, type Unit } from "../strategy-map";
+import { buildForest } from "../strategy-tree";
+import StrategyTree, { TreeLegend } from "./StrategyTree";
 
 // 전략 맵(2026-10-05 [kyle]): 현황판과 같은 자료(status)를 슈퍼감독 기지·역할 유닛으로 그린다. 1단계는 SVG 2D 등각.
 // 색은 전부 style.css의 클래스로만 준다 — SVG 속성에 색을 적으면 다크 모드 변환(theme.mjs)을 거치지 않는다.
@@ -16,14 +18,18 @@ type StatusData = Stamp & {
   rows: Row[]; live: LiveSession[] | null; alerts: OpenAlerts | null; hierarchy: Record<string, string> | null;
   activity?: Record<string, number[]>; lastRuns?: Record<string, LastRun>;
 };
-const KIND_LABEL = { super: "슈퍼감독", director: "감독", worker: "작업자·검수자" } as const;
 const SLAB = 10, HEAD_ROOM = 86, FOOT_ROOM = 44, GAP = 56, COLS = 4;
 const DEPOT = "\u0000창고"; // 선택 상태에서 창고를 역할 이름과 구분하는 키
 // 3D 보기는 누를 때만 불러온다(three.js는 따로 나뉜 파일). 고른 보기는 이 브라우저에만 기억한다(2026-10-06 [kyle]).
 const StrategyMap3D = lazy(() => import("./StrategyMap3D"));
-type View = "2d" | "3d";
+// 나무 보기(2026-11-23 [kyle]): 판 → 감독 → 작업자·검수자를 나무로 펼친다. 2D·3D는 그대로 둔다.
+const VIEWS = ["2d", "3d", "tree"] as const;
+type View = (typeof VIEWS)[number];
+const VIEW_LABEL: Record<View, string> = { "2d": "2D", "3d": "3D", tree: "나무" };
 const VIEW_KEY = "kadan-strategy-view";
-function readView(): View { try { return localStorage.getItem(VIEW_KEY) === "3d" ? "3d" : "2d"; } catch { return "2d"; } }
+function readView(): View {
+  try { const saved = localStorage.getItem(VIEW_KEY); return VIEWS.find((v) => v === saved) ?? "2d"; } catch { return "2d"; }
+}
 function saveView(view: View) { try { localStorage.setItem(VIEW_KEY, view); } catch {} }
 // 묶음 이름은 서버 bucketGroups와 같다(2026-10-05 [kyle]).
 const BUCKET_LABEL: Record<string, string> = { planned: "진행 전", hold: "일시정지" };
@@ -179,6 +185,8 @@ export default function StrategyMap({ url }: { url: URL }) {
   const unitBase = unit ? map?.bases.find((b) => b.units.includes(unit)) ?? null : null;
   const resting = map ? map.bases.reduce((n, b) => n + b.units.length - visibleUnits(b.units, false).length, 0) : 0;
   const tone = (n: number, cls: string) => (n > 0 ? cls : undefined);
+  // 나무 보기에서만 집계 줄에 판·대기 역할 수를, 범례에 실행 도구 수를 더한다.
+  const forest = map && view === "tree" ? buildForest(map.bases, showResting) : null;
   return <section className="sm-view">
     <header className="st-lead"><h1>전략 맵</h1>
       <p>슈퍼감독마다 기지 하나, 역할마다 유닛 하나입니다. 유닛 옆 상자는 그 역할이 든 카드입니다. 유닛을 누르면 옆 칸(좁은 화면에서는 아래)에 그 역할의 카드가 보입니다. 숫자의 기준은 <a href="#status">전체 현황</a>과 같습니다.</p>
@@ -187,7 +195,9 @@ export default function StrategyMap({ url }: { url: URL }) {
     <ErrorMessage error={resource.error} /><Freshness collectedAt={data?.collectedAt} {...resource} />
     {!data || !map ? <Loading /> : <>
       <p className="sm-totals" role="group" aria-label="지도 요약">
+        {forest && <span><Roll value={forest.boards} /> 판</span>}
         <span><Roll value={map.totals.units - (showResting ? 0 : resting)} /> 유닛{!showResting && resting > 0 ? ` · 쉬는 ${resting} 숨김` : ""}</span>
+        {forest && <span><Roll value={forest.idle} /> 대기 역할</span>}
         <span className={tone(map.totals.running, "sm-t-running")}><Roll value={map.totals.running} /> 작업중 상자</span>
         <span className={tone(map.totals.stuck, "sm-t-stuck")}><Roll value={map.totals.stuck} /> 막힌 상자</span>
         <span><Roll value={map.totals.stale} /> 오래된 미확정 상자</span>
@@ -198,16 +208,17 @@ export default function StrategyMap({ url }: { url: URL }) {
       </p>
       <ul className="sm-legend" aria-label="색 안내">
         {(["running", "stuck", "stale", "dead", "idle", "off"] as const).map((s) => <li key={s}><i className={"sm-dot sm-s-" + s} />{STATE_LABEL[s]}</li>)}
-        <li><i className="sm-dot sm-k-super-dot" />왕관 = 슈퍼감독 · 깃발 = 감독</li>
-        <li className="sm-viewswitch" role="group" aria-label="지도 보기">{(["2d", "3d"] as const).map((v) =>
-          <button key={v} type="button" aria-pressed={view === v} onClick={() => { setView(v); saveView(v); }}>{v.toUpperCase()}</button>)}</li>
+        {forest ? <TreeLegend forest={forest} /> : <li><i className="sm-dot sm-k-super-dot" />왕관 = 슈퍼감독 · 깃발 = 감독</li>}
+        <li className="sm-viewswitch" role="group" aria-label="지도 보기">{VIEWS.map((v) =>
+          <button key={v} type="button" aria-pressed={view === v} onClick={() => { setView(v); saveView(v); }}>{VIEW_LABEL[v]}</button>)}</li>
         {resting > 0 && <li><label className="sm-toggle"><input type="checkbox" checked={showResting} onChange={(e) => setShowResting(e.target.checked)} />쉬는 역할도 보기({resting})</label></li>}
       </ul>
       <div className="sm-layout">
         <div className="sm-stage">
           {map.bases.length === 0 && !map.depot ? <p className="st-empty">지도에 올릴 역할이 없습니다.</p> : view === "3d" ?
             <Suspense fallback={<Loading />}><StrategyMap3D bases={map.bases} depot={map.depot} showResting={showResting}
-              selected={selected} depotKey={DEPOT} onSelect={pick} /></Suspense> :
+              selected={selected} depotKey={DEPOT} onSelect={pick} /></Suspense> : view === "tree" ?
+            <StrategyTree model={map} live={data.live} showResting={showResting} selected={selected} depotKey={DEPOT} onSelect={pick} /> :
             <svg className="sm-svg" width={width} height={Math.max(height, 200)} viewBox={`0 0 ${width} ${Math.max(height, 200)}`}
               role="group" aria-label="기지와 유닛 지도">
               {layouts.map(({ base, placement, box, ox, oy, slab }) => <g key={base.id} transform={`translate(${ox} ${oy})`} className="sm-base">
