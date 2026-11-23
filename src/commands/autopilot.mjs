@@ -12,7 +12,7 @@ import {readMailBody} from '../ledger.mjs';
 import {picksCommand} from '../autopilot-picks.mjs';
 import {readDefaultWingman, setDefaultWingman, clearDefaultWingman, wingmanPath, NO_WINGMAN} from '../autopilot-wingman.mjs';
 import {setRepoPolicy, evaluateGithub, listRepos, policyPath, normalizeGithub} from '../autopilot-repo-policy.mjs';
-import {lateRoles, receivedRoles, lateMessage, claimDelivery, finishDelivery} from '../autopilot-late.mjs';
+import {lateRoles, receivedRoles, lateMessage, finishDelivery} from '../autopilot-late.mjs';
 import {LEVELS, LEVEL_CRUISE, LEVEL_AUTOPILOT, LEVEL_FULL, LEVEL_LABEL, atLeast} from '../autopilot-terms.mjs';
 
 export const MAX_TEXT = 4000;
@@ -186,11 +186,12 @@ function deliverCommand(args, {home, by, now, entries, state, deps}) {
   const targets = only !== undefined ? (receivedRoles(entries, on).has(only) ? [] : [only]) : missing;
   const send = deps.sendMail ?? sendAutopilotMail(home, by);
   const record = deps.record ?? (entry => appendLedger(entry, home));
-  // 보내기 직전에 예약한다(잠금 안에서 원장을 다시 읽음): 겹친 deliver·첫 안내가 같은 켜짐·같은 역할에 두 번 보내지 않는다. 결과 사건이 예약을 덮는다.
-  const claimOpts = {on, by, now, ...(deps.readEntries ? {readEntries: deps.readEntries} : {}), record};
+  // 보내기 직전에 원장을 한 번 다시 읽어 이미 받았으면 건너뛰고, 아니면 보낸 뒤 실제 결과를 기록한다(예약·잠금 없음).
+  // 순서대로 도는 두 번은 1건이다. 정확히 동시에 겹친 두 실행의 중복 1통은 받아들인다.
+  const readNow = deps.readEntries ?? (() => readLedger(home));
   const results = [], skipped = [];
   for (const role of targets) {
-    if (!claimDelivery(home, {...claimOpts, role, via: 'deliver'})) { skipped.push(role); continue; }
+    if (receivedRoles(readNow(), on).has(role)) { skipped.push(role); continue; }
     let result;
     try { result = {role, ...send(role, lateMessage(on, role))}; } catch (error) { result = {role, ok: false, delivery: error.delivery ?? 'unknown', error: String(error.message).slice(0, 200)}; }
     finishDelivery({on, role, via: 'deliver', by, result, now, record});

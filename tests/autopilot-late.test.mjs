@@ -11,7 +11,7 @@ import {autopilotState} from '../src/autopilot.mjs';
 import {autopilotGuard} from '../src/autopilot-guard.mjs';
 import {readPolicy, evaluateGithub} from '../src/autopilot-repo-policy.mjs';
 import {briefMessage, briefStartedRole} from '../src/start-brief.mjs';
-import {lateMessage, DELIVERY_KIND} from '../src/autopilot-late.mjs';
+import {lateMessage, finishDelivery, failedResult, DELIVERY_KIND} from '../src/autopilot-late.mjs';
 
 // 가짜 우편·가짜 시계만 쓴다. 운영 홈·우편·tmux에 닿지 않는다(격리 tmux 시험은 자기 소켓 하나만 쓰고 끝에 그 소켓만 끈다).
 const T0 = Date.parse('2026-11-23T01:00:00.000Z');
@@ -30,10 +30,8 @@ function fixture() {
   const deps = {now: () => clock, readWorks: () => works,
     sendMail: (role, message) => { sent.push({role, message}); return {ok: true, mailId: `mail-${sent.length}`}; }, notify: () => {}};
   const run = (args, flags = {}, by = '사람') => autopilotCommand(args, flags, {home, by, deps});
-  // 결과 사건만(예약 reserved는 보내기 직전 표시라 같은 전달의 결과 사건이 덮는다)
-  const deliveries = () => readLedger(home).filter(e => e.kind === DELIVERY_KIND && e.delivery !== 'reserved');
-  const reservations = () => readLedger(home).filter(e => e.kind === DELIVERY_KIND && e.delivery === 'reserved');
-  return {home, works, sent, deps, run, deliveries, reservations, setNow: ms => { clock = ms; }};
+  const deliveries = () => readLedger(home).filter(e => e.kind === DELIVERY_KIND);
+  return {home, works, sent, deps, run, deliveries, setNow: ms => { clock = ms; }};
 }
 
 test('1-1. 켜짐 뒤 업무를 받은 슈퍼감독은 status missing에 있고, deliver가 한 번 보낸 뒤 missing에서 빠진다(두 번째는 없음)', () => {
@@ -156,7 +154,7 @@ test('1-4. 격리 tmux: Autopilot 켜짐 중 새 super start는 첫 안내에 �
   assert.match(body, /\[Autopilot\] kyle이 자리를 비웠습니다/);
   assert.match(body, /단계: Autopilot/);
   assert.match(body, /kyle 추가 문구: 자리 비움/);
-  const delivery = readLedger(w.home).filter(e => e.kind === DELIVERY_KIND && e.delivery !== 'reserved');
+  const delivery = readLedger(w.home).filter(e => e.kind === DELIVERY_KIND);
   assert.equal(delivery.length, 1);
   assert.equal(delivery[0].role, 'late-on-슈퍼감독');
   assert.equal(delivery[0].via, 'start');
@@ -166,7 +164,7 @@ test('1-4. 격리 tmux: Autopilot 켜짐 중 새 super start는 첫 안내에 �
   const st = JSON.parse(w.kadan('autopilot', 'status').stdout);
   assert.deepEqual([st.on, st.missing, st.lateDelivered], [true, [], ['late-on-슈퍼감독']]);
   assert.equal(w.kadan('autopilot', 'deliver', 'late-on-슈퍼감독').status, 0);
-  assert.equal(readLedger(w.home).filter(e => e.kind === DELIVERY_KIND && e.delivery !== 'reserved').length, 1);
+  assert.equal(readLedger(w.home).filter(e => e.kind === DELIVERY_KIND).length, 1);
   assert.equal(sends().filter(e => e.role === 'late-on-슈퍼감독').length, 1);
 });
 
@@ -266,35 +264,80 @@ test('2b. deliver 결과가 unknown이면 받은 것으로 세지 않아 다시 
   assert.deepEqual(f.run(['status']).lateDelivered, ['b-슈퍼감독']);
 });
 
-test('3a. 겹친 deliver: 첫 deliver의 전송 도중(예약 뒤·결과 전) 두 번째가 읽어도 같은 켜짐·같은 역할에는 1건', () => {
+test('3a. 정확히 동시에 겹친 두 deliver: 1~2건, 누락 0, 막힘 없음(중복 1통은 받아들인다)', () => {
   const f = fixture();
   f.run(['on', '자리 비움'], {quote: 'x'}); // b는 켤 때 업무가 없어 받지 못했다
-  let inner = null;
+  let inner = null, entered = false;
   f.deps.sendMail = (role, message) => {
     f.sent.push({role, message});
-    if (!inner) { inner = 'ran'; inner = f.run(['deliver', role]); } // 첫 전송 도중에 같은 역할 deliver가 한 번 더 돈다
+    if (!entered) { entered = true; inner = f.run(['deliver', role]); } // 첫 전송 도중에 같은 역할 deliver가 한 번 더 돈다(아직 아무 사건도 없어 둘 다 보낸다)
     return {ok: true, mailId: `m${f.sent.length}`};
   };
   const outer = f.run(['deliver', 'b-슈퍼감독']);
-  assert.equal(f.sent.filter(m => m.role === 'b-슈퍼감독').length, 1);
-  assert.deepEqual([inner.delivered.length, inner.skipped], [0, ['b-슈퍼감독']]);
-  assert.equal(outer.delivered.length, 1);
-  assert.equal(f.reservations().length, 1);
-  assert.equal(f.deliveries().filter(e => e.role === 'b-슈퍼감독').length, 1);
+  const toB = f.sent.filter(m => m.role === 'b-슈퍼감독').length;
+  assert.ok(toB >= 1 && toB <= 2, `b 전달 ${toB}건`);
+  assert.equal(outer.delivered.length + inner.delivered.length, toB);
+  assert.deepEqual(f.run(['status']).missing, []); // 누락 0
+  assert.deepEqual(f.run(['status']).lateDelivered, ['b-슈퍼감독']);
+  assert.equal(f.run(['deliver', 'b-슈퍼감독']).delivered.length, 0); // 이후는 0회
 });
 
-test('3b. 잠금 폴더가 이미 있으면(다른 전달이 예약 중) 보내지 않고 건너뛴다. 잠금은 예약 한 번만 잡고 끝나면 지운다', () => {
+test('3b. 이 경로는 잠금도 예약도 쓰지 않는다: 남은 autopilot-delivery.lock 폴더가 있어도 deliver는 막히지 않고, 사건은 결과 하나뿐이다', () => {
   const f = fixture();
   f.run(['on', '자리 비움'], {quote: 'x'});
-  f.run(['deliver', 'b-슈퍼감독']);
-  assert.ok(!fs.existsSync(path.join(f.home, 'autopilot-delivery.lock'))); // 끝나면 잠금이 없다
-  fs.mkdirSync(path.join(f.home, 'autopilot-delivery.lock'));
-  const before = f.sent.length;
-  // 잠금을 못 얻는 동안(5초 대기) 이미 받은 역할이라 아예 보내지 않는다. 받지 않은 역할은 건너뛴다.
-  const r = f.run(['deliver', 'c-슈퍼감독']);
-  assert.deepEqual([r.delivered.length, r.skipped], [0, ['c-슈퍼감독']]);
-  assert.equal(f.sent.length, before);
+  fs.mkdirSync(path.join(f.home, 'autopilot-delivery.lock')); // 이전 버전이 남긴 폴더를 흉내
+  const t0 = Date.now();
+  const r = f.run(['deliver', 'b-슈퍼감독']);
+  assert.ok(Date.now() - t0 < 2000, '5초 대기 없음');
+  assert.deepEqual([r.delivered.length, r.skipped], [1, []]);
+  assert.deepEqual(f.deliveries().map(e => e.delivery), ['ok']); // reserved 사건 없음
   fs.rmdirSync(path.join(f.home, 'autopilot-delivery.lock'));
+});
+
+test('3d. 보내기 전에 프로세스가 죽은 경우(결과 사건을 못 적음): 다음 status에서 missing에 나오고 deliver가 1회 보낸다', () => {
+  const f = fixture();
+  f.run(['on', '자리 비움'], {quote: 'x'});
+  const realRecord = f.deps.record;
+  f.deps.record = entry => { if (entry.kind === DELIVERY_KIND) throw new Error('죽음'); return (realRecord ?? (e => appendLedger(e, f.home)))(entry); };
+  assert.throws(() => f.run(['deliver', 'b-슈퍼감독']), /죽음/); // 전송은 갔고 기록 직전에 죽었다 → 사건 0건
+  assert.equal(f.deliveries().length, 0);
+  f.deps.record = realRecord;
+  f.works.push({key: 'b/w1', status: 'open', owner: 'b-감독', executions: []});
+  assert.deepEqual(f.run(['status']).missing, ['b-슈퍼감독']);
+  const before = f.sent.length;
+  assert.equal(f.run(['deliver']).delivered.length, 1);
+  assert.equal(f.sent.length, before + 1);
+  assert.equal(f.run(['deliver']).delivered.length, 0);
+});
+
+test('3e. 첫 안내가 실제로 전달됐다고 기록되면(ok·sent) deliver는 0회, not-sent·unknown이면 missing에 나오고 deliver 1회 뒤 0회', () => {
+  const cases = [['ok', {ok: true, mailId: 'm'}, true], ['sent', failedResult({delivery: 'sent'}), true],
+    ['not-sent', failedResult({delivery: 'not-sent'}), false], ['unknown', failedResult({}), false]];
+  for (const [name, result, counted] of cases) {
+    const f = fixture();
+    f.run(['on', '자리 비움'], {quote: 'x'});
+    f.works.push({key: 'b/w1', status: 'open', owner: 'b-감독', executions: []});
+    const on = readLedger(f.home).find(e => e.kind === 'autopilot');
+    finishDelivery({on, role: 'b-슈퍼감독', via: 'start', by: '사람', result, now: T0, record: entry => appendLedger(entry, f.home)});
+    assert.deepEqual(f.run(['status']).missing, counted ? [] : ['b-슈퍼감독'], name);
+    assert.equal(f.run(['deliver']).delivered.length, counted ? 0 : 1, name);
+    assert.equal(f.run(['deliver']).delivered.length, 0, name);
+  }
+});
+
+test('3f. failedResult: 보내기 오류의 delivery(not-sent|sent|unknown)를 그대로, 없거나 모르는 값은 unknown(재시도 대상)', () => {
+  for (const delivery of ['not-sent', 'sent', 'unknown']) assert.deepEqual(failedResult({delivery}), {ok: false, delivery});
+  for (const error of [new Error('x'), {delivery: 'weird'}, null, undefined]) assert.deepEqual(failedResult(error), {ok: false, delivery: 'unknown'});
+  // start-brief는 보내기 오류를 onFailed에 그대로 넘긴다
+  const error = Object.assign(new Error('입력 거절'), {delivery: 'not-sent'});
+  let got = null;
+  const base = {role: 'c-슈퍼감독', session: 's', roleProfile: 'super', cmd: 'claude', reusing: false, sleep: () => {}, floor: {read: () => 'ready'}, isCurrent: () => true, warn: () => {}, log: () => {}};
+  assert.equal(briefStartedRole({...base, autopilot: 'A', send: () => { throw error; }, onFailed: e => { got = e; }}), 'failed');
+  assert.equal(got, error);
+  // 이미 받았으면(wanted false) 켜짐 줄 없이 첫 안내만 가고 콜백은 없다
+  const bodies = []; let called = 0;
+  briefStartedRole({...base, autopilot: 'A-본문', wanted: () => false, send: ({message}) => { bodies.push(message); return {bytes: 1, mailId: 'm'}; }, onSent: () => { called++; }});
+  assert.equal(called, 0); assert.ok(!bodies[0].includes('A-본문'));
 });
 
 test('3c. 격리 tmux: 같은 켜짐에 같은 이름의 슈퍼감독을 새로 두 번 띄워도 켜짐 안내는 1건(두 번째 첫 안내에는 줄이 없다)', t => {
@@ -312,5 +355,5 @@ test('3c. 격리 tmux: 같은 켜짐에 같은 이름의 슈퍼감독을 새로 
   assert.equal(bodies.length, 2);
   assert.equal(bodies.filter(b => b.includes('[Autopilot] kyle이 자리를 비웠습니다')).length, 1);
   const events = readLedger(w.home).filter(e => e.kind === DELIVERY_KIND && e.role === role);
-  assert.deepEqual(events.map(e => e.delivery), ['reserved', 'ok']);
+  assert.deepEqual(events.map(e => e.delivery), ['ok']); // 예약 사건 없이 결과 하나
 });

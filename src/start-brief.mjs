@@ -51,10 +51,10 @@ export function briefSkipReason({ reusing, roleProfile, noPrompt, cmd, known }) 
 
 // 새로 만든 세션에 첫 안내를 보낸다. 실패해도 던지지 않는다(start는 성공으로 끝난다, 세션도 닫지 않는다).
 // 반환: 'sent' | 'not-ready' | 'failed' | 'skipped:<이유>'. tries·intervalMs·sleep은 시험에서 주입한다.
-// autopilot: 켜진 Autopilot 안내 본문(슈퍼감독일 때만 start가 준다). claim(): 보내기 직전에 부르고 false면 안내를 붙이지 않는다(같은 켜짐·같은 역할에 이미 받음).
-// onSent(receipt)·onFailed(error): 붙여 보낸 결과를 한 번 부른다(전달 기록용, 던져도 start는 성공).
+// autopilot: 켜진 Autopilot 안내 본문(슈퍼감독일 때만 start가 준다). wanted(): 보내기 직전에 부르고 false면 안내를 붙이지 않는다(같은 켜짐·같은 역할에 이미 받음).
+// onSent(receipt)·onFailed(error): 붙여 보낸 결과를 한 번 부른다(전달 기록용, 던져도 start는 성공). onFailed는 보내기 오류를 그대로 받는다.
 export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, reusing, floor, send,
-  tries, intervalMs, sleep, known, isCurrent, autopilot, claim, onSent, onFailed, log = console.log, warn = console.error } = {}) {
+  tries, intervalMs, sleep, known, isCurrent, autopilot, wanted, onSent, onFailed, log = console.log, warn = console.error } = {}) {
   const skip = briefSkipReason({ reusing, roleProfile, noPrompt, cmd, known });
   if (skip) return `skipped:${skip}`;
   const skill = briefSkill(roleProfile);
@@ -70,9 +70,9 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
     if (current === false) { warn("첫 안내 건너뜀 — 세대가 바뀜"); return "skipped:generation-changed"; }
     if (current !== true) { warn("첫 안내 건너뜀 — 세대 확인 실패"); return "skipped:generation-unknown"; }
   }
-  // 켜짐 안내는 예약에 성공했을 때만 붙인다. 예약을 못 하면(이미 받음·잠금 실패·확인 오류) 안내 없이 첫 안내만 보낸다(deliver로 채울 수 있다).
+  // 켜짐 안내는 아직 받지 않았을 때만 붙인다. 이미 받았거나 확인하지 못하면(원장 읽기 오류) 안내 없이 첫 안내만 보낸다(deliver로 채울 수 있다).
   let attach = autopilot;
-  if (attach && claim) { try { if (!claim()) attach = undefined; } catch (error) { attach = undefined; warn(`Autopilot 안내 예약 실패(${error.message}) — 첫 안내만 보냄`); } }
+  if (attach && wanted) { try { if (!wanted()) attach = undefined; } catch (error) { attach = undefined; warn(`Autopilot 안내 확인 실패(${error.message}) — 첫 안내만 보냄`); } }
   try {
     const receipt = send({ role, session, message: briefMessage({ role, profile: roleProfile, autopilot: attach }), roleProfile });
     log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 우편ID ${receipt.mailId}) — 입력 접수·AI 실행 미확인`);
@@ -82,7 +82,7 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
     return "sent";
   } catch (error) {
     warn(`첫 안내 못 보냄(${error.message}) — ${hint}`);
-    if (attach && onFailed) { try { onFailed(error); } catch { /* 예약이 남아도 start는 성공이다 */ } }
+    if (attach && onFailed) { try { onFailed(error); } catch { /* 기록 실패여도 start는 성공이다(deliver로 채움) */ } }
     return "failed";
   }
 }

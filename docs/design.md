@@ -217,7 +217,7 @@ tmux는 (a)(b)(c)를 충족했고 (d)는 Mac에서 통과했다(서버 왕복은
   `settingsRevision`, `preset`, `role`, 작업자·검수자 선택값을 시스템 영역에 기록한다.
   실제 시작과 카드 발령은 같은 pickId·compareMode·settingsPreset을 남긴다.
   예약 수와 실제 시작 수는 다를 수 있다. [비교 모드](runner-settings.md#비교-모드)를 따른다.
-- `autopilot-delivery`: 켜진 Autopilot을 켤 때 우편으로 못 받은 슈퍼감독에게 늦게 알린 기록이다(첫 안내 `via: start`, `kadan autopilot deliver` `via: deliver`). `onAt`은 그 켜짐 `autopilot` 사건의 시각, `role`·`by`·`delivery`(`reserved`=보내기 직전 예약, 결과 `ok|sent|not-sent|unknown`)·`mailId`를 담는다. 역할별 마지막 사건이 이긴다(예약은 결과가 덮는다). `autopilot` 사건과 따로 둔다(phase를 더하면 `autopilotState`가 꺼짐으로 읽는다). `autopilot status`의 `missing`은 열린 업무의 슈퍼감독에서 받은 역할(켤 때 `delivered`가 `ok|sent`인 역할 + 마지막 사건이 `reserved|ok|sent`인 역할)을 뺀 나머지다.
+- `autopilot-delivery`: 켜진 Autopilot을 켤 때 우편으로 못 받은 슈퍼감독에게 늦게 알린 기록이다(첫 안내 `via: start`, `kadan autopilot deliver` `via: deliver`). `onAt`은 그 켜짐 `autopilot` 사건의 시각, `role`·`by`·`delivery`(`ok|sent|not-sent|unknown`: 실제 전달 결과, 첫 안내는 보내기 오류의 `delivery`를 그대로)·`mailId`를 담는다. `ok`·`sent`만 받은 것으로 센다. `autopilot` 사건과 따로 둔다(phase를 더하면 `autopilotState`가 꺼짐으로 읽는다). `autopilot status`의 `missing`은 열린 업무의 슈퍼감독에서 받은 역할(켤 때 `delivered`가 `ok|sent`인 역할 + 이 사건이 `ok|sent`인 역할)을 뺀 나머지다.
 - `autopilot-note`: Autopilot이 켜진 동안 `kadan autopilot note`로 남기는 한 줄 기록이다. `noteKind`(`decision`·`hold`·`gate`·`merge`·`start`),
   `text`(글자 200개 + `…`), 선택 `work`·`pr`·`sha`·`reason`, `hold`의 `holdKind`(`decision`·`gate`·`deploy-repo`), `gate`의 `verdict`(`pass`·`reject`)를 담고
   `by`는 기록한 사람 또는 역할이다. `autopilot` 종류와 따로 둔다: `autopilot` 사건은 켜짐 계산의 기준이라 섞으면 안 된다. 시스템 영역에 쌓인다.
