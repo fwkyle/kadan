@@ -13,7 +13,9 @@ const RULE = /^─{3,}$/u;
 // watch-status-line.mjs의 claude 일하는 줄(`✢ Grooving… (32s · ↓ 1.7k tokens)`)과 같은 모양이되 들여쓰지 않은 줄만이다.
 const SPINNER = /^[✻✶✳✢✽·*⏺]\s+\S+(?:…|\.\.\.)\s*\(/u;
 const TOOL_LINE = /^ {2}⎿ {2}Running(?:…|\.\.\.)\s*\(([^()]*)\)\s*$/u;
-const DURATION = /^(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?$/u;
+const TIP_LINE = /^ {2}⎿ {2}Tip: /u;
+const BACKGROUND_HINT = /^ {5}\(ctrl\+b .*run in background\)$/u;
+const DURATION =/^(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?$/u;
 
 // `4m` `6m 40s` `1h 2m` `30s`를 밀리초로. 다른 모양·빈 값·0·유한하지 않은 값(아주 큰 숫자 → Infinity)은 null이다.
 // 읽은 값이 TOOL_TIMEOUT_MAX_MS보다 크면 그 상한으로 자른다.
@@ -30,7 +32,8 @@ export function parseTimeout(text) {
 // key는 같은 도구인지 비교하는 값이다: 도구 줄에서 경과 표시를 뺀 것이라 T(상한 적용 뒤)만 담는다. 경과만 바뀌면 같은 도구다.
 export function readToolTimeout(screen) {
   if (typeof screen !== 'string') return null;
-  const all = screen.split('\n');
+  // 실제 Claude 화면의 `❯`·`⎿` 뒤에는 줄바꿈 방지 공백(U+00A0)이 섞인다. 판정 전에 일반 공백으로 바꿔 같은 공백으로 받는다(줄 순서·들여쓰기 폭은 그대로 센다).
+  const all = screen.replaceAll(' ', ' ').split('\n');
   while (all.length > 0 && all[all.length - 1].trim() === '') all.pop();
   // 실제 입력창: 위·아래 가로줄 사이의 입력 한 줄이고 그 아래에는 바닥글만 있다. 못 찾으면 구역을 모른다.
   const input = all.findLastIndex((line, n) => n >= all.length - BOTTOM_LINES && n > 0 && INPUT_LINE.test(line)
@@ -38,9 +41,13 @@ export function readToolTimeout(screen) {
   if (input < 0 || all.length - 1 - input > FOOTER_LINES + 1) return null;
   let i = input - 2;
   while (i >= 0 && all[i].trim() === '') i--;
+  // 실측 화면(tests/fixtures/waiting-cap-screens.json)에는 스피너 바로 아래의 팁 줄과 도구 줄 바로 아래의 백그라운드 안내 줄이 낀다.
+  // 이 두 줄 모양에 정확히 맞는 한 줄씩만 건너뛴다. 다른 글이 끼면 구역을 확정하지 못한 것이다.
+  if (i >= 0 && TIP_LINE.test(all[i])) i--;
   if (i < 0 || !SPINNER.test(all[i])) return null;
   i--;
   while (i >= 0 && all[i].trim() === '') i--;
+  if (i >= 0 && BACKGROUND_HINT.test(all[i])) i--;
   const hit = i >= 0 ? TOOL_LINE.exec(all[i]) : null;
   if (!hit) return null;
   const segment = hit[1].split('·').map(s => s.trim()).find(s => /^timeout\s/iu.test(s));

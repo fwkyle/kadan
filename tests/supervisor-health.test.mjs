@@ -352,3 +352,31 @@ test('쓰는 timeout은 최대 60분이고 유한하지 않은 값은 읽기 실
  assert.deepEqual(['4m','6m 40s','30s','1h','2h 5m'].map(parseTimeout),[240_000,400_000,30_000,3_600_000,3_600_000]);
  for(const bad of ['0s','1d','2 mins','',undefined])assert.equal(parseTimeout(bad),null);
 });
+// 3라운드: 실제 Claude 화면의 `❯`·`⎿` 뒤에는 U+00A0이 섞인다. 공백 자리는 U+0020과 U+00A0을 같은 공백으로 받는다.
+const nbspTool=screen=>screen.replace('⎿  Running','⎿ \u00a0Running'),nbspInput=screen=>screen.replace('❯ \n','❯\u00a0\n');
+function assertSuppressedUntil(screen,timeoutMs,label){
+ const f=health(),first=seenAt(),until=first+timeoutMs+60_000;
+ f.check(0,'하위 결과를 기다리는 중');
+ assert.equal(f.check(first,screen).candidate,undefined,label);
+ assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate,undefined,label);
+ assert.equal(f.check(until-1,screen).candidate,undefined,label);
+ assert.equal(f.check(until,screen).candidate.input.check,'hourly',label);
+}
+test('도구 줄·입력창의 U+00A0 공백도 같은 공백으로 받아 유예 안에는 후보를 내지 않는다',()=>{
+ for(const [screen,ms,name] of [[TOOL_4M,4*60_000,'4m'],[TOOL_6M40,400_000,'6m 40s']]){
+  for(const [fix,part] of [[nbspTool,'도구 줄'],[nbspInput,'입력창'],[s=>nbspInput(nbspTool(s)),'둘 다']]){
+   const screen2=fix(screen);assert.notEqual(screen2,screen);assertSuppressedUntil(screen2,ms,`${name} ${part}`);
+  }
+ }
+});
+test('실측 Claude 화면(공백 U+00A0·백그라운드 안내·팁 줄 포함)도 유예 안에는 후보를 내지 않는다',()=>{
+ const fixture=JSON.parse(fs.readFileSync(new URL('./fixtures/waiting-cap-screens.json',import.meta.url),'utf8')).claudeLimiterWait;
+ assert(fixture.includes('\u00a0'));assertSuppressedUntil(fixture,10*60_000,'claudeLimiterWait');
+ // 낀 줄이 그 두 모양과 다르면 구역을 확정하지 못한 것이라 지금처럼 후보다.
+ for(const bad of [fixture.replace('(ctrl+b ctrl+b (twice) to run in background)','임의의 다른 글'),fixture.replace('Tip: Use /clear','다른 글: Use /clear'),
+  fixture.replace('     (ctrl+b','  (ctrl+b')]){
+  assert.notEqual(bad,fixture);
+  const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),bad);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS,bad).candidate.input.check,'hourly');
+ }
+});
