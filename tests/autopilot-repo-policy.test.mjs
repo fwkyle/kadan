@@ -498,6 +498,31 @@ test('F1. 목록(GET·CLI)에 unreadable이 상대 경로·이유로 보이고 �
   assert.deepEqual(listRepos(h2, [], {origin: () => null}).unreadable, [{path: 'notes/umb.md', reason: 'deploy_branch 짝 목록 형식이 틀림'}]);
 });
 
+test('우산 문서: remote가 자유 글이어도 짝 목록이 정상이면 못 읽음 0, 아니면 setup-needed', () => {
+  const free = 'remote: Acme 조직 (web, admin)';
+  // (가) 자유 글 remote + 정상 짝 목록: 못 읽음 0, 키 저장소는 문서 값대로, 값 없는 다른 저장소는 허용
+  const dir = tmp('kadan-umb-ok-'), home = home0();
+  card(dir, 'umb', `${free}\ndeploy_branch: {Acme/Web: 없음, Acme/Admin: main}\nnight_merge: 금지`);
+  card(dir, 'plain', 'remote: acme/plain\ndeploy_branch: 없음');
+  link(home, dir);
+  assert.deepEqual(listRepos(home, [], {origin: () => null}).unreadable, []);
+  assert.deepEqual(verdictOf(home, 'acme/web', 'dev'), ['hold', 'night-merge-forbidden']);
+  assert.deepEqual(verdictOf(home, 'acme/other', 'dev'), ['merge', 'allowed']);
+  assert.deepEqual(verdictOf(home, 'acme/plain', 'dev'), ['merge', 'allowed']);
+  // (나) 자유 글 remote + 짝 목록 아님: 여전히 못 읽음 → 값 없는 저장소는 setup-needed
+  const d2 = tmp('kadan-umb-word-'), h2 = home0();
+  card(d2, 'one', `${free}\ndeploy_branch: 없음`);
+  link(h2, d2);
+  assert.deepEqual(listRepos(h2, [], {origin: () => null}).unreadable, [{path: 'notes/one.md', reason: 'remote 주소 형식을 읽을 수 없음'}]);
+  assert.deepEqual(verdictOf(h2, 'acme/other', 'dev'), ['hold', 'setup-needed']);
+  // (다) 자유 글 remote + 깨진 짝 목록: 못 읽음 → setup-needed
+  const d3 = tmp('kadan-umb-broken-'), h3 = home0();
+  card(d3, 'bad', `${free}\ndeploy_branch: {Acme/Web: main, 깨짐`);
+  link(h3, d3);
+  assert.deepEqual(listRepos(h3, [], {origin: () => null}).unreadable, [{path: 'notes/bad.md', reason: 'deploy_branch 짝 목록 형식이 틀림'}]);
+  assert.deepEqual(verdictOf(h3, 'acme/other', 'dev'), ['hold', 'setup-needed']);
+});
+
 test('F1. 반대 대조: 정상 금지 문서는 hold, night_merge 칸이 정말 없는 정상 문서는 merge, 설정 main + 대상 main은 hold', () => {
   const home = forbidSetup();
   assert.deepEqual(verdictOf(home, 'acme/app', 'dev'), ['hold', 'night-merge-forbidden']);
