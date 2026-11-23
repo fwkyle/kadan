@@ -54,7 +54,7 @@ export default function StrategyMap({ url }: { url: URL }) {
   const forest = map ? buildForest(map.bases, showResting) : null;
   return <section className="sm-view">
     <header className="st-lead"><h1>전략 맵</h1>
-      <p>슈퍼감독마다 판 하나, 그 아래 감독과 작업자·검수자가 이어집니다. 칸을 누르면 옆 칸(좁은 화면에서는 아래)에 그 역할의 카드가 보입니다. 숫자의 기준은 <a href="#status">전체 현황</a>과 같습니다.</p>
+      <p>슈퍼감독마다 판 하나, 그 아래 감독과 작업자·검수자가 이어집니다. 칸을 누르면 옆 칸(좁은 화면에서는 아래)에 그 역할의 카드가 보입니다.</p>
       <small>수집 {time(data?.collectedAt)}</small></header>
     {url.hash === "#sessions" && <p className="muted">담당자 상태는 전략 맵으로 옮겼습니다. 유닛을 누르면 옆 칸에 생존·실행 도구·모델과 다시 띄우기가 있습니다.</p>}
     <ErrorMessage error={resource.error} /><Freshness collectedAt={data?.collectedAt} {...resource} />

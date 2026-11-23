@@ -57,7 +57,9 @@ test("전략 맵은 나무 보기 하나: 보기 전환 단추가 없고 나무 
   assert.doesNotMatch(html, /sm-viewswitch|aria-label="지도 보기"|>2D<|>3D<|>나무</, "전환 단추 없음");
   assert.doesNotMatch(html, /기지와 유닛 지도|왕관 = 슈퍼감독|<canvas/, "2D·3D 그림과 그 범례 없음");
   assert.match(html, /aria-label="판과 역할 나무"/);
-  assert.match(html, /슈퍼감독마다 판 하나, 그 아래 감독과 작업자·검수자가 이어집니다\. 칸을 누르면 옆 칸\(좁은 화면에서는 아래\)에 그 역할의 카드가 보입니다\./);
+  // 소개 문단은 kyle이 승인한 두 문장 그대로다(PR #465 검수 F1). 덧붙은 문장·링크가 없어야 한다.
+  assert.equal(html.match(/<header class="st-lead"><h1>전략 맵<\/h1><p>(.*?)<\/p>/)?.[1],
+    "슈퍼감독마다 판 하나, 그 아래 감독과 작업자·검수자가 이어집니다. 칸을 누르면 옆 칸(좁은 화면에서는 아래)에 그 역할의 카드가 보입니다.");
   assert.doesNotMatch(html, /기지 하나|유닛 옆 상자/, "옛 소개 문단 없음");
   assert.match(html, /<b[^>]*>3<\/b> 판|>3<[^>]*> 판/, "집계 줄에 판 수");
   assert.match(html, /대기 역할/);
