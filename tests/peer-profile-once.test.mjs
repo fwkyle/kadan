@@ -16,7 +16,7 @@ test('같은 수집의 많은 질문도 프로필은 한 번 읽고 다음 호�
   rememberMailboxQueries(entries, {waiting, recent:new Map()});
   assert.deepEqual(peerResponsibilities(entries, parents), waiting.map(q => ({
     kind:'send', role:q.currentRecipient, taskId:`mail:${q.mailId}`, t:q.t, peerRequest:true,
-    mailId:q.mailId, asker:q.currentSender, activityRoles:[], linkedWorkIds:[],
+    mailId:q.mailId, asker:q.currentSender, activityRoles:[], attached:false, linkedWorkIds:[],
   })));
   assert.equal(reads, 1);
   profile.roleProfile = 'worker';
