@@ -70,6 +70,22 @@ test('표 1·4·5: 열린 무업무 채팅 결정이 있으면 요청 역할을 
   assert.deepEqual(await noWorkRun([{...noWork,status:'answered'}],20),[[15,'p-슈퍼감독']],'답변 뒤 평소 판정');
 });
 
+// 검수 재현 세 꼴(PR #470): 보낼 때 업무·실행 주소를 직접 붙인 질문 우편은 결정이 열려 있어도 15분에 mail:q1로 깨운다.
+for(const [name,attach,extra] of [
+  ['--work를 붙인 우편',{workKey:'repo/w1'},{}],
+  ['업무 소속 실행을 --execution으로 붙인 우편',{executionKey:'repo/t1'},{}],
+  ['업무에 소속되지 않은 카드만 --execution으로 붙인 우편',{executionKey:'repo/card-x'},{works:[],cards:[]}],
+]){
+  test(`회귀: ${name}은 무업무 채팅 결정이 열려 있어도 가리지 않는다`,async()=>{
+    const nudges=await simulate({minutes:20,decisions:[noWork],extraEntries:[{...peerQuestion,...attach}],table:twoSupers,raw:true,...extra});
+    const mine=nudges.filter(([,role])=>role==='p-슈퍼감독');
+    assert.deepEqual(mine.map(([m])=>m),[15]);assert.match(mine[0][2],/mail:q1/);
+  });
+}
+test('대조: 업무·실행 주소가 전혀 안 붙은 질문 우편은 지금처럼 가린다',async()=>{
+  assert.deepEqual(await noWorkRun([noWork]),[]);
+});
+
 test('표 4: 요청 역할의 업무에 안 이어진 질문 우편만 가린다. 다른 역할·업무·카드에 걸린 항목은 가리지 않는다',async()=>{
   assert.deepEqual(await noWorkRun([{...noWork,requestedBy:'q-슈퍼감독'}],20),[[15,'p-슈퍼감독']],'다른 역할의 결정은 가리지 않는다');
   // 다른 역할(p-감독)의 업무(w1)는 요청 역할이 결정을 열어도 그대로 깨운다.
