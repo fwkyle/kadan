@@ -147,6 +147,11 @@ test('5. 예전 merge|hold 저장값(맨 이름 키 포함)은 legacy로만 보�
   assert.deepEqual(policy.repos, {});
   assert.deepEqual(Object.keys(policy.legacy).sort(), ['acme/old', 'site']);
   assert.deepEqual(verdictOf(home, 'acme/old', 'main'), ['merge', 'allowed']); // 예전 merge는 무시(값 없음 = 허용)
+  // 예전 hold도 같다: 옛 형식은 판정에 쓰지 않으므로 값 없음으로 읽혀 허용이 된다(예전에는 setup-needed 보류였다). 목록에서 '다시 설정 필요'로 따로 보인다.
+  fs.writeFileSync(policyPath(home), JSON.stringify({version: 1, repos: {'acme/held': {...entry, value: 'hold'}}}));
+  assert.deepEqual(verdictOf(home, 'acme/held', 'main'), ['merge', 'allowed']);
+  assert.deepEqual(listRepos(home, [], {origin: () => null}).legacy.map(l => [l.name, l.value]), [['acme/held', 'hold']]);
+  fs.writeFileSync(policyPath(home), JSON.stringify({version: 1, repos: {site: entry, 'acme/old': {...entry, value: 'merge'}, gone: {...entry, value: 'auto'}}}));
   const out = listRepos(home, [], {origin: () => null});
   assert.deepEqual(out.legacy, [{name: 'acme/old', value: 'merge', at: 't', by: '사람'}, {name: 'site', value: 'hold', at: 't', by: '사람'}]);
   assert.match(autopilotCommand(['repo', 'list'], {}, {home, by: '사람', deps: {readWorks: () => [], origin: () => null}}), /옛 형식 저장값\(판정에 쓰지 않음\): site = hold/);

@@ -263,7 +263,7 @@ export function autopilotCommand(args, flags, {home, by, deps = {}}) {
     try { decideAfterMs = parseDecideAfter(flags['decide-after']); } catch (error) { throw Object.assign(error, {exitCode: 2}); }
   }
 
-  // --allow: 이번 켜짐 동안만 정책 보류(금지·배포 브랜치) 두 가지를 푸는 kyle의 허용. 켜진 모든 단계(Cruise 포함)에서 받는다. 값마다 올바른 키, kyle 원문 필수.
+  // --allow: 이번 켜짐 동안만 정책 보류(금지·배포 브랜치·자동 배포인데 배포 브랜치 미설정) 세 가지를 푸는 kyle의 허용. 켜진 모든 단계(Cruise 포함)에서 받는다. 값마다 올바른 키, kyle 원문 필수.
   let allow;
   if (flags.allow !== undefined) {
     const keys = (Array.isArray(flags.allow) ? flags.allow : [flags.allow]).map(v => {

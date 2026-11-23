@@ -137,7 +137,7 @@ function world(t) {
 test('1-4. 격리 tmux: Autopilot 켜짐 중 새 super start는 첫 안내에 켜짐 줄과 전달 사건이 남고, 꺼짐 중이면 줄이 없다', t => {
   if (spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux 없음');
   const w = world(t);
-  const off = w.kadan('start', 'late-off', '--hidden', '--profile', 'super', '--cmd', 'claude', '--reason', 't');
+  const off = w.kadan('start', 'late-off-슈퍼감독', '--hidden', '--profile', 'super', '--cmd', 'claude', '--reason', 't');
   assert.equal(off.status, 0, off.stdout + off.stderr);
   const sends = () => readLedger(w.home).filter(e => e.kind === 'send');
   assert.equal(sends().length, 1);
@@ -146,20 +146,26 @@ test('1-4. 격리 tmux: Autopilot 켜짐 중 새 super start는 첫 안내에 �
 
   const turnOn = w.kadan('autopilot', 'on', '자리 비움', '--level', 'autopilot', '--quote', '다녀올게');
   assert.equal(turnOn.status, 0, turnOn.stdout + turnOn.stderr);
-  const on = w.kadan('start', 'late-on', '--hidden', '--profile', 'super', '--cmd', 'claude', '--reason', 't');
+  const on = w.kadan('start', 'late-on-슈퍼감독', '--hidden', '--profile', 'super', '--cmd', 'claude', '--reason', 't');
   assert.equal(on.status, 0, on.stdout + on.stderr);
   const brief = sends().at(-1);
-  assert.equal(brief.role, 'late-on');
+  assert.equal(brief.role, 'late-on-슈퍼감독');
   const body = readFirstBody(w.home, brief);
   assert.match(body, /\[Autopilot\] kyle이 자리를 비웠습니다/);
   assert.match(body, /단계: Autopilot/);
   assert.match(body, /kyle 추가 문구: 자리 비움/);
   const delivery = readLedger(w.home).filter(e => e.kind === DELIVERY_KIND);
   assert.equal(delivery.length, 1);
-  assert.equal(delivery[0].role, 'late-on');
+  assert.equal(delivery[0].role, 'late-on-슈퍼감독');
   assert.equal(delivery[0].via, 'start');
   assert.equal(delivery[0].onAt, readLedger(w.home).find(e => e.kind === 'autopilot').t);
   assert.equal(autopilotState(readLedger(w.home), Date.now()).on, true);
+  // 같은 켜짐의 status: 첫 안내로 받았으니 missing에 없고, deliver를 해도 두 번째는 안 간다(위 업무가 없어도 받은 역할로 센다)
+  const st = JSON.parse(w.kadan('autopilot', 'status').stdout);
+  assert.deepEqual([st.on, st.missing, st.lateDelivered], [true, [], ['late-on-슈퍼감독']]);
+  assert.equal(w.kadan('autopilot', 'deliver', 'late-on-슈퍼감독').status, 0);
+  assert.equal(readLedger(w.home).filter(e => e.kind === DELIVERY_KIND).length, 1);
+  assert.equal(sends().filter(e => e.role === 'late-on-슈퍼감독').length, 1);
 });
 
 const readFirstBody = (home, send) => readMailBody(send.digest, home) ?? assert.fail('우편 본문을 못 읽음');
