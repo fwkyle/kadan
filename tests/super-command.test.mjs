@@ -116,6 +116,18 @@ test('수정1-발견3: 띄운 start의 PID가 지금 pane PID와 다르면 후�
   assert.equal(plan('/w/sample-repo', [start(name, '/w/sample-repo'), {kind: 'stop', session: name}], [name]).action, 'conflict');
 });
 
+test('수정2: 같은 이름의 소속 확인 불가는 정상 별칭 후보가 있어도 먼저 멈춘다(PID 바뀜·cwd 없음). 다른 폴더·프로필 아님은 별칭 attach를 막지 않는다', () => {
+  const name = 'kadan-sample-repo-슈퍼감독', alias = start('kadan-alias-슈퍼', '/w/sample-repo');
+  const pidChanged = plan('/w/sample-repo', [start(name, '/w/sample-repo', {panePid: 7}), alias], [name, alias.session]);
+  assert.deepEqual([pidChanged.action, /PID/.test(pidChanged.why)], ['conflict', true]);
+  const noCwd = plan('/w/sample-repo', [start(name, undefined), alias], [name, alias.session]);
+  assert.deepEqual([noCwd.action, /소속 확인 불가/.test(noCwd.why)], ['conflict', true]);
+  const twoAliases = [start(name, undefined), alias, start('kadan-alias2-슈퍼', '/w/sample-repo')];
+  assert.equal(plan('/w/sample-repo', twoAliases, [name, alias.session, 'kadan-alias2-슈퍼']).action, 'conflict');
+  const otherFolder = plan('/w/sample-repo', [start(name, '/elsewhere/sample-repo'), alias], [name, alias.session]);
+  assert.equal(otherFolder.action, 'attach');
+});
+
 // ---- cmdSuper 배선: start·attach를 가짜로 끼워 호출 여부만 본다 ----
 function run(entries, aliveSet, cwd = '/w/sample-repo') {
   const calls = [];
@@ -179,7 +191,8 @@ function isolated() {
   const cleanup = () => {
     console.error(`격리 tmux 소켓 종료: ${socket}`);
     tmuxArgs(['kill-server']);
-    fs.rmSync(work, {recursive: true, force: true});
+    // kill-server 직후에도 출력 기록 도우미가 잠깐 더 쓸 수 있어 ENOTEMPTY가 난다(병렬 실행 중 실측). 재시도로 기다린다.
+    fs.rmSync(work, {recursive: true, force: true, maxRetries: 20, retryDelay: 100});
   };
   return {work, home, env, cli, tmuxArgs, cleanup};
 }
@@ -232,6 +245,11 @@ function readLedgerAt(home) {
 
 // 격리 tmux 위의 실제 CLI로 수정 1의 세 줄을 덮는다. 검수자 재현(exec-37516bdd isolated-review.mjs)을 시험 안에 옮겼다.
 const waitFor = (fn, tries = 200) => { for (let i = 0; i < tries && !fn(); i++) sleepMs(50); return fn(); };
+// tmux 조회가 성공(종료 0)했을 때만 pane PID 문자열을 준다. 실패·빈 값은 ''(숫자가 아니므로 대기 조건이 통과하지 않는다).
+const panePid = (f, session) => {
+  const r = f.tmuxArgs(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']);
+  return r.status === 0 ? r.stdout.trim() : '';
+};
 const startsOf = (home, session) => readLedger(home).filter(e => e.kind === 'start' && e.session === session);
 
 test('실제 CLI 수정1-발견1: A에서 띄운 super를 B(같은 폴더 이름)에서 start로 재사용한 뒤 A는 attach, B는 멈춘다', {skip}, t => {
@@ -261,7 +279,8 @@ test('실제 CLI 수정1-발견2: 띄운 start에 cwd가 없으면 어느 레포
   t.after(f.cleanup);
   const role = 'sample-repo-슈퍼감독', session = `kadan-${role}`;
   assert.equal(f.tmuxArgs(['new-session', '-d', '-s', session, 'sleep 120']).status, 0);
-  const pid = f.tmuxArgs(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']).stdout.trim();
+  const pid = panePid(f, session);
+  assert.match(pid, /^[0-9]+$/);
   appendLedger({kind: 'start', floor: 'tmux', role, session, roleProfile: 'super', cmd: 'sleep 120', panePid: Number(pid), by: 'test'}, f.home);
   const same = f.cli(makeRepo(f.work), ['super']);
   assert.equal(same.status, 1, same.stdout + same.stderr);
@@ -281,12 +300,57 @@ test('실제 CLI 수정1-발견3: pane PID가 원장과 다르면 attach하지 �
   const role = 'sample-repo-슈퍼감독', session = `kadan-${role}`;
   assert.equal(f.cli(repo, ['super']).status, 0);
   assert.ok(waitFor(() => startsOf(f.home, session).length === 1));
-  const before = f.tmuxArgs(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']).stdout.trim();
+  const before = panePid(f, session);
+  assert.match(before, /^[0-9]+$/);
   assert.equal(f.tmuxArgs(['respawn-pane', '-k', '-t', `=${session}:`, 'sleep 130']).status, 0);
-  assert.ok(waitFor(() => f.tmuxArgs(['display-message', '-p', '-t', `=${session}:`, '#{pane_pid}']).stdout.trim() !== before));
+  assert.ok(waitFor(() => /^[0-9]+$/.test(panePid(f, session)) && panePid(f, session) !== before), '새 숫자 PID가 나올 때까지');
   const r = f.cli(repo, ['super']);
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /PID/);
   assert.equal(startsOf(f.home, session).length, 1, '새 start도 attach도 없다');
   f.cli(repo, ['stop', role]);
+});
+
+test('실제 CLI 수정2: PID 바뀐 같은 이름 + 정상 별칭, cwd 없는 같은 이름 + 정상 별칭 모두 종료 1, attach·새 start 없음', {skip}, t => {
+  const f = isolated();
+  t.after(f.cleanup);
+  const repo = makeRepo(f.work);
+  const role = 'sample-repo-슈퍼감독', session = `kadan-${role}`, alias = 'sample-alias-슈퍼', aliasSession = `kadan-${alias}`;
+  const total = () => readLedger(f.home).filter(e => e.kind === 'start').length;
+
+  // 조합 1: 같은 이름의 PID를 바꾸고, 같은 레포에 정상 별칭을 따로 띄운다.
+  assert.equal(f.cli(repo, ['super']).status, 0);
+  assert.ok(waitFor(() => startsOf(f.home, session).length === 1));
+  const before = panePid(f, session);
+  assert.match(before, /^[0-9]+$/);
+  assert.equal(f.tmuxArgs(['respawn-pane', '-k', '-t', `=${session}:`, 'sleep 130']).status, 0);
+  assert.ok(waitFor(() => /^[0-9]+$/.test(panePid(f, session)) && panePid(f, session) !== before));
+  const made = f.cli(repo, ['start', alias, '--profile', 'super']);
+  assert.equal(made.status, 0, made.stdout + made.stderr);
+  assert.ok(waitFor(() => startsOf(f.home, aliasSession).length === 1));
+  const count1 = total();
+  const r1 = f.cli(repo, ['super']);
+  assert.equal(r1.status, 1, r1.stdout + r1.stderr);
+  assert.match(r1.stderr, /PID/);
+  assert.doesNotMatch(r1.stdout, new RegExp(aliasSession), '별칭 attach 없음');
+  assert.equal(total(), count1, '새 start 없음');
+
+  // 조합 2: 같은 이름을 cwd 없는 기록으로 바꿔 둔 새 홈 상태(이 홈에서는 이름이 같은 새 세션이 필요해 다른 레포 이름을 쓴다).
+  const repo2 = makeRepo(f.work, 'repo-two');
+  const role2 = 'repo-two-슈퍼감독', session2 = `kadan-${role2}`, alias2 = 'two-alias-슈퍼', aliasSession2 = `kadan-${alias2}`;
+  assert.equal(f.tmuxArgs(['new-session', '-d', '-s', session2, 'sleep 120']).status, 0);
+  const pid2 = panePid(f, session2);
+  assert.match(pid2, /^[0-9]+$/);
+  appendLedger({kind: 'start', floor: 'tmux', role: role2, session: session2, roleProfile: 'super', cmd: 'sleep 120',
+    panePid: Number(pid2), by: 'test'}, f.home);
+  assert.equal(f.cli(repo2, ['start', alias2, '--profile', 'super']).status, 0);
+  assert.ok(waitFor(() => startsOf(f.home, aliasSession2).length === 1));
+  const count2 = total();
+  const r2 = f.cli(repo2, ['super']);
+  assert.equal(r2.status, 1, r2.stdout + r2.stderr);
+  assert.match(r2.stderr, /소속 확인 불가/);
+  assert.doesNotMatch(r2.stdout, new RegExp(aliasSession2), '별칭 attach 없음');
+  assert.equal(total(), count2, '새 start 없음');
+  f.cli(repo, ['stop', alias]);
+  f.cli(repo2, ['stop', alias2]);
 });

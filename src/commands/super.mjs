@@ -51,6 +51,7 @@ export function planSuper({ cwd, home, entries, alive, livePid = () => null, roo
   };
   const matches = [];
   let blocked = null; // 같은 이름 세션이 살아 있는데 이 레포의 것으로 확인되지 않는 이유
+  let unverified = false; // 그 이유가 "소속 확인 불가"(원장 근거 없음·폴더 없음·PID 바뀜)인가
   for (const name of eventsBy.keys()) {
     const start = launched(name);
     const isTarget = name === session;
@@ -67,8 +68,10 @@ export function planSuper({ cwd, home, entries, alive, livePid = () => null, roo
       else if (startRoot === root) { matches.push(start); continue; }
       else why = `다른 폴더(${start.cwd})에서 띄운 슈퍼감독이다`;
     }
-    if (isTarget) blocked = why;
+    if (isTarget) { blocked = why; unverified = /소속 확인 불가/.test(why); }
   }
+  // 같은 이름의 소속 확인 불가는 후보 수와 상관없이 먼저 멈춘다(정상 별칭이 있어도 그 이름의 세션을 못 믿는 채 넘어가지 않는다).
+  if (blocked && unverified) return { action: "conflict", root, role, session, why: blocked };
   if (matches.length > 1) return { action: "multiple", root, role, matches };
   if (matches.length === 1) return { action: "attach", root, role, target: matches[0] };
   if (blocked) return { action: "conflict", root, role, session, why: blocked };
