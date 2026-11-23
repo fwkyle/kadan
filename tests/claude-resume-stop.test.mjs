@@ -146,6 +146,12 @@ test('표 8행: 새 문구가 위에 있어도 그 아래에 일하는 표시(�
   const working = {
     spinner: screen(STOP_AUTO, '', '✻ Cogitating… (12s · esc to interrupt)', '', composer()),
     running: screen(STOP_AUTO, '', '⏺ Bash(sleep 60)', '  ⎿  Running… (12s)', '', composer()),
+    // 2라운드(검수 changes): 정지 줄 아래에 호출 머리줄 없이 들여쓴 `⎿  Running…` 줄만 있고 빈 입력창이 오는 화면.
+    // 훑기가 들여쓴 줄을 이어진 본문처럼 건너뛰어 예전 정지 줄을 현재 경보로 읽던 헛경보. main은 경보 0건이다.
+    running_indented: screen(STOP_AUTO, '', '  ⎿  Running… (12s)', '', composer()),
+    running_indented_tight: screen(STOP_AUTO, '  ⎿  Running… (12s)', '', composer()),
+    running_indented_after_banner: screen(BANNER, '', DONE, '', STOP_AUTO, '', '  ⎿  Running… (12s)', '', composer()),
+    running_indented_login: screen(STOP_LOGIN, '', '  ⎿  Running… (12s)', '', composer()),
   };
   for (const [name, text] of Object.entries(working)) {
     assert.equal(screenDisconnects(text).size, 0, name);

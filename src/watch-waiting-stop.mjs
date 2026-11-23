@@ -8,7 +8,7 @@
 // 세션이 사라진 것은 알리지 않는다(대기 세션의 죽음은 이 검사의 범위 밖이다).
 import { WORKER_PHRASES, phraseOfLine, currentStopPhrases } from "./watch-stop-phrases.mjs";
 import { shortDigest, changeDigest } from "./watch-roles.mjs";
-import { workingClockText } from "./watch-status-line.mjs";
+import { workingClockText, withoutWorkingResumeStops } from "./watch-status-line.mjs";
 
 // 대기 표시 실행의 화면이 일하는 표시 없이 이 시간 동안 그대로면 한 번 알린다(아래 assessWaitingCap). 설정이 아닌 상수다.
 // 감독 정기 점검(SUPERVISOR_CHECK_MS, 1시간)과 같은 값: 감독이 "하위 결과 대기"로 한 번 정상 판정을 받는 동안에는 조용하고,
@@ -23,7 +23,7 @@ const rank = (line) => WORKER_PHRASES.indexOf(phraseOfLine(line));
 // 키는 그 줄 하나를 정규화한 값(숫자를 지운 모양)이라 화면의 다른 줄이 바뀌어도 같다.
 export function waitingStopScreen(screen) {
   if (typeof screen !== "string") return null;
-  const found = [...currentStopPhrases(screen)].sort(([, a], [, b]) => rank(a) - rank(b))[0];
+  const found = [...withoutWorkingResumeStops(screen, currentStopPhrases(screen))].sort(([, a], [, b]) => rank(a) - rank(b))[0];
   return found ? { key: found[0], line: found[1] } : null;
 }
 
