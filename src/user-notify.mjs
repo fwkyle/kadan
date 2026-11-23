@@ -105,6 +105,29 @@ function alreadySent(home, key, windowMs, nowMs) {
     && (!windowMs || nowMs - Date.parse(e.at) < windowMs));
 }
 
+// 시험 관문(2026-11-23 사고: 시험 파일을 `node <파일>`로 날것 실행해 운영 홈의 실제 웹훅으로 경보가 나갔다).
+// 시험이면 끄는 것이 아니라 "루프백 주소로만 보낸다" — 루프백 가짜 서버로 웹훅 경로를 일부러 타는 시험이 많다.
+// KADAN_TEST_RUN은 제한만 하고 켜는 일이 없어(실제 전송을 허용하는 쪽으로 바꾸지 못한다) 자식에게 상속돼도 안전하다.
+// 켜지는 곳: tests/run.mjs, 그리고 지금 프로세스가 시험으로 보일 때(NODE_TEST_CONTEXT 또는 주 스크립트가 tests/*.test.mjs) 여기서 process.env에 직접.
+export const TEST_REFUSED = 'test-refused';
+const TEST_MAIN = /[\\/]tests[\\/][^\\/]+\.test\.mjs$/;
+export function looksLikeTestProcess(env = process.env, main = process.argv[1]) {
+  return Boolean(env.NODE_TEST_CONTEXT) || (typeof main === 'string' && TEST_MAIN.test(main));
+}
+const isLoopbackWebhook = webhook => {
+  try { return ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(new URL(webhook).hostname.toLowerCase()); } catch { return false; }
+};
+function testRefusal(webhook, env) {
+  if (looksLikeTestProcess()) process.env.KADAN_TEST_RUN = '1';
+  if (!process.env.KADAN_TEST_RUN && !env?.KADAN_TEST_RUN) return null;
+  if (isLoopbackWebhook(webhook)) return null;
+  // 주소·토큰은 적지 않는다. 호스트 이름만 남겨 어디가 막혔는지 보이게 한다(운영에서 잘못 걸려 조용히 사라지는 것이 더 나쁜 실패).
+  let host = '(해석 불가)';
+  try { host = new URL(webhook).hostname; } catch { /* 위 기본값 */ }
+  process.stderr.write(`kadan: 시험 중이라 루프백이 아닌 웹훅(${host})으로 보내지 않음\n`);
+  return {outcome: TEST_REFUSED, attempts: 0, reason: '시험 중에는 루프백 웹훅으로만 보낸다'};
+}
+
 // 디스코드 웹훅 요청이 나가는 유일한 함수.
 //   threadName: 포럼 채널에 새 글을 만든다(100자 안). threadId: 기존 글에 이어 붙인다. wait: 응답의 messageId·channelId를 받는다
 //   (포럼 새 글이면 channelId가 새 글 id). messageId: 그 메시지를 새로 올리지 않고 고친다(PATCH, threadId와 함께).
@@ -112,7 +135,9 @@ function alreadySent(home, key, windowMs, nowMs) {
 //   flags 4096(SUPPRESS_NOTIFICATIONS)을 붙여 글은 남기고 휴대폰은 울리지 않는다 — 기본값이 조용히라서 새 알림 종류도 조용하다.
 //   고치기(PATCH)는 새 알림이 아니므로 flags를 붙이지 않는다.
 // 반환: {outcome, attempts, status, reason, messageId?, channelId?}
-export function postDiscordWebhook({webhook, content, allowedMentions, threadName, threadId, wait = false, messageId, budgetMs}) {
+export function postDiscordWebhook({webhook, content, allowedMentions, threadName, threadId, wait = false, messageId, budgetMs, env}) {
+  const refused = testRefusal(webhook, env);
+  if (refused) return refused;
   const rings = !messageId && allowedMentions?.users?.length > 0;
   const payload = {content, allowed_mentions: allowedMentions, ...(rings || messageId ? {} : {flags: SUPPRESS_NOTIFICATIONS}), ...(threadName ? {thread_name: String(threadName).slice(0, 100)} : {})};
   const child = spawnSync(process.execPath, [SENDER], {
@@ -403,6 +428,7 @@ function decisionSystemMessage(home, decision, message) {
 export function notifyUser(message, spawn, opts = {}) {
   const env = opts.env ?? process.env;
   const deadline = Date.now() + (opts.totalMs ?? TOTAL_BUDGET_MS);
+  if (env.KADAN_TEST_RUN) process.env.KADAN_TEST_RUN = env.KADAN_TEST_RUN; // 제한만 하는 표시라 옮겨도 안전하다
   const result = {via: 'system', error: null, discord: null};
   let home = null, secrets = [], warnings = [], readFailed = false, judged = false;
   const tagName = opts.tagRepo ?? opts.repo ?? (opts.work?.includes('/') ? opts.work.split('/')[0] : undefined);
