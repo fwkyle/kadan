@@ -69,6 +69,7 @@ import {
 } from "./cli-basics.mjs";
 import { guardedSend } from "./cli-guarded-send.mjs";
 import { cmdStart } from "./commands/start.mjs";
+import { cmdSuper, SUPER_USAGE } from "./commands/super.mjs";
 import { cmdSend, cmdMail, cmdDispatch } from "./commands/send.mjs";
 import { cmdPlan } from "./commands/plan.mjs";
 import { cmdDone } from "./commands/done.mjs";
@@ -269,6 +270,7 @@ export const COMMANDS = {
   autostart: cmdAutostart,
   doctor: cmdDoctor,
   start: cmdStart,
+  super: cmdSuper,
   send: cmdSend,
   mail: cmdMail,
   dispatch: cmdDispatch,
@@ -300,7 +302,7 @@ export const COMMANDS = {
 
 // 창을 고르거나 여는 명령(start·attach·restart·reopen·restore·handover·adopt·up·init·senior/advise의 로티 탭). 물려받은 none을 바꿨다는 안내는 여기서만 낸다.
 // 환경을 기계 설정으로 채우는 일 자체는 모든 명령에서 한다(로티를 부르는 하위 경로가 같은 값을 읽는다). 손상 설정 경고도 모든 명령에서 낸다.
-export const WINDOW_NOTICE_COMMANDS = ['start', 'attach', 'restart', 'reopen', 'restore', 'handover', 'adopt', 'up', 'init', 'senior', 'advise'];
+export const WINDOW_NOTICE_COMMANDS = ['start', 'super', 'attach', 'restart', 'reopen', 'restore', 'handover', 'adopt', 'up', 'init', 'senior', 'advise'];
 export function adoptWindowForCommand(command, env, home, {socket, warn} = {}) {
   const opts = {socket};
   if (warn) opts.warn = warn;
@@ -308,7 +310,7 @@ export function adoptWindowForCommand(command, env, home, {socket, warn} = {}) {
   return adoptMachineWindow(env, home, opts);
 }
 
-const HELP_ONLY={window:WINDOW_USAGE,trash:TRASH_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE,reopen:REOPEN_USAGE};
+const HELP_ONLY={super:SUPER_USAGE,window:WINDOW_USAGE,trash:TRASH_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE,reopen:REOPEN_USAGE};
 
 export function main(argv) {
   const [command, ...rest] = argv;
@@ -330,7 +332,7 @@ export function main(argv) {
     // 쓰기·종료 명령은 --help면 사용법만 보이고 아무것도 실행하지 않는다.
     if(flags.help&&HELP_ONLY[command]){console.log(HELP_ONLY[command]);return;}
     if(
-      ['init','up','start','send','mail','dispatch','stop','done','plan','watch-report','restore','restart','reopen'].includes(command)||
+      ['init','up','start','super','send','mail','dispatch','stop','done','plan','watch-report','restore','restart','reopen'].includes(command)||
       command==='handover'&&!['show','list'].includes(args[0])||
       command==='card'&&!['list','show'].includes(args[0])||
       command==='decision'&&!['list','show'].includes(args[0])||
