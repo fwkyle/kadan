@@ -12,7 +12,7 @@ import { STATE_CHANGED_CODE } from "./restart.mjs";
 import { scrubForAI } from "./explain-input.mjs";
 import { scrubScreen } from "./revive.mjs";
 import { claudeLimitMenu } from "./claude-limit-menu.mjs";
-import { claudeLimitLine, CLAUDE_LIMIT_HEADS } from "./claude-limit-line.mjs";
+import { claudeLimitLine, CLAUDE_LIMIT_HEADS, isResumeStopLine } from "./claude-limit-line.mjs";
 export { claudeLimitLine, CLAUDE_LIMIT_HEADS };
 
 const SECRETARY = "비서";
@@ -42,7 +42,9 @@ function trimmedLines(screen) {
 export function claudeLimitMatch(screen) {
   const found = claudeLimitLine(screen);
   if (!found) return null;
-  return { phrase: found.head.slice(0, 40), resetLine: /\bresets?\b/iu.test(found.line) ? safeText(found.line, MAX_RESET_LINE) : null };
+  // resumeStop: 한도가 아니라 입력 한 번이면 이어가는 멈춤 줄(자동 계속 멈춤·로그인 시간 초과)이다 — 추정 이유 글만 다르다.
+  return { phrase: found.head.slice(0, 40), resetLine: /\bresets?\b/iu.test(found.line) ? safeText(found.line, MAX_RESET_LINE) : null,
+    resumeStop: isResumeStopLine(found.line) };
 }
 
 // 화면 아래 상태 줄의 `Nh Nm left`는 싣지 않는다: 상태 줄 스크립트가 ccusage 공용 캐시 파일 하나에서 그리는 값이라
@@ -63,7 +65,7 @@ export function judgeScreen(screen, select) {
   if (status.kind === "working") return { verdict: "skip", reason: "응답 생성 중" };
   if (select === 'all' && claudeLimitMenu(screen)) return { verdict: 'skip', reason: '한도 선택 메뉴' };
   const limit = claudeLimitMatch(screen);
-  if (limit) return { verdict: "target", reason: "한도로 보임(규칙)", resetLine: limit.resetLine };
+  if (limit) return { verdict: "target", reason: limit.resumeStop ? "자동 계속 멈춤·로그인 시간 초과로 보임(규칙)" : "한도로 보임(규칙)", resetLine: limit.resetLine };
   if (status.kind === "idle") return select === "all" ? { verdict: "target", reason: "입력 대기" } : { verdict: "none", reason: "해당 없음" };
   return { verdict: "skip", reason: "판정 불가" };
 }
