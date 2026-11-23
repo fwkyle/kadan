@@ -8,6 +8,7 @@ import { floor } from "../floor.mjs";
 import { ledgerHome, readLedger } from "../ledger.mjs";
 import { die, sessionName } from "../cli-basics.mjs";
 import { workdirInsideHome, workdirInsideHomeMessage } from "../cli-start-support.mjs";
+import { launchStart } from "../role-conversation.mjs";
 import { cmdStart } from "./start.mjs";
 import { cmdAttach } from "./inspect.mjs";
 
@@ -15,8 +16,9 @@ export const SUPER_USAGE = "사용: kadan super — 지금 폴더(git 최상위)
 
 const realOrResolved = dir => { try { return fs.realpathSync(dir); } catch { return path.resolve(dir); } };
 
-// git 최상위(realpath). git 밖이거나 폴더가 없으면 그 폴더 자신.
+// git 최상위(realpath). git 밖이면 그 폴더 자신. 경로가 비었거나 폴더가 없으면 null(소속을 모른다 — 빈 경로를 git에 넘기지 않는다).
 export function gitRootOf(dir) {
+  if (typeof dir !== "string" || !dir || !path.isAbsolute(dir) || !fs.existsSync(dir)) return null;
   const env = { ...process.env };
   delete env.GIT_DIR; delete env.GIT_WORK_TREE;
   const result = spawnSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", env });
@@ -24,33 +26,63 @@ export function gitRootOf(dir) {
   return realOrResolved(top || dir);
 }
 
-// 무엇을 할지만 정한다(부작용 없음, alive·rootOf는 주입 가능). action: start | attach | multiple | conflict | inside-home.
-export function planSuper({ cwd, home, entries, alive, rootOf = gitRootOf }) {
+const pidOf = entry => entry?.panePid ?? entry?.rottiePid;
+
+// 무엇을 할지만 정한다(부작용 없음, alive·pidOf·rootOf는 주입 가능). action: start | attach | multiple | conflict | inside-home.
+// 소속 근거는 "마지막 start"가 아니라 "지금 살아 있는 세대를 실제로 띄운 start"(launchStart)다. 그 start의 pane PID가 지금 pane PID와
+// 같고 작업 폴더의 git 최상위를 읽을 수 있을 때만 후보다. 못 읽으면 어느 레포에도 넣지 않고, 같은 이름이면 "소속 확인 불가"로 멈춘다.
+export function planSuper({ cwd, home, entries, alive, livePid = () => null, rootOf = gitRootOf }) {
   const inside = workdirInsideHome(cwd, home);
   if (inside) return { action: "inside-home", message: workdirInsideHomeMessage(inside) };
   const root = rootOf(cwd);
   const role = `${path.basename(root)}-슈퍼감독`;
   const session = sessionName(role);
-  const lastStart = new Map();
-  for (const entry of entries) if (entry?.kind === "start" && entry.session) lastStart.set(entry.session, entry);
+  const eventsBy = new Map();
+  for (const entry of entries) {
+    if ((entry?.kind !== "start" && entry?.kind !== "stop") || !entry.session) continue;
+    if (!eventsBy.has(entry.session)) eventsBy.set(entry.session, []);
+    eventsBy.get(entry.session).push(entry);
+  }
+  const launched = name => {
+    const events = eventsBy.get(name) ?? [];
+    // 마지막 start 뒤에 stop이 있으면 원장상 꺼진 세대라 지금 pane이 그 세대인지 모른다.
+    if (events.at(-1)?.kind === "stop") return null;
+    return launchStart(events);
+  };
   const matches = [];
-  for (const [name, start] of lastStart) {
-    if (start.roleProfile !== "super" || !alive(name)) continue;
-    if (rootOf(typeof start.cwd === "string" ? start.cwd : "") === root) matches.push(start);
+  let blocked = null; // 같은 이름 세션이 살아 있는데 이 레포의 것으로 확인되지 않는 이유
+  for (const name of eventsBy.keys()) {
+    const start = launched(name);
+    const isTarget = name === session;
+    if (!isTarget && start?.roleProfile !== "super") continue; // 프로필을 모르는 다른 이름은 후보가 아니다
+    if (!alive(name)) continue;
+    let why = null;
+    if (!start) why = "이 세션을 띄운 시작 기록을 원장에서 찾지 못했다(소속 확인 불가)";
+    else if (start.roleProfile !== "super") why = "슈퍼감독 프로필(--profile super)로 띄운 세션이 아니다";
+    else if (pidOf(start) == null || String(pidOf(start)) !== String(livePid(name)))
+      why = "원장의 pane PID와 지금 pane PID가 달라 같은 세대인지 확인할 수 없다(소속 확인 불가)";
+    else {
+      const startRoot = rootOf(start.cwd);
+      if (startRoot === null) why = "띄운 시작 기록에 작업 폴더가 없거나 읽을 수 없다(소속 확인 불가)";
+      else if (startRoot === root) { matches.push(start); continue; }
+      else why = `다른 폴더(${start.cwd})에서 띄운 슈퍼감독이다`;
+    }
+    if (isTarget) blocked = why;
   }
   if (matches.length > 1) return { action: "multiple", root, role, matches };
   if (matches.length === 1) return { action: "attach", root, role, target: matches[0] };
-  if (alive(session)) return { action: "conflict", root, role, session, other: lastStart.get(session) ?? null };
+  if (blocked) return { action: "conflict", root, role, session, why: blocked };
+  if (alive(session)) return { action: "conflict", root, role, session, why: "이 세션을 띄운 시작 기록을 원장에서 찾지 못했다(소속 확인 불가)" };
   return { action: "start", root, role };
 }
 
 const roleOfStart = start => start.role ?? String(start.session).replace(/^kadan-/, "");
 
 export function cmdSuper(argv, flags, deps = {}) {
-  const { start = cmdStart, attach = cmdAttach, alive = name => floor.alive(name), cwd = process.cwd(),
+  const { start = cmdStart, attach = cmdAttach, alive = name => floor.alive(name), livePid = name => floor.pid(name), cwd = process.cwd(),
     home = ledgerHome(), entries = readLedger(home), rootOf = gitRootOf } = deps;
   if (argv.length > 0 || Object.keys(flags).length > 0) die(SUPER_USAGE, 2);
-  const plan = planSuper({ cwd, home, entries, alive, rootOf });
+  const plan = planSuper({ cwd, home, entries, alive, livePid, rootOf });
   switch (plan.action) {
     case "inside-home":
       die(plan.message, 2);
@@ -60,15 +92,11 @@ export function cmdSuper(argv, flags, deps = {}) {
       for (const s of plan.matches) console.error(`  ${roleOfStart(s)}  (세션 ${s.session}, 시작 폴더 ${s.cwd})`);
       process.exitCode = 1;
       return;
-    case "conflict": {
-      const why = plan.other?.roleProfile === "super"
-        ? `다른 폴더(${plan.other.cwd})에서 띄운 슈퍼감독이다`
-        : "슈퍼감독 프로필(--profile super)로 띄운 세션이 아니다";
-      console.error(`오류: 같은 이름 ${plan.session}이 이미 살아 있지만 이 레포(${plan.root})의 슈퍼감독이 아니다 — ${why}. 붙지 않고 멈춘다. `
-        + `폴더 이름만 같은 다른 레포라면 그쪽을 먼저 끄거나(\`kadan stop ${plan.role}\`) 이름이 다른 폴더에서 치세요.`);
+    case "conflict":
+      console.error(`오류: 같은 이름 ${plan.session}이 이미 살아 있지만 이 레포(${plan.root})의 슈퍼감독으로 확인되지 않는다 — ${plan.why}. 붙지도 새로 띄우지도 않고 멈춘다. `
+        + `확인이 끝나면 \`kadan stop ${plan.role}\`로 끄거나, 다른 이름의 폴더에서 치세요.`);
       process.exitCode = 1;
       return;
-    }
     case "attach":
       return attach([roleOfStart(plan.target)]);
     default:
