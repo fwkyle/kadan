@@ -799,12 +799,52 @@ export function hasTrustPrompt(screen) {
   return no >= 0 && group.lastIndexOf(TRUST_QUESTION, no) >= 0;
 }
 
-// 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회). 읽기에 실패하면 지금까지처럼 보낸다 —
+// Claude Code의 선택 질문 창(AskUserQuestion)이 화면 맨 끝에 떠 있는지(2026-11-23 사고: 투자감독 우편이 슈퍼감독의 질문 창
+// 직접 입력 칸("Type something.")에 붙었다. 이 창은 사람이 키를 누르지 않고 읽는 중이라 사람 입력 보호가 통과시킨다).
+// 위 신뢰 창과 같은 방식으로 이 창 하나만 양성으로 알아본다. '빈 입력창인지' 판정하는 장치는 만들지 않는다(2026-10-17 [kyle] 결정, 위 주석).
+// 기준점은 화면의 맨 끝 줄이다: 이 창의 바닥 안내가 비지 않은 마지막 줄이고 그 줄이 줄의 처음부터 시작해야 한다.
+// 문구를 인용한 응답은 그 아래에 입력창·상태 줄이 이어지므로 통과한다. 공백은 모두 걷고 비교한다.
+// Claude Code 2.1.330 실측 화면(고정 입력 tests/fixtures/question-dialog-screens.mjs)의 바닥 안내 세 꼴:
+//   (가) `Enter to select · Tab/Arrow keys to navigate · Esc to cancel` — 여러 질문 창, 선택지 커서
+//   (나) 위에 `ctrl+g to edit in <편집기 이름>`이 끼는 꼴 — 직접 입력 칸("Type something.") 커서(사고의 실제 경우).
+//        이름은 설정에 따라 Vim·nano 등으로 바뀐다(2.1.330 실행 파일 실측). 이름 자리는 어떤 낱말이든 받되 앞의 `Enter to select ·
+//        Tab/Arrow keys to navigate` 묶음과 함께일 때만 참이다.
+//   (다) `Enter to select · ↑/↓ to navigate · Esc to cancel` — 질문 하나짜리 창(탭 줄 없음). 다른 창(권한 확인 등)도 쓸 수 있는 문구라
+//        바로 위 12줄 안에 이 창의 선택지 줄 `N. Chat about this`(줄 처음부터)가 있을 때만 질문 창으로 본다.
+// 받아들인 한계: 붙여넣기와 Enter 사이 1초 안에 창이 새로 뜨는 경우는 못 막는다(검사는 전송 시작 때 한 번이다).
+const QUESTION_FOOTER = /Entertoselect[·•](Tab\/Arrowkeys|↑\/↓)tonavigate[·•](?:ctrl\+gtoeditin[^·•]+[·•])?Esc(?:tocancel)?$/u;
+// 선택지 줄: 번호가 붙은 `N. Chat about this`(커서 글자 있거나 없이)가 줄 처음부터. 앞선 응답에서 이 말을 인용만 한 줄은 아니다.
+// 받아들인 한계: 앞선 응답이 번호 붙은 `N. Chat about this` 한 줄을 줄 처음부터 그대로 인용한 뒤 다른 방향키 창이 오면 보류한다.
+// 안전한 쪽(늦게 전달)으로 틀리고, 보류된 우편은 감시기가 화면이 바뀐 뒤 다시 전달한다(신뢰 창 F8 한계와 같은 종류).
+const QUESTION_ARROW_EVIDENCE = /^[❯>]?\d+\.Chataboutthis$/u;
+const QUESTION_DIALOG_TAIL_LINES = 40;
+const QUESTION_ARROW_EVIDENCE_LINES = 12;
+export function hasQuestionDialog(screen) {
+  if (typeof screen !== "string") return false;
+  const lines = screen.replace(CONTROL_SEQUENCES, "").split("\n").map(line => line.replace(/\s+/gu, "")).filter(Boolean).slice(-QUESTION_DIALOG_TAIL_LINES);
+  const flat = lines.join("");
+  const match = QUESTION_FOOTER.exec(flat);
+  if (!match) return false;
+  let offset = 0;
+  let row = -1;
+  for (let i = 0; i < lines.length; i++) { if (offset === match.index) { row = i; break; } offset += lines[i].length; }
+  if (row < 0) return false; // 안내가 줄 처음에서 시작하지 않는다(다른 글 끝에 붙은 인용)
+  if (match[1] !== "↑/↓") return true;
+  return lines.slice(Math.max(0, row - QUESTION_ARROW_EVIDENCE_LINES), row).some(line => QUESTION_ARROW_EVIDENCE.test(line));
+}
+
+// 보내기 직전 화면을 한 번 읽는다(비용: tmux capture-pane 1회, 두 창 판정이 같은 화면을 쓴다). 읽기에 실패하면 지금까지처럼 보낸다 —
 // 이 검사가 새 전송 실패 원인이 되지 않게 하려는 것이다(실패 닫힘은 '확인 창이 보일 때'에만 적용한다).
 function checkTrustPrompt(session, run) {
   let screen;
   try { screen = run(["capture-pane", "-p", "-J", "-t", `=${session}:`]); }
   catch { return; }
+  if (hasQuestionDialog(screen)) {
+    const error = new Error("전송 보류: 받는 Claude가 선택 질문 창을 띄워 사람의 답을 기다리는 중이다 — 보내면 본문이 그 창의 입력 칸에 섞여 " +
+      "Enter로 답처럼 제출될 수 있다. 사람이 답하거나 Esc로 닫은 뒤 다시 보내라");
+    error.code = "KADAN_QUESTION_DIALOG";
+    throw error;
+  }
   if (!hasTrustPrompt(screen)) return;
   const error = new Error("전송 보류: 받는 Claude가 폴더 신뢰 확인 창에 멈춰 있다 — 보내면 Enter가 \"No, exit\"를 눌러 역할이 종료된다. " +
     "사람이 창에서 직접 고르거나, 역할을 작업 저장소 폴더에서 다시 시작하라");
