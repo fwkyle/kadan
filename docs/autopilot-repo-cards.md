@@ -45,12 +45,14 @@ ln -s ~/notes/projects "$KADAN_HOME/ontology/notes"   # 폴더 링크. 파일 �
 ```
 ---
 type: project
-remote: github.com/소유자/이름 (또는 git@github.com:소유자/이름.git, 맨 소유자/이름. 첫 낱말만 읽는다)
+remote: github.com/소유자/이름 (또는 https://github.com/소유자/이름[.git], ssh://git@github.com/소유자/이름.git, git@github.com:소유자/이름.git, 맨 소유자/이름. 첫 낱말만 읽는다. `없음`이면 연결 없음)
 deploy_branch: main (낱말 하나, 뒤에는 괄호 설명만. 또는 {소유자/이름: 브랜치, …} 짝 목록)
 night_merge: 금지 (허용 | 금지. 칸이 없으면 허용)
 deploy: 자동 (자동 | 수동 | 없음. 첫 낱말만 읽는다. 칸이 없으면 허용. deploy_branch가 비어 있을 때만 쓰인다)
 ---
 ```
+
+`remote:`에 `없음`이 아닌 값이 있는데 위 꼴로 읽히지 않으면(예: `https://gitlab.com/…`, `ssh://example.com/…`) 그 문서가 어느 저장소 것인지 모르므로 **읽지 못한 문서**로 센다: 거기에 `night_merge: 금지` 같은 값이 있어도 알 수 없으니, 카단 설정에 두 칸 값이 없는 모든 저장소는 `setup-needed`로 보류한다(detail에 못 읽은 문서의 `ontology/` 기준 상대 경로 최대 3개). 설정에 값이 있는 칸은 그대로 설정으로 판정한다.
 
 설명은 괄호로 적는다. `#` 주석은 지원하지 않는다(`main # 설명`은 읽지 못한 것으로 본다).
 

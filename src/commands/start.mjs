@@ -22,7 +22,7 @@ import {sessionOwner} from '../session-ownership.mjs';
 import { guardedSend } from "../cli-guarded-send.mjs";
 import { briefStartedRole } from "../start-brief.mjs";
 import { autopilotState } from "../autopilot.mjs";
-import { lateMessage, deliveryEvent } from "../autopilot-late.mjs";
+import { lateMessage, claimDelivery, finishDelivery } from "../autopilot-late.mjs";
 import { reuseOfFor } from "../role-conversation.mjs";
 import {
   requireWindowChoice,
@@ -353,8 +353,12 @@ export function cmdStart(argv, flags) {
     role, session, roleProfile, reusing, cmd: startedCmd, noPrompt: flags["no-prompt"] === true, floor,
     ...(lateOn ? {
       autopilot: lateMessage(lateOn, role),
-      onSent: receipt => appendLedger(deliveryEvent({ on: lateOn, role, via: "start", by: resolveLedgerBy({ env: process.env }),
-        result: { ok: true, mailId: receipt.mailId }, now: Date.now() })),
+      // 보내기 직전 예약(같은 켜짐·같은 역할에 이미 받았으면 false), 나간 뒤 결과 사건이 예약을 덮는다.
+      claim: () => claimDelivery(ledgerHome(), { on: lateOn, role, via: "start", by: resolveLedgerBy({ env: process.env }) }),
+      onSent: receipt => finishDelivery({ on: lateOn, role, via: "start", by: resolveLedgerBy({ env: process.env }),
+        result: { ok: true, mailId: receipt.mailId }, record: entry => appendLedger(entry) }),
+      onFailed: () => finishDelivery({ on: lateOn, role, via: "start", by: resolveLedgerBy({ env: process.env }),
+        result: { ok: false, delivery: "unknown" }, record: entry => appendLedger(entry) }),
     } : {}),
     tries: Number(env.KADAN_START_BRIEF_TRIES) || undefined, intervalMs: Number(env.KADAN_START_BRIEF_INTERVAL_MS) || undefined,
     isCurrent: () => {

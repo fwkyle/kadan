@@ -185,10 +185,13 @@ function typeOf(value) {
 
 const firstWord = value => (typeof value === 'string' ? value.trim().split(/\s+/)[0] : '') || null;
 
-// 카드 `remote:`는 세 형식만 읽는다(첫 낱말, 뒤의 괄호 설명은 무시): `github.com/o/n`, `git@github.com:o/n.git`
-// (또는 `git@github-<별칭>:o/n.git`), 맨 `o/n`(소유자에 점 없음). `없음`이거나 다른 형식이면 null이다.
+// 카드 `remote:`는 다음 형식만 읽는다(첫 낱말, 뒤의 괄호 설명은 무시): `github.com/o/n`, `https://github.com/o/n`(끝 `.git`·`/` 허용),
+// `ssh://git@github.com/o/n.git`, `git@github.com:o/n.git`(또는 `git@github-<별칭>:o/n.git`), 맨 `o/n`(소유자에 점 없음).
+// `없음`이거나 다른 형식이면 null이다. 값이 있는데 null이면 그 문서는 어느 저장소 것인지 몰라 읽지 못한 문서로 센다(readDoc).
 const REMOTE_FORMS = [
   /^github\.com\/([^/\s]+\/[^/\s]+)$/i,
+  /^https?:\/\/(?:www\.)?github\.com\/([^/\s]+\/[^/\s]+?)\/?$/i,
+  /^ssh:\/\/git@github\.com\/([^/\s]+\/[^/\s]+?)\/?$/i,
   /^git@github(?:\.com|-[\w.-]+):([^/\s]+\/[^/\s]+)$/i,
   /^([A-Za-z0-9-]+\/[^/\s:@]+)$/, // 맨 o/n: GitHub 소유자 이름에는 점이 없어 `github.com/x` 같은 도메인 꼴은 맞지 않는다
 ];
@@ -257,10 +260,13 @@ export function loadOntology(home, {limits = ONTOLOGY_LIMITS} = {}) {
     const {fields, problems} = parsed;
     const deployBranch = parseDeployBranch(fields.deploy_branch);
     const mapBroken = deployBranch?.kind === 'unreadable' && String(fields.deploy_branch).trim().startsWith('{');
-    const reason = problems.length ? '판정 칸 형식이 틀림' : mapBroken ? 'deploy_branch 짝 목록 형식이 틀림' : null;
+    // 원격 주소 값이 있는데(없음 제외) 해석되지 않으면 이 문서가 어느 저장소 것인지 모른다: 거기에 금지 값이 있어도 알 수 없으므로 읽지 못한 문서로 센다.
+    const github = parseRemote(fields.remote), remoteWord = firstWord(fields.remote);
+    const remoteBad = remoteWord !== null && remoteWord !== '없음' && github === null;
+    const reason = problems.length ? '판정 칸 형식이 틀림' : mapBroken ? 'deploy_branch 짝 목록 형식이 틀림' : remoteBad ? 'remote 주소 형식을 읽을 수 없음' : null;
     if (reason) bad(rel, reason);
     cards.push({id: path.basename(rel, '.md'), path: rel, broken: false, problems,
-      github: parseRemote(fields.remote), deployBranch,
+      github, deployBranch,
       nightMerge: 'night_merge' in fields ? (firstWord(fields.night_merge) ?? '') : null,
       deploy: 'deploy' in fields ? (firstWord(fields.deploy) ?? '') : null});
   };
@@ -308,7 +314,7 @@ function cardForGithub(key, {cards, unreadable, unreadableCards = []}) {
   if (!picked.length) picked = cards.filter(c => c.github === key);
   // 그 저장소 카드가 스스로 못 읽히면 구체적인 이유(줄 번호 등)를 보이고, 아니면 읽지 못한 카드가 있다는 사실만 알린다.
   if (unreadableCards.length && !(picked.length === 1 && (picked[0].broken || picked[0].problems.length)))
-    return {problem: `온톨로지 문서 ${unreadableCards.length}건을 읽지 못함`};
+    return {problem: `온톨로지 문서 ${unreadableCards.length}건을 읽지 못함(${unreadableCards.slice(0, 3).map(u => u.path ?? '폴더').join(', ')}${unreadableCards.length > 3 ? ' 외' : ''})`};
   if (!picked.length) return {card: null};
   if (picked.length > 1) return {problem: `문서가 여럿: ${picked.map(c => c.path).join(', ')}`};
   return {card: picked[0]};

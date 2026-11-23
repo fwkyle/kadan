@@ -193,7 +193,10 @@ test('remote·deploy_branch 읽기 형식(재사용): 세 형식, 낱말 하나�
   assert.equal(parseRemote('github.com/Acme/Site (공개)'), 'acme/site');
   assert.equal(parseRemote('git@github-personal:Acme/Site.git (비공개)'), 'acme/site');
   assert.equal(parseRemote('Acme/Site (비공개)'), 'acme/site');
-  for (const none of ['없음 (원격 저장소 미연결)', 'Acme 조직 (a-web, b-web)', 'https://github.com/acme/site', 'acme', 'a/b/c', '', undefined])
+  // 흔한 주소 꼴(2026-11-23 검수): https(끝 .git·/ 허용)·ssh://
+  for (const form of ['https://github.com/Acme/Site', 'https://github.com/Acme/Site.git', 'http://www.github.com/Acme/Site/', 'https://github.com/acme/site.git/', 'ssh://git@github.com/Acme/Site.git', 'git@github.com:Acme/Site.git', 'github.com/Acme/Site.git'])
+    assert.equal(parseRemote(`${form} (설명)`), 'acme/site', form);
+  for (const none of ['없음 (원격 저장소 미연결)', 'Acme 조직 (a-web, b-web)', 'https://gitlab.com/acme/site', 'https://github.com/acme', 'https://github.com/a/b/c', 'acme', 'a/b/c', '', undefined])
     assert.equal(parseRemote(none), null, String(none));
   assert.deepEqual(parseDeployBranch('main (설명. (괄호) 중첩)'), {kind: 'word', value: 'main'});
   assert.deepEqual(parseDeployBranch('{Acme/Web: main, Acme/Admin: 없음}'), {kind: 'map', map: {'acme/web': 'main', 'acme/admin': '없음'}});
@@ -760,4 +763,35 @@ test('deploy 칸: 첫 낱말이 자동|수동|없음이 아니거나 형식이 �
   set(home, 'acme/valued', {deployBranch: 'main'});
   assert.deepEqual(verdictOf(home, 'acme/valued', 'dev'), ['merge', 'allowed']);
   assert.deepEqual(verdictOf(home, 'acme/valued', 'main'), ['hold', 'deploy-branch']);
+});
+
+// ---- PR #472 검수 changes 1(높음): 읽지 못하는 remote 주소가 금지를 가리면 안 된다 ----
+test('못 읽는 remote 주소 + night_merge 금지 카드: 설정에 값 없는 저장소는 setup-needed(경로가 detail에), 설정 값이 있으면 그 값으로 판정. 지원 꼴 대조군은 금지', () => {
+  const home = home0();
+  const onto = tmp('kadan-onto-');
+  card(onto, 'weird', 'remote: ssh://example.com/x/y.git\nnight_merge: 금지');
+  link(home, onto);
+  const d = decide(home, 'acme/other', 'main');
+  assert.deepEqual([d.action, d.reason], ['hold', 'setup-needed']);
+  assert.match(d.detail, /온톨로지 문서 1건을 읽지 못함\(notes\/weird\.md\)/);
+  assert.ok(!d.detail.includes(onto) && !d.detail.includes(home)); // 절대 경로 없음
+  // 설정이 두 칸을 다 채운 저장소는 지금처럼 그 값으로 판정한다
+  set(home, 'acme/saved', {deployBranch: 'main', nightMerge: '허용'});
+  assert.deepEqual(verdictOf(home, 'acme/saved', 'dev'), ['merge', 'allowed']);
+  assert.deepEqual(verdictOf(home, 'acme/saved', 'main'), ['hold', 'deploy-branch']);
+  // 지원하는 주소 꼴로 바꾸면(대조군) 그 저장소는 금지, 다른 저장소는 값 없음 = 허용
+  for (const remote of ['https://github.com/acme/weird', 'https://github.com/acme/weird.git', 'git@github.com:acme/weird.git', 'github.com/acme/weird']) {
+    const h = home0(), o = tmp('kadan-onto-');
+    card(o, 'weird', `remote: ${remote}\nnight_merge: 금지`);
+    link(h, o);
+    assert.deepEqual(verdictOf(h, 'acme/weird', 'main'), ['hold', 'night-merge-forbidden'], remote);
+    assert.deepEqual(verdictOf(h, 'acme/other', 'main'), ['merge', 'allowed'], remote);
+  }
+  // 없음·칸 없음은 읽지 못함이 아니다
+  for (const front of ['remote: 없음 (원격 없음)\nnight_merge: 금지', 'tags: x']) {
+    const h = home0(), o = tmp('kadan-onto-');
+    card(o, 'norem', front);
+    link(h, o);
+    assert.deepEqual(verdictOf(h, 'acme/other', 'main'), ['merge', 'allowed'], front);
+  }
 });
