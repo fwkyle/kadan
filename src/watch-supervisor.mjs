@@ -5,7 +5,7 @@ import { isDescendant } from "./hierarchy.mjs";
 import { boardFromRole, supervisorForBoard } from "./board.mjs";
 import { peerResponsibilities } from "./peer-mail.mjs";
 import { ownerGenerations, isPreviousOwner } from "./owner-generation.mjs";
-import { buildCardCenter, liveSessionTree } from "./card-center.mjs";
+import { buildCardCenter } from "./card-center.mjs";
 import { isSuperRole } from "./super-role.mjs";
 import { shellQuote } from "./mail-instructions.mjs";
 
@@ -45,10 +45,61 @@ export function waitingExcluder(waits, parents) {
 // 카드 status가 assigned라 업무를 계속 붙잡았다). 새 판정을 만들지 않고 카드 센터의 판정을 쓴다: 원장 done이 마지막 발령 뒤에 있으면
 // doneButOpen, 마지막 발령이 미확정인데 담당 세션이 없으면 orphaned. liveSessions가 null이면 생존을 모르는 것이라 세션 소실은 보지 않는다.
 // hold는 감독이 일부러 멈춘 것이라 여기서 다루지 않는다.
+// 대상 카드 키와 같은 짧은 id를 공유하는 카드까지 함께 골라 taskIdentity 별칭 충돌 판정을 보존한다.
+function selectAliasSafeCards(cards, targetKeys) {
+  if (!targetKeys.size) return [];
+  const targetIds = new Set();
+  for (const card of cards ?? []) {
+    if (targetKeys.has(card.key) && card.id) targetIds.add(card.id);
+  }
+  return (cards ?? []).filter(card => targetKeys.has(card.key) || (card.id && targetIds.has(card.id)));
+}
+
+// 살아 있는 세션 전체를 역할 목록으로 쓴다(카드에 등장하는 역할만 거르지 않는다).
+// 실행을 인계받은 역할은 다른 카드에는 담당으로 없을 수 있다. 카드 역할만 보면 살아 있는 인계 역할을
+// 없는 것(orphaned)으로 오판해 감독의 할 일로 되돌린다(2026-11-24 감독 승인한 기준 커밋 구멍 수정).
+function liveRolesTree(liveSessions) {
+  if (liveSessions == null) return [];
+  const roles = [...liveSessions]
+    .filter(session => typeof session === "string" && session.startsWith("kadan-"))
+    .map(session => ({ role: session.slice(6), life: { state: "alive", pidState: "match" } }));
+  return [{ roles }];
+}
+
+function filterExecutionEntries(entries, cards) {
+  const keys = new Set(), ids = new Set();
+  for (const card of cards) {
+    if (card.key) keys.add(card.key);
+    if (card.id) ids.add(card.id);
+  }
+  const relevant = [];
+  for (const entry of entries) {
+    if (entry?.broken) return null;
+    if (entry?.kind === "handover" && entry.phase === "transferred") {
+      relevant.push(entry);
+    } else if ((entry?.kind === "send" || entry?.kind === "done")
+      && (keys.has(entry.executionKey) || ids.has(entry.executionKey)
+        || keys.has(entry.taskId) || ids.has(entry.taskId))) {
+      relevant.push(entry);
+    }
+  }
+  return relevant;
+}
+
 export function endedExecutionKeys({ cards, entries, liveSessions = null, now = Date.now() }) {
   try {
-    const center = buildCardCenter({ cards: (cards ?? []).map(c => ({ ...c, history: c.history ?? [] })), entries,
-      tree: liveSessionTree(cards ?? [], liveSessions), runtimeKnown: liveSessions != null, now });
+    const assignedKeys = new Set((cards ?? []).filter(c => c.status === "assigned").map(c => c.key));
+    if (!assignedKeys.size) return new Set();
+    const scopedCards = selectAliasSafeCards(cards, assignedKeys);
+    const relevantEntries = filterExecutionEntries(entries, scopedCards);
+    if (relevantEntries === null) return new Set();
+    const center = buildCardCenter({
+      cards: scopedCards.map(c => ({ ...c, history: c.history ?? [] })),
+      entries: relevantEntries,
+      tree: liveRolesTree(liveSessions),
+      runtimeKnown: liveSessions != null,
+      now,
+    });
     const lastRun = c => [...c.runs].filter(r => r.role === c.role)
       .sort((a, b) => (Date.parse(a.sentAt ?? a.at) || 0) - (Date.parse(b.sentAt ?? b.at) || 0)).at(-1);
     return new Set([
@@ -81,14 +132,24 @@ function expiredWaitMark(work, now) {
 }
 export function idleWorkEntries(works, cards, parents, endedKeys = () => new Set(), now = null, releases = []) {
   const byKey = new Map((cards ?? []).map(c => [c.key, c]));
+  const openWorks = (works ?? []).filter(w => w?.status === "open"
+    && parents.has(currentResponsibility(w, parents, cards).role));
+  const openAssignedCards = () => {
+    const targetKeys = new Set();
+    for (const w of openWorks) {
+      for (const x of w.executions ?? []) {
+        if (byKey.get(x.key)?.status === "assigned") targetKeys.add(x.key);
+      }
+    }
+    return selectAliasSafeCards(cards, targetKeys);
+  };
   let ended = null;
   const inProgress = x => {
     const status = byKey.get(x.key)?.status;
     if (!["assigned", "hold"].includes(status)) return false;
-    return !(status === "assigned" && (ended ??= endedKeys()).has(x.key));
+    return !(status === "assigned" && (ended ??= endedKeys(openAssignedCards())).has(x.key));
   };
-  return (works ?? []).filter(w => w?.status === "open" && parents.has(currentResponsibility(w, parents, cards).role)
-      && !(w.executions ?? []).some(inProgress))
+  return openWorks.filter(w => !(w.executions ?? []).some(inProgress))
     // 세대 판정 시각도 귀속한 역할에 맞춘다(currentResponsibility: 관찰 범위와 같은 함수).
     .map(w => { const { role, since } = currentResponsibility(w, parents, cards);
       const turnValue = outsideTurnValue(w, parents, cards);
@@ -202,7 +263,10 @@ export function assessSupervisorIdle(
   // 발령 이력이 있는가는 세대 필터 전 원본 기준이다. 이전 세대 발령을 뺐다고 그 plan을 미발령 할 일로 되살리지 않는다.
   const all = [...entries, ...idleWorkEntries(works, cards, parents,
     // 원장 전체(executionEntries)를 모르면 끝난 실행을 가릴 수 없어 예전처럼 둔다.
-    () => executionEntries ? endedExecutionKeys({ cards, entries: executionEntries, liveSessions: liveRoleSessions, now }) : new Set(), now, decisionReleases), ...requests];
+    targetCards => (executionEntries
+      ? endedExecutionKeys({ cards: targetCards, entries: executionEntries, liveSessions: liveRoleSessions, now })
+      : new Set()),
+    now, decisionReleases), ...requests];
   alerts.push(...assessHierarchyIdle(
     all.filter(current),
     roleStates, now, idleMs, parents, waiting,
