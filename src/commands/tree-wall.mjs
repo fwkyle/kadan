@@ -1,7 +1,7 @@
 // kadan tree·wall·dashboard (HW-3-impl: cli.mjs에서 옮김)
 import { readLedgerState, projectLedger } from "../ledger-domains.mjs";
 import { readLedgerViewIncremental } from "../ledger-incremental.mjs";
-import { storageMode, storageSnapshot } from "../storage.mjs";
+import { databaseIdentity, storageMode, storageSnapshot, storageVersion } from "../storage.mjs";
 import { captureRuntimeVersion } from "../runtime-version.mjs";
 import { attachWatchOverview, createCachedWatchProcesses } from "../watch-overview.mjs";
 import { watchProcessName } from "../watch-system.mjs";
@@ -215,10 +215,21 @@ export function loadWallSnapshot(runtime=null,options={}) {
 // Why: cmdWall 하나에 카드 약 7,600장 기억이 3벌, 트리 입력이 2벌 올라 있었다. 버전이 같으면 같은 배열을 돌려줘
 // 요약 쪽의 "입력 그대로면 다시 세지 않기"도 유지된다(저장소 읽기는 호출마다 새 배열을 만든다).
 export function createDashboardReaders(home, {runtime = null, listSessions = () => floor.list(), now = Date.now} = {}) {
-  const shared = (name, field) => () => {
-    let key = null;
-    try { key = dashboardDataVersions(home)[field]; } catch { /* 버전을 모르면 재사용 없이 읽는다 */ }
-    return wallCache.memo(name, key, () => dashboardStores(home)[name].read());
+  // 요약·우편은 사건에서 온 값(키·제목·상태 등)만 쓴다. 그래서 사건 번호가 같으면 카드 파일 지문(카드마다 stat)을 만들지
+  // 않고 직전 값을 그대로 쓴다. 사건 번호가 바뀐 때만 수집과 같은 자리(wallCache)를 거쳐 읽는다.
+  const shared = (name, field) => {
+    let last = null;
+    return () => {
+      let events = null;
+      try { events = storageMode(home) === 'none' ? null : `${databaseIdentity(home)}|${storageVersion(home)}`; }
+      catch { /* 사건 번호를 모르면 재사용 없이 읽는다 */ }
+      if (events !== null && last?.events === events) return last.value;
+      let key = null;
+      try { key = dashboardDataVersions(home)[field]; } catch { /* 버전을 모르면 재사용 없이 읽는다 */ }
+      const value = wallCache.memo(name, key, () => dashboardStores(home)[name].read());
+      last = events === null ? null : {events, value};
+      return value;
+    };
   };
   const readCards = shared('summaryCards', 'cards'), readWorks = shared('works', 'works');
   return {readCards, readWorks, treeInputs,

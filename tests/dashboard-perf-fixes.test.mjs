@@ -171,6 +171,11 @@ test('감시 개요는 같은 입력이면 비싼 범위 계산을 재사용하�
   assert.deepEqual(delta(before, watchOverviewMemoInfo()), {scopes: 1, boards: 1}, '30초 뒤 같은 입력은 재사용');
   assert.equal(later.cycle.ageMs, first.cycle.ageMs + 30_000, '주기 경과는 시각 따라 새로 계산');
   assert.equal(later.boards[0].aiActivity[0].requests, 0, '24시간 창 밖으로 나간 호출은 새로 센다');
+  // 프로필 경로가 바뀌어도 재사용한 파생 위에 새 값이 실린다(아래 cold 호출은 한 칸 기억을 바꾸므로 먼저 본다).
+  const mark = watchOverviewMemoInfo();
+  const profiled = watchOverview({...input, profilePath: '/home/watch-profile.json'});
+  assert.equal(profiled.profilePath, '/home/watch-profile.json');
+  assert.deepEqual(delta(mark, watchOverviewMemoInfo()), {scopes: 0, boards: 0});
   assert.deepEqual(later, cold({...input, now: now + 30_000}), '재사용한 결과는 처음부터 계산한 결과와 같다');
   assert.deepEqual(first, cold(input));
 });
@@ -293,4 +298,29 @@ test('요약 읽기는 카드·업무 읽기와 트리 입력 기억을 넘겨�
     readWorks: () => {calls.works++;return readers.readWorks();}});
   assert.deepEqual(read(), createDashboardSummaryReader(f.home, {listSessions: () => [], now: () => 1})());
   assert.deepEqual(calls, {cards: 1, works: 1});
+});
+
+test('수집과 요약·우편 읽기는 같은 카드·업무 기억을 쓰고 요약이 수집 기억을 흔들지 않는다', t => {
+  const f = dashboardFixture({count: 3});made.push(f.home);
+  process.env.KADAN_HOME = f.home;wallCache.clear();
+  const list = floor.list;floor.list = () => [];
+  t.after(() => {floor.list = list;});
+  const loader = createWallSnapshotLoader(null, {summaryBodies: true});
+  const build = () => loader.build(storageSnapshot(f.home, loader.read));
+  const readers = createDashboardReaders(f.home, {listSessions: () => [], now: () => 1});
+  const stat = name => ({hit: wallCache.stats()[name]?.hit ?? 0, miss: wallCache.stats()[name]?.miss ?? 0});
+  const first = build();
+  const cardsBefore = stat('summaryCards');
+  const cards = readers.readCards();
+  assert.deepEqual(stat('summaryCards').miss, cardsBefore.miss, '수집이 읽어 둔 카드 기억을 그대로 쓴다(새로 읽지 않음)');
+  assert.equal(readers.readWorks(), first.registeredWorks, '수집과 같은 업무 목록 배열이다');
+  const afterShared = stat('summaryCards');
+  assert.equal(readers.readCards(), cards);
+  assert.deepEqual(stat('summaryCards'), afterShared, '사건 번호가 같으면 카드 파일 지문·기억 조회 없이 직전 값을 쓴다');
+  const centerBefore = stat('center');
+  readers.loadSummary();
+  const second = build();
+  assert.deepEqual(stat('center'), {hit: centerBefore.hit + 1, miss: centerBefore.miss},
+    '요약을 읽은 사이에도 수집의 카드 상태 기억이 그대로 적중한다(트리 입력 공유가 흔들지 않음)');
+  assert.equal(second.registeredWorks, first.registeredWorks);
 });
