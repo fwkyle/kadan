@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {assertRottieArgv} from './rottie-cli.mjs';
@@ -33,6 +35,22 @@ export function rottieQuery(bin, args, run = spawnSync) {
   if (result.status !== 0 || reply?.ok !== true) throw new Error('원본 Rottie 탭 조회 실패');
   if (!reply.runtime?.bundleId || !reply.runtime?.build) throw new Error('Rottie 실행 앱 신원 확인 실패');
   return reply;
+}
+
+// agy는 지금 대화 ID를 환경변수로 주지 않는다. 대신 실행 중인 agy 프로세스가 자기 대화의 presence 잠금 파일
+// (`~/.gemini/antigravity-cli/presence/<ID>.lock`) 하나를 열어 둔다(2026-11-24 실측: 실행 중 agy 3개 모두 정확히 1개).
+// 상위 프로세스 중 agy가 열어 둔 잠금이 정확히 하나이고 같은 ID의 대화 DB가 있을 때만 ID로 쓴다. 아니면 null(추측하지 않는다).
+export function findAgyConversation({lineage = ancestors(), run = spawnSync, userHome = os.homedir()} = {}) {
+  const ai = lineage.find(row => path.basename(row.executable) === 'agy');
+  if (!ai) return null;
+  const root = path.join(userHome, '.gemini', 'antigravity-cli');
+  const result = run('lsof', ['-p', ai.pid, '-Fn'], {encoding: 'utf8', timeout: 3000});
+  if (result.status !== 0) return null;
+  const ids = [...new Set((result.stdout ?? '').split('\n').map(line => line.match(/^n(.+)$/)?.[1])
+    .filter(name => name && path.dirname(name) === path.join(root, 'presence') && name.endsWith('.lock'))
+    .map(name => path.basename(name, '.lock')))];
+  if (ids.length !== 1 || !/^[\w-]+$/.test(ids[0])) return null;
+  return fs.existsSync(path.join(root, 'conversations', `${ids[0]}.db`)) ? {harness: 'agy', id: ids[0]} : null;
 }
 
 export function sourceAgent({conversation, env = process.env, inspect = processIdentity,
