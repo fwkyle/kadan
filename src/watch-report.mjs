@@ -10,7 +10,7 @@ import {CardStore} from './card-store.mjs';
 import {WorkStore} from './work-store.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {waitingLetters} from './mailbox-queries.mjs';
-import {effectiveCardRole,openTaskIds,workEntries} from './handover-state.mjs';
+import {effectiveCardRole,openTaskIds,workEntries,withEffectiveOwner} from './handover-state.mjs';
 import {isDescendant, parseHierarchy} from './hierarchy.mjs';
 import {explainAlertRoute,failureEscalation} from './watch.mjs';
 import {autopilotWingmanSnapshot} from './autopilot.mjs';
@@ -98,6 +98,10 @@ export class WatchReports {
     // Autopilot Wingman 경로용 상태 읽기. 실제 전달은 `kadan watch-report` 프로세스에서 일어나므로 기본값을 여기에 둔다.
     this.readAutopilotWingman = readAutopilotWingman ?? (({entries,now}) => autopilotWingmanSnapshot(entries,now));
   }
+  // 감시기(watch-runner)와 같은 책임 해시를 쓰도록 인계된 업무의 현재 책임 감독을 얹은 업무 목록.
+  readEffectiveWorks(entries) {
+    return this.readWorks().map(w=>withEffectiveOwner(w,entries));
+  }
   fullRequest(request) {
     return request&&!Array.isArray(request.routes)&&this.readRequest?(this.readRequest(request.requestId)??request):request;
   }
@@ -111,7 +115,9 @@ export class WatchReports {
     return transaction(this.home,fn);
   }
   request({source,role,taskId=null,parents=new Map(),routes=new Map(),superRole=null,hierarchyPath=null,userNotify=false,timeoutMs=WATCH_AI_TIMEOUT_MS,observationDigest=null,evidenceDigest=null}) {
-    const responsibility=watchResponsibility(role,this.readCards(),this.entries(),parents,source,this.readWorks());
+    const entries=this.entries();
+    const works=this.readEffectiveWorks(entries);
+    const responsibility=watchResponsibility(role,this.readCards(),entries,parents,source,works);
     if (!responsibility) return null;
     const requestId=randomUUID(),at=this.now();
     const dir=path.join(this.home,'watch-ai',requestId);
@@ -156,10 +162,14 @@ export class WatchReports {
       }
       parents=request.hierarchyPath ? parseHierarchy(JSON.parse(fs.readFileSync(request.hierarchyPath,'utf8'))) : new Map(request.parents);
       const cards=this.readCards(),identity=taskIdentity(cards);
-      const current=currentRequest(request,cards,entries,parents,this.readWorks());
-      const stale=this.now()>request.expiresAt||entries.some(e=>e.kind==='watch-ai-call'&&e.requestId===requestId)
-        ||!current
-        ||entries.findLast(e=>e.kind==='watch-ai-request'&&e.key===request.key)?.requestId!==requestId;
+      const current=currentRequest(request,cards,entries,parents,this.readEffectiveWorks(entries));
+      // 거절 원인은 첫 번째로 맞는 고정 코드 하나만 남긴다(진단용).
+      const staleReason=this.now()>request.expiresAt?'expired'
+        :entries.some(e=>e.kind==='watch-ai-call'&&e.requestId===requestId)?'call-recorded'
+        :!current?'responsibility-changed'
+        :entries.findLast(e=>e.kind==='watch-ai-request'&&e.key===request.key)?.requestId!==requestId
+          ?'superseded-request':null;
+      const stale=staleReason!==null;
       const previous=latestWatchReports(entries).find(e=>e.key===request.key);
       const consecutive=verdict==='조정'?(previous?.verdict==='조정'?previous.consecutive:0)+1:0;
       const level=verdict==='죽음'||consecutive>=2?'RED':'AMBER';
@@ -172,7 +182,8 @@ export class WatchReports {
       fs.writeFileSync(reasonPath,reason,{mode:0o600});
       report={kind:'watch-ai-report',by:'watch-ai',requestId,key:request.key,source:request.source,
         role:request.role,session:request.session,taskId:request.taskId,responsibility:request.responsibility,observationDigest:request.observationDigest,
-        verdict,level,consecutive,accepted:!stale,notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),...meta,t:new Date(this.now()).toISOString()};
+        verdict,level,consecutive,accepted:!stale,...(stale?{staleReason}:{}),
+        notify,reasonPath,...(idleWithoutAsk?{idleWithoutAsk:true}:{}),...meta,t:new Date(this.now()).toISOString()};
       // 먼저 기록해 같은 명령/문제의 재전송을 막는다. 외부 발송은 저장 잠금 밖에서 한다.
       this.record(report);
       if (!stale&&normal(verdict)&&!idleWithoutAsk&&previous&&(!normal(previous.verdict)||previous.idleWithoutAsk)) this.record({kind:'alert',by:'watch',source:'watch-ai',
@@ -249,7 +260,7 @@ export class WatchReports {
         const valid=request&&current&&current.level===report.level
           &&latestNotification?.requestId===report.requestId
           &&bundleOf(current)===bundleOf(report)
-          &&currentRequest(request,this.readCards(),fresh,parents,this.readWorks());
+          &&currentRequest(request,this.readCards(),fresh,parents,this.readEffectiveWorks(fresh));
         // 전송 전 예약: 여기서 중단되면 전달 불명확이며 다음 순회에 자동 재전송하지 않는다.
         this.record({...pending,by:'watch',held:false,delivery:valid?'unknown':'cancelled',
           t:new Date(this.now()).toISOString()});
@@ -261,7 +272,7 @@ export class WatchReports {
       }
     }
   }
-  retire(entries,cards,parents,works=this.readWorks()) {
+  retire(entries,cards,parents,works=this.readEffectiveWorks(entries)) {
     for (const report of latestWatchReports(entries)) {
       if (currentRequest(report,cards,entries,parents,works)) continue;
       this.record({kind:'watch-ai-retired',by:'watch',key:report.key,requestId:report.requestId,source:report.source,role:report.role,reason:'responsibility-changed'});

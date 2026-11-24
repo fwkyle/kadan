@@ -54,7 +54,10 @@ export function effectiveWorkOwnership(work, entries) {
   const changed = facts.ownerChange?.at ?? work.at;
   // owner 값이 같아도 명시 재지정(ownerAssignedAt)이 있었으면 그 시각부터 책임이 다시 붙었다.
   const assigned = facts.ownerAssignedAt ?? undefined;
-  const since = assigned && (!changed || Date.parse(assigned) > Date.parse(changed)) ? assigned : changed;
+  let since = assigned && (!changed || Date.parse(assigned) > Date.parse(changed)) ? assigned : changed;
+  // 이미 인계를 얹은 업무의 복사본은 ownedAt이 업무 시각보다 늦다. 그 시각 이전으로 되돌리지 않는다.
+  const owned = Date.parse(work.ownedAt);
+  if (Number.isFinite(owned) && !(Date.parse(since) >= owned)) since = work.ownedAt;
   let owner = work.owner, at = since ?? null;
   const sinceMs = since ? Date.parse(since) : 0;
   for (const e of transferredHandovers(entries)) if (e.from === owner &&
@@ -65,9 +68,15 @@ export function effectiveWorkOwner(work, entries) {
   return effectiveWorkOwnership(work, entries).owner;
 }
 // 현재 책임 감독과 "그 이름에 책임이 마지막으로 붙은 시각"(ownedAt)을 업무에 얹는다. 이름의 세대 판정이 쓴다(owner-generation.mjs).
+// 얹은 객체는 원본 업무를 기억한다. 다시 불러도 원본에서 새 원장으로 계산하므로 같은 원장이면 같은 값이고,
+// 인계가 더 쌓인 원장이면 그 인계까지 따라간다(ownedAt이 옛 시각으로 되돌아가지 않는다).
+const rawWorkOf = new WeakMap();
 export function withEffectiveOwner(work, entries) {
-  const { owner, at } = effectiveWorkOwnership(work, entries);
-  return { ...work, owner, ownedAt: at };
+  const base = rawWorkOf.get(work) ?? work;
+  const { owner, at } = effectiveWorkOwnership(base, entries);
+  const effective = { ...base, owner, ownedAt: at };
+  rawWorkOf.set(effective, base);
+  return effective;
 }
 
 // 열린 업무가 지금 누구 몫이고 언제부터인가(2026-10-16). 판정(watch-supervisor)과 관찰 범위(watch-scope)와

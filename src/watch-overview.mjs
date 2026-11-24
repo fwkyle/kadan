@@ -5,6 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {parseHierarchy,hierarchyRecipient,hierarchyRoute} from './hierarchy.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {watchAILabel} from './watch-report.mjs';
+import {withEffectiveOwner} from './handover-state.mjs';
 import {cycleStatus,watchVerdict} from './watch-cycle.mjs';
 import {watchRouteNameWarnings} from './watch-profile.mjs';
 
@@ -116,8 +117,10 @@ function scopesFor({cardsRef,cardsOf,entries,parents,parentsKey,works,now}){
   &&m.works===works&&m.parentsKey===parentsKey&&fresh(m,now);
  if(same)return m;
  const cards=cardsOf();
+ // 인계된 업무의 현재 책임 감독을 얹는다. 캐시 키는 호출자의 원본 works 참조라 새 배열은 이 미스 경로 안에서만 만든다.
+ const owned=works.map(w=>withEffectiveOwner(w,entries));
  const next={cardsRef,entries,length:entries.length,works,parentsKey,at:now,
-  scope:buildWatchScope(cards,entries,parents,works),supervisorScope:buildSupervisorScope(cards,entries,parents,works)};
+  scope:buildWatchScope(cards,entries,parents,owned),supervisorScope:buildSupervisorScope(cards,entries,parents,owned)};
  scopeMemo=next;memoBuilds.scopes++;
  return next;
 }
