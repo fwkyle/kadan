@@ -8,7 +8,7 @@ import path from 'node:path';
 import net from 'node:net';
 import {spawn, spawnSync} from 'node:child_process';
 import {readLedger} from '../src/ledger.mjs';
-import {briefMessage, briefSkipReason, briefStartedRole, hasStartBanner, isAiRunnerCommand, SECRETARY_BRIEF} from '../src/start-brief.mjs';
+import {briefMessage, briefSkipReason, briefStartedRole, hasAgyInputLine, isAiRunnerCommand, SECRETARY_BRIEF} from '../src/start-brief.mjs';
 
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 
@@ -92,46 +92,63 @@ test('briefStartedRole: 시간 초과·전송 실패는 던지지 않고 한 줄
   assert.equal(briefStartedRole({...base, reusing: true, floor: still, send: () => assert.fail('재사용에는 보내면 안 됨')}), 'skipped:reusing');
 });
 
-// agy 시작 배너 시험의 고정 입력. 2026-11-24 관찰 화면(agy-trial-evidence c1·c3-sync)의 꼴이고 계정 줄은 가짜 값이다.
+// agy 첫 안내 시험의 고정 입력. 2026-11-24 관찰 화면(agy-trial-evidence c1·c3-sync)의 꼴이고 계정 줄은 가짜 값이다.
 const AGY_HEAD = ['', '      ▄▀▀▄        Antigravity CLI 1.5.15', '     ▀▀▀▀▀▀       user@example.test (Example plan)',
   '    ▀▀▀▀▀▀▀▀      Gemini 4 Neon (XHigh)', '   ▄▀▀    ▀▀▄     ~/work/example', '  ▄▀▀      ▀▀▄', ''];
 const AGY_BAR = '─'.repeat(112);
 const AGY_FOOT = [AGY_BAR, '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)', AGY_BAR,
   '? for shortcuts                                                                             auto · Gemini 4 Neon · xhigh'];
 const AGY_BANNER = ['', ' ┃ Introducing Gemini 4 Neon', ' ┃ Our best balance of intelligence, cost, and latency. Get building today with Neon.', ' ┃ esc to dismiss'];
-const agyBannerScreen = [...AGY_HEAD, ...AGY_BANNER, ...AGY_FOOT].join('\n');
-const agyReadyScreen = [...AGY_HEAD, ...AGY_FOOT].join('\n');
-// 배너 문구가 바뀌어도(제품 안내 교체) `┃` 줄 + esc to dismiss 꼴이면 같은 배너다.
-const agyOtherBanner = [...AGY_HEAD, '', ' ┃ A different headline', ' ┃ esc to dismiss', ...AGY_FOOT].join('\n');
+const agyBannerScreen = [...AGY_HEAD, ...AGY_BANNER, ...AGY_FOOT].join('\n'); // c1 꼴: 배너 + 입력 상자
+const agyReadyScreen = [...AGY_HEAD, ...AGY_FOOT].join('\n'); // 배너 없음 + 입력 상자
+// c3-sync 꼴: 본문이 길고 생성 중 표시 아래에 빈 `>` 입력 줄과 바닥글이 있다. 본문에 `> ` 인용 줄이 섞여 있다.
+const agyBusyScreen = ['  > 인용된 줄', '  수신 역할: r; 적용 프로필: worker', '⡿  Generating...', AGY_BAR, '>', AGY_BAR,
+  'esc to cancel                                                                               auto · Gemini 4 Neon · xhigh'].join('\n');
+// 입력 상자가 아직 없는 시작 중 화면: 로고만 있고(배너가 있어도 같다) 가로줄이 없다.
+const agyStartingScreen = [...AGY_HEAD, ...AGY_BANNER].join('\n');
+// 본문 인용만 있고 입력 상자가 없는 화면 · 입력 상자 아래에 줄이 여럿인 화면(완성 목록·선택 창).
+const agyQuoteOnly = [...AGY_HEAD, '> 대화 본문의 인용', '  이어지는 글'].join('\n');
+const agyMenuScreen = [...AGY_HEAD, ...AGY_FOOT, '/help   도움말', '/model  모델 바꾸기'].join('\n');
 
-test('hasStartBanner: ┃ 줄의 esc to dismiss 꼴만 배너로 본다(문구가 달라도 같다, 배너 없는 화면·일반 글은 아니다)', () => {
-  assert.equal(hasStartBanner(agyBannerScreen), true);
-  assert.equal(hasStartBanner(agyOtherBanner), true);
-  assert.equal(hasStartBanner(agyReadyScreen), false);
-  assert.equal(hasStartBanner('Press esc to dismiss the dialog'), false);
-  assert.equal(hasStartBanner(' ┃ Introducing something else'), false);
-  assert.equal(hasStartBanner(undefined), false);
+test('hasAgyInputLine: 화면 아래 입력 상자(가로줄 두 개 사이의 `>` 줄, 아래 바닥글 한 줄 이하)가 있을 때만 참이다 — 배너는 보지 않는다', () => {
+  assert.equal(hasAgyInputLine(agyBannerScreen), true, '배너가 떠 있어도 입력 상자가 있으면 참');
+  assert.equal(hasAgyInputLine(agyReadyScreen), true);
+  assert.equal(hasAgyInputLine(agyBusyScreen), true);
+  assert.equal(hasAgyInputLine(agyStartingScreen), false, '시작 중(입력 상자 없음)');
+  assert.equal(hasAgyInputLine(agyQuoteOnly), false, '본문의 `> ` 인용은 입력 줄이 아니다');
+  assert.equal(hasAgyInputLine(agyMenuScreen), false, '바닥글이 여러 줄이면(완성 목록·선택 창) 아니다');
+  assert.equal(hasAgyInputLine([AGY_BAR, '그냥 글', AGY_BAR, '? for shortcuts'].join('\n')), false);
+  assert.equal(hasAgyInputLine(''), false);
+  assert.equal(hasAgyInputLine(undefined), false);
 });
 
-test('briefStartedRole: agy 시작 배너 화면은 가만히 있어도 보내지 않고, 배너가 사라지고 화면이 안정된 뒤 보낸다', () => {
-  const base = {role: 'r', session: 'kadan-r', roleProfile: 'worker', cmd: 'agy', reusing: false, sleep: () => {}, tries: 10};
-  // (1) 끝내 배너면 보내지 않고 not-ready — 기존 판정이면 같은 화면 두 번이라 보냈을 화면이다.
-  const warns = [];
-  assert.equal(briefStartedRole({...base, floor: {read: () => agyBannerScreen}, send: () => assert.fail('배너 중에는 보내면 안 됨'), warn: l => warns.push(l)}), 'not-ready');
-  assert.match(warns[0], /첫 안내 못 보냄\(화면이 아직 준비되지 않음\)/);
-  // (2) 배너가 몇 번 떠 있다 사라지면, 사라진 화면이 두 번 연속 같을 때 보낸다(사라지는 순간의 첫 화면에는 보내지 않는다).
-  const frames = [agyBannerScreen, agyBannerScreen, agyBannerScreen, agyReadyScreen, agyReadyScreen];
-  let reads = 0, sent = 0;
-  const floor = {read: () => frames[Math.min(reads++, frames.length - 1)]};
-  assert.equal(briefStartedRole({...base, floor, send: () => { sent++; assert.equal(reads, 5, '배너가 사라진 화면을 두 번 본 뒤에 보낸다'); return {bytes: 1, mailId: 'm'}; }, log: () => {}}), 'sent');
-  assert.equal(sent, 1);
-  // (3) 시작 직후부터 배너가 없던 화면(c3-sync 꼴)은 바로 두 번째 읽기에서 보낸다.
-  reads = 0;
-  assert.equal(briefStartedRole({...base, floor: {read: () => { reads++; return agyReadyScreen; }}, send: () => ({bytes: 1, mailId: 'm'}), log: () => {}}), 'sent');
-  assert.equal(reads, 2);
-  // (4) env 앞붙임·경로가 붙은 agy 명령도 같은 판정이다.
+test('briefStartedRole: agy는 배너가 떠 있어도 입력 상자가 보이고 화면이 두 번 연속 같으면 바로 보낸다', () => {
+  const base = {role: 'r', session: 'kadan-r', roleProfile: 'worker', cmd: 'agy', reusing: false, sleep: () => {}, tries: 10, log: () => {}};
+  for (const [name, screen] of [['c1 꼴(배너+입력)', agyBannerScreen], ['c3-sync 꼴(배너 없음)', agyReadyScreen], ['생성 중 입력 줄', agyBusyScreen]]) {
+    let reads = 0, sent = 0;
+    assert.equal(briefStartedRole({...base, floor: {read: () => { reads++; return screen; }}, send: () => { sent++; return {bytes: 1, mailId: 'm'}; }}), 'sent', name);
+    assert.equal(sent, 1, name);
+    assert.equal(reads, 2, `${name}: 두 번째 읽기에서 보낸다`);
+  }
+  // env 앞붙임·경로가 붙은 agy 명령도 같은 판정이다.
   for (const cmd of ['/usr/local/bin/agy --model x', 'env A=B agy'])
-    assert.equal(briefStartedRole({...base, cmd, floor: {read: () => agyBannerScreen}, send: () => assert.fail(cmd), warn: () => {}}), 'not-ready', cmd);
+    assert.equal(briefStartedRole({...base, cmd, floor: {read: () => agyBannerScreen}, send: () => ({bytes: 1, mailId: 'm'})}), 'sent', cmd);
+});
+
+test('briefStartedRole: agy 입력 줄이 아직 없으면 보내지 않고 기다리며, 나타난 화면이 두 번 연속 같을 때 보낸다. 끝까지 없으면 not-ready', () => {
+  const base = {role: 'r', session: 'kadan-r', roleProfile: 'worker', cmd: 'agy', reusing: false, sleep: () => {}, tries: 10, log: () => {}};
+  // (1) 시작 중 화면이 여러 번 같아도(기존 판정이면 '안정') 입력 상자가 나타날 때까지 보내지 않는다. 나타난 첫 화면에는 보내지 않는다.
+  const frames = [agyStartingScreen, agyStartingScreen, agyStartingScreen, agyBannerScreen, agyBannerScreen];
+  let reads = 0, sent = 0;
+  assert.equal(briefStartedRole({...base, floor: {read: () => frames[Math.min(reads++, frames.length - 1)]},
+    send: () => { sent++; assert.equal(reads, 5, '입력 상자가 나타난 화면을 두 번 본 뒤에 보낸다'); return {bytes: 1, mailId: 'm'}; }}), 'sent');
+  assert.equal(sent, 1);
+  // (2) 끝내 입력 줄이 없으면(시작 중·본문 인용·완성 목록) 보내지 않고 not-ready + 기존과 같은 경고. start는 성공으로 끝난다.
+  for (const screen of [agyStartingScreen, agyQuoteOnly, agyMenuScreen]) {
+    const warns = [];
+    assert.equal(briefStartedRole({...base, floor: {read: () => screen}, send: () => assert.fail('입력 줄이 없는데 보냄'), warn: l => warns.push(l)}), 'not-ready');
+    assert.match(warns[0], /첫 안내 못 보냄\(화면이 아직 준비되지 않음\)/);
+  }
 });
 
 test('briefStartedRole: claude·codex는 같은 꼴의 화면이어도 기존 판정 그대로(안정이면 보낸다)', () => {

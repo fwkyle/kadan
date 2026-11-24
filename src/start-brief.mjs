@@ -4,6 +4,7 @@
 import { normalizeAiCommand, AI_HARNESS_NAMES } from "./ai-identity.mjs";
 import { startConversationCertainty } from "./conversation-ref.mjs";
 import { waitForSettled } from "./quickstart.mjs";
+import { readAgyComposer } from "./senior-agy-screen.mjs";
 
 // kadan up이 비서에게 쓰던 본문 그대로다(quickstart.mjs에서 옮김).
 export const SECRETARY_BRIEF = "당신은 카단 비서입니다. 설치된 kadan-secretary 스킬을 읽고(/kadan-secretary), kadan status와 kadan tree로 현재 판을 확인한 뒤, 사용자에게 지금 무엇을 도울지 한 문장으로 물어보고 기다리세요. 사용자가 시키기 전에는 아무것도 발송하지 마세요.";
@@ -11,11 +12,13 @@ export const SECRETARY_BRIEF = "당신은 카단 비서입니다. 설치된 kada
 const SKILL_OF = { super: "kadan-super", conductor: "kadan-conductor", secretary: "kadan-secretary" };
 const NAME_OF = { super: "슈퍼감독", conductor: "감독", worker: "작업자", reviewer: "검수자" };
 
-// agy 시작 화면의 안내 배너: `┃` 줄에 `esc to dismiss`가 있는 꼴(2026-11-24 시험 관찰, 문구는 제품 안내라 바뀐다).
-// 배너가 떠 있는 동안 붙여넣은 첫 안내가 4회 중 3회 사라졌다. 배너 화면은 가만히 있어 "안정"으로 읽히므로 따로 거른다.
-// 배너 문구가 아니라 꼴만 본다. agy가 아닌 실행기에는 쓰지 않는다.
-export function hasStartBanner(text) {
-  return typeof text === "string" && /^[ \t]*┃.*\besc to dismiss\b/im.test(text);
+// agy 화면에 입력 줄이 보이는가. agy 시작 배너(`┃ … esc to dismiss`)는 2분 넘게 안 사라지지만 배너가 떠 있어도 글자는 입력창에
+// 들어간다(2026-11-24 실측). 그래서 배너는 보지 않고, 화면 아래 입력 상자 — 마지막 가로줄 두 개 사이의 `>` 줄이고 그 아래가
+// 바닥글 한 줄 이하 — 가 있을 때만 "보낼 수 있다"로 읽는다. 대화 본문의 `> ` 인용·선택 창·완성 목록은 이 모양이 아니다.
+// agy가 아닌 실행기에는 쓰지 않는다.
+export function hasAgyInputLine(text) {
+  const composer = readAgyComposer(typeof text === "string" ? text : "");
+  return composer.found && composer.why !== "lines-below-composer";
 }
 
 export function briefSkill(profile) { return SKILL_OF[profile] ?? null; }
@@ -66,8 +69,9 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
   if (skip) return `skipped:${skip}`;
   const skill = briefSkill(roleProfile);
   const hint = skill ? `창에서 직접 /${skill}` : "발령이 오면 그대로 진행";
-  // agy는 시작 배너가 떠 있는 동안 아직 준비 안 됨으로 본다. 배너가 안 사라지면 아래 not-ready로 끝나 감시 재안내에 맡긴다(키를 보내 닫지 않는다).
-  const blocked = normalizeAiCommand(cmd)?.harness === "agy" ? hasStartBanner : undefined;
+  // agy는 입력 줄이 보이기 전(시작 중)에는 아직 준비 안 됨으로 본다. 끝까지 안 보이면 아래 not-ready로 끝나 감시 재안내에 맡긴다.
+  // 시작 배너는 보지 않는다(떠 있어도 입력된다). 키를 보내 닫지도 않는다.
+  const blocked = normalizeAiCommand(cmd)?.harness === "agy" ? text => !hasAgyInputLine(text) : undefined;
   const settled = waitForSettled({ read: () => floor.read(session), ...(blocked ? { blocked } : {}),
     ...(tries ? { tries } : {}), ...(intervalMs ? { intervalMs } : {}), ...(sleep ? { sleep } : {}) });
   if (!settled) { warn(`첫 안내 못 보냄(화면이 아직 준비되지 않음) — ${hint}`); return "not-ready"; }
