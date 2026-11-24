@@ -30,6 +30,8 @@
 
 ## 명령
 
+> Autopilot이 켜진 동안 역할 세션(`KADAN_ROLE`)은 아래 쓰기 명령을 `--quote "<kyle 원문>"` 없이 쓰면 거절된다(읽기는 그대로). 원문이 있으면 통하고 `runner-settings` 사건에 `quote`·`viaChat: true`·`by`가 남는다. [Autopilot 단계표](autopilot-levels.md)
+
 ```sh
 kadan runners init --reason <이유>          # PATH에서 설치가 감지된 실행기의 틀을 옮겨 처음 만들고 기본 프리셋을 채운다([기본 프리셋](#기본-프리셋))
 kadan runners set worker --runner codex --model <모델> --effort <강도> --revision N --reason <이유>
