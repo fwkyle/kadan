@@ -55,6 +55,15 @@ test('waitForSettled는 화면이 두 번 연속 같을 때만 참이다', () =>
  assert.equal(waitForSettled({ read: () => { throw new Error('x'); }, sleep: () => {}, tries: 2 }), false);
 });
 
+test('waitForSettled blocked: 막힌 화면은 가만히 있어도 안정이 아니고, 풀린 화면이 두 번 연속 같아야 참이다', () => {
+ const frames = ['B', 'B', 'B', 'ok', 'ok']; let i = 0;
+ assert.equal(waitForSettled({ read: () => frames[Math.min(i++, frames.length - 1)], sleep: () => {}, tries: 10, blocked: t => t === 'B' }), true);
+ assert.equal(i, 5);
+ assert.equal(waitForSettled({ read: () => 'B', sleep: () => {}, tries: 5, blocked: t => t === 'B' }), false);
+ // blocked가 없으면 기존 판정 그대로다.
+ assert.equal(waitForSettled({ read: () => 'B', sleep: () => {}, tries: 3 }), true);
+});
+
 function fakeWorld({ alive = {}, frames = ['ready', 'ready'] } = {}) {
  const started = [], sent = [];
  let f = 0;

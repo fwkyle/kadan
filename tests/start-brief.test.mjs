@@ -8,7 +8,7 @@ import path from 'node:path';
 import net from 'node:net';
 import {spawn, spawnSync} from 'node:child_process';
 import {readLedger} from '../src/ledger.mjs';
-import {briefMessage, briefSkipReason, briefStartedRole, isAiRunnerCommand, SECRETARY_BRIEF} from '../src/start-brief.mjs';
+import {briefMessage, briefSkipReason, briefStartedRole, hasStartBanner, isAiRunnerCommand, SECRETARY_BRIEF} from '../src/start-brief.mjs';
 
 const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
 
@@ -90,6 +90,57 @@ test('briefStartedRole: 시간 초과·전송 실패는 던지지 않고 한 줄
   assert.equal(briefStartedRole({...base, floor: still, send: () => ({bytes: 9, mailId: 'm'}), log: l => logs.push(l)}), 'sent');
   assert.match(logs[0], /첫 안내 전송됨/);
   assert.equal(briefStartedRole({...base, reusing: true, floor: still, send: () => assert.fail('재사용에는 보내면 안 됨')}), 'skipped:reusing');
+});
+
+// agy 시작 배너 시험의 고정 입력. 2026-11-24 관찰 화면(agy-trial-evidence c1·c3-sync)의 꼴이고 계정 줄은 가짜 값이다.
+const AGY_HEAD = ['', '      ▄▀▀▄        Antigravity CLI 1.5.15', '     ▀▀▀▀▀▀       user@example.test (Example plan)',
+  '    ▀▀▀▀▀▀▀▀      Gemini 4 Neon (XHigh)', '   ▄▀▀    ▀▀▄     ~/work/example', '  ▄▀▀      ▀▀▄', ''];
+const AGY_BAR = '─'.repeat(112);
+const AGY_FOOT = [AGY_BAR, '> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)', AGY_BAR,
+  '? for shortcuts                                                                             auto · Gemini 4 Neon · xhigh'];
+const AGY_BANNER = ['', ' ┃ Introducing Gemini 4 Neon', ' ┃ Our best balance of intelligence, cost, and latency. Get building today with Neon.', ' ┃ esc to dismiss'];
+const agyBannerScreen = [...AGY_HEAD, ...AGY_BANNER, ...AGY_FOOT].join('\n');
+const agyReadyScreen = [...AGY_HEAD, ...AGY_FOOT].join('\n');
+// 배너 문구가 바뀌어도(제품 안내 교체) `┃` 줄 + esc to dismiss 꼴이면 같은 배너다.
+const agyOtherBanner = [...AGY_HEAD, '', ' ┃ A different headline', ' ┃ esc to dismiss', ...AGY_FOOT].join('\n');
+
+test('hasStartBanner: ┃ 줄의 esc to dismiss 꼴만 배너로 본다(문구가 달라도 같다, 배너 없는 화면·일반 글은 아니다)', () => {
+  assert.equal(hasStartBanner(agyBannerScreen), true);
+  assert.equal(hasStartBanner(agyOtherBanner), true);
+  assert.equal(hasStartBanner(agyReadyScreen), false);
+  assert.equal(hasStartBanner('Press esc to dismiss the dialog'), false);
+  assert.equal(hasStartBanner(' ┃ Introducing something else'), false);
+  assert.equal(hasStartBanner(undefined), false);
+});
+
+test('briefStartedRole: agy 시작 배너 화면은 가만히 있어도 보내지 않고, 배너가 사라지고 화면이 안정된 뒤 보낸다', () => {
+  const base = {role: 'r', session: 'kadan-r', roleProfile: 'worker', cmd: 'agy', reusing: false, sleep: () => {}, tries: 10};
+  // (1) 끝내 배너면 보내지 않고 not-ready — 기존 판정이면 같은 화면 두 번이라 보냈을 화면이다.
+  const warns = [];
+  assert.equal(briefStartedRole({...base, floor: {read: () => agyBannerScreen}, send: () => assert.fail('배너 중에는 보내면 안 됨'), warn: l => warns.push(l)}), 'not-ready');
+  assert.match(warns[0], /첫 안내 못 보냄\(화면이 아직 준비되지 않음\)/);
+  // (2) 배너가 몇 번 떠 있다 사라지면, 사라진 화면이 두 번 연속 같을 때 보낸다(사라지는 순간의 첫 화면에는 보내지 않는다).
+  const frames = [agyBannerScreen, agyBannerScreen, agyBannerScreen, agyReadyScreen, agyReadyScreen];
+  let reads = 0, sent = 0;
+  const floor = {read: () => frames[Math.min(reads++, frames.length - 1)]};
+  assert.equal(briefStartedRole({...base, floor, send: () => { sent++; assert.equal(reads, 5, '배너가 사라진 화면을 두 번 본 뒤에 보낸다'); return {bytes: 1, mailId: 'm'}; }, log: () => {}}), 'sent');
+  assert.equal(sent, 1);
+  // (3) 시작 직후부터 배너가 없던 화면(c3-sync 꼴)은 바로 두 번째 읽기에서 보낸다.
+  reads = 0;
+  assert.equal(briefStartedRole({...base, floor: {read: () => { reads++; return agyReadyScreen; }}, send: () => ({bytes: 1, mailId: 'm'}), log: () => {}}), 'sent');
+  assert.equal(reads, 2);
+  // (4) env 앞붙임·경로가 붙은 agy 명령도 같은 판정이다.
+  for (const cmd of ['/usr/local/bin/agy --model x', 'env A=B agy'])
+    assert.equal(briefStartedRole({...base, cmd, floor: {read: () => agyBannerScreen}, send: () => assert.fail(cmd), warn: () => {}}), 'not-ready', cmd);
+});
+
+test('briefStartedRole: claude·codex는 같은 꼴의 화면이어도 기존 판정 그대로(안정이면 보낸다)', () => {
+  for (const cmd of ['claude', 'codex --model x']) {
+    let sent = 0;
+    assert.equal(briefStartedRole({role: 'r', session: 'kadan-r', roleProfile: 'worker', cmd, reusing: false, sleep: () => {}, tries: 5,
+      floor: {read: () => agyBannerScreen}, send: () => { sent++; return {bytes: 1, mailId: 'm'}; }, log: () => {}}), 'sent', cmd);
+    assert.equal(sent, 1, cmd);
+  }
 });
 
 // 격리 tmux: PATH 앞의 가짜 claude(한 번 그리고 기다린다)로 start를 실제로 돌린다. 실제 claude·codex는 띄우지 않는다.

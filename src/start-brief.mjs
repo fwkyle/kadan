@@ -11,6 +11,13 @@ export const SECRETARY_BRIEF = "당신은 카단 비서입니다. 설치된 kada
 const SKILL_OF = { super: "kadan-super", conductor: "kadan-conductor", secretary: "kadan-secretary" };
 const NAME_OF = { super: "슈퍼감독", conductor: "감독", worker: "작업자", reviewer: "검수자" };
 
+// agy 시작 화면의 안내 배너: `┃` 줄에 `esc to dismiss`가 있는 꼴(2026-11-24 시험 관찰, 문구는 제품 안내라 바뀐다).
+// 배너가 떠 있는 동안 붙여넣은 첫 안내가 4회 중 3회 사라졌다. 배너 화면은 가만히 있어 "안정"으로 읽히므로 따로 거른다.
+// 배너 문구가 아니라 꼴만 본다. agy가 아닌 실행기에는 쓰지 않는다.
+export function hasStartBanner(text) {
+  return typeof text === "string" && /^[ \t]*┃.*\besc to dismiss\b/im.test(text);
+}
+
 export function briefSkill(profile) { return SKILL_OF[profile] ?? null; }
 
 export function briefMessage({ role, profile, autopilot }) {
@@ -59,7 +66,9 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
   if (skip) return `skipped:${skip}`;
   const skill = briefSkill(roleProfile);
   const hint = skill ? `창에서 직접 /${skill}` : "발령이 오면 그대로 진행";
-  const settled = waitForSettled({ read: () => floor.read(session),
+  // agy는 시작 배너가 떠 있는 동안 아직 준비 안 됨으로 본다. 배너가 안 사라지면 아래 not-ready로 끝나 감시 재안내에 맡긴다(키를 보내 닫지 않는다).
+  const blocked = normalizeAiCommand(cmd)?.harness === "agy" ? hasStartBanner : undefined;
+  const settled = waitForSettled({ read: () => floor.read(session), ...(blocked ? { blocked } : {}),
     ...(tries ? { tries } : {}), ...(intervalMs ? { intervalMs } : {}), ...(sleep ? { sleep } : {}) });
   if (!settled) { warn(`첫 안내 못 보냄(화면이 아직 준비되지 않음) — ${hint}`); return "not-ready"; }
   // 화면을 기다리는 동안 이 세대가 닫히고 다른 세대로 바뀌었을 수 있다. 대기 전에 고정한 세대와 같다고 확인될 때만 보낸다.
