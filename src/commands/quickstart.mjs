@@ -1,10 +1,10 @@
 // kadan init·up·adopt·autostart (HW-3-impl: cli.mjs에서 옮김)
-import { ADOPT_USAGE, runAdopt } from "../adopt.mjs";
+import { ADOPT_UNCHECKED_HARNESSES, ADOPT_USAGE, detectForAdopt, runAdopt } from "../adopt.mjs";
 import { runInit, runUp, ensureWatch, ensureBridge, bridgeStatus, BRIDGE_ROLE } from "../quickstart.mjs";
 import { loadSecret } from "../secrets.mjs";
 import { loadChatConfig, watchLockInfo } from "../discord-chat.mjs";
 import {conversationFile, readConversationPermissions} from '../adopt-permissions.mjs';
-import {captureSource, sourceAgent, checkLaunchPermissions} from '../adopt-process.mjs';
+import {captureSource, sourceAgent, checkLaunchPermissions, findAgyConversation} from '../adopt-process.mjs';
 import {prepareTransfer, acceptTransfer, transferStatus} from '../adopt-transfer.mjs';
 import {notifyAdoption} from '../adopt-notice.mjs';
 import {startAdoptMonitor} from '../adopt-monitor.mjs';
@@ -272,7 +272,7 @@ function startBridgeSession(home) {
 // 앱·터미널에서 이야기하던 AI 대화를 복제해 카단 감독 세션으로 이어 연다(2026-10-06 [kyle]).
 export function cmdAdopt(argv, flags) {
   if (flags.help) {
-    console.log('kadan adopt <감독> --model <모델> [--resume <대화ID> --harness claude|codex]');
+    console.log('kadan adopt <감독> --model <모델> [--resume <대화ID> --harness claude|codex|agy|omo]');
     console.log('kadan adopt accept <인수ID> --summary <이어받은 목표·승인 범위와 다음 행동>');
     console.log('kadan adopt status <인수ID>');
     return;
@@ -298,8 +298,13 @@ export function cmdAdopt(argv, flags) {
     if (floor.name === "tmux" && !flags.hidden) requireWindowChoice();
     runAdopt({
       role: argv[0], flags, floor, sessionName,
+            detect: (env, harness) => detectForAdopt(env, harness, findAgyConversation),
       inherit: conversation => {
         const cwd = process.cwd();
+        // agy·omo는 새 창의 대화 ID·권한을 확인할 길이 없어 권한은 기본값으로 열고 원본 탭은 닫지 않는다.
+        if (ADOPT_UNCHECKED_HARNESSES.includes(conversation.harness)) {
+          return {permissions: {args: []}, unsupported: `${conversation.harness}는 권한·원본 탭을 확인할 수 없어 기본 권한으로 열고 원본 탭은 닫지 않습니다. 원본 탭은 직접 닫으세요.`};
+        }
         const file = conversationFile({...conversation, cwd});
         const sourceConversation = {...conversation, cwd, file};
         const permissions = readConversationPermissions(file, conversation.harness);
@@ -312,14 +317,14 @@ export function cmdAdopt(argv, flags) {
         catch (error) { sourceWarning = error.message; }
         return {conversation: {...conversation, cwd, file}, permissions, source, sourceWarning};
       },
-      prepare: options => prepareTransfer({home, floor, ...options}),
+      prepare: options => (ADOPT_UNCHECKED_HARNESSES.includes(options.conversation.harness) ? null : prepareTransfer({home, floor, ...options})),
       notice,
       monitor: id => startAdoptMonitor(home, id),
       start: (startArgv, startFlags) => cmdStart(startArgv, startFlags),
-      send: ({ role, session, message, roleProfile }) => {
+      send: ({ role, session, message, roleProfile, awaitingAcceptance }) => {
         const receipt = guardedSend({floor, session, role, message, roleProfile,
           recordedPid: recordedPid(lastStartFor(session))});
-        console.log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 우편ID ${receipt.mailId}) — 인수 확인 대기`);
+        console.log(`첫 안내 전송됨: ${session} (${receipt.bytes}B, 우편ID ${receipt.mailId})${awaitingAcceptance ? ' — 인수 확인 대기' : ''}`);
       },
     });
   } catch (error) {
