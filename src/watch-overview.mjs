@@ -5,6 +5,7 @@ import {spawnSync} from 'node:child_process';
 import {parseHierarchy,hierarchyRecipient,hierarchyRoute} from './hierarchy.mjs';
 import {buildWatchScope,buildSupervisorScope} from './watch-scope.mjs';
 import {watchAILabel} from './watch-report.mjs';
+import {withEffectiveOwner} from './handover-state.mjs';
 import {cycleStatus,watchVerdict} from './watch-cycle.mjs';
 import {watchRouteNameWarnings} from './watch-profile.mjs';
 
@@ -127,7 +128,12 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
  }
  let scope=null,supervisorScope=null;
  if(ledgerKnown&&parents){
-  try{const cards=center.cards??center.boards.flatMap(b=>b.cards);scope=buildWatchScope(cards,entries,parents,works);supervisorScope=buildSupervisorScope(cards,entries,parents,works);}
+  try{
+   const cards=center.cards??center.boards.flatMap(b=>b.cards);
+   const owned=works.map(w=>withEffectiveOwner(w,entries));
+   scope=buildWatchScope(cards,entries,parents,owned);
+   supervisorScope=buildSupervisorScope(cards,entries,parents,owned);
+  }
   catch{Object.assign(result.configuration,{state:'unknown',reason:'감시 대상 카드를 읽거나 검증할 수 없습니다'});}
  }
  const live=new Set((center.roles??[]).filter(r=>r.life?.state==='alive'&&r.life?.pidState==='match').map(r=>'kadan-'+r.role));

@@ -45,7 +45,11 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
   const keep = (role, reason) => { if (role && !required.has(role)) required.set(role, reason); };
   const displayed = buildCardCenter({cards:cards.map(c => ({...c, history:c.history ?? []})), entries,
     tree:[], runtimeKnown:false, now}).cards;
+  // 이미 마감된 업무(done·cancelled)에 속한 옛 카드·발령은 역할을 붙잡지 않는다(감시 범위 inactive와 같은 기준).
+  const closedWorkCards = new Set(works.filter(w => ['done', 'cancelled'].includes(w.status))
+    .flatMap(w => (w.executions ?? []).map(e => e.key)));
   for (const card of displayed) {
+    if (closedWorkCards.has(card.key)) continue;
     if (!closedForPrune(card.status) || !closedForPrune(card.displayState)) {
       keep(card.role, '미완료 카드');
       keep(card.resolutionOwner, '미완료 카드');
@@ -59,6 +63,7 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
     if (!['send', 'done'].includes(entry.kind) || !entry.role || !entry.taskId || entry.transport === 'mailbox') continue;
     if (taskConnectionError(entry)) { keep(entry.role, '카드 연결 모름'); continue; }
     const key = `${entry.role}\0${taskEventKey(entry)}`;
+    if (closedWorkCards.has(identity.resolve(entry.taskId, entry.executionKey).key)) continue;
     if (entry.kind === 'send') pending.set(key, entry.role);
     else pending.delete(key);
   }

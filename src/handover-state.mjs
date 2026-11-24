@@ -65,9 +65,14 @@ export function effectiveWorkOwner(work, entries) {
   return effectiveWorkOwnership(work, entries).owner;
 }
 // 현재 책임 감독과 "그 이름에 책임이 마지막으로 붙은 시각"(ownedAt)을 업무에 얹는다. 이름의 세대 판정이 쓴다(owner-generation.mjs).
+// 이미 얹은 업무에 다시 부르면 인계 시각(ownedAt)이 옛 시각으로 되돌아간다. 이 함수가 만든 객체는 그대로 돌려준다.
+const effectiveWorks = new WeakSet();
 export function withEffectiveOwner(work, entries) {
+  if (effectiveWorks.has(work)) return work;
   const { owner, at } = effectiveWorkOwnership(work, entries);
-  return { ...work, owner, ownedAt: at };
+  const effective = { ...work, owner, ownedAt: at };
+  effectiveWorks.add(effective);
+  return effective;
 }
 
 // 열린 업무가 지금 누구 몫이고 언제부터인가(2026-10-16). 판정(watch-supervisor)과 관찰 범위(watch-scope)와

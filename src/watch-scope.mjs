@@ -5,6 +5,7 @@ import {ownerGenerations,isPreviousOwner} from './owner-generation.mjs';
 import {watchScopeFacts, watchScopeGenerations, watchSentTasks} from './watch-scope-facts.mjs';
 import {isDescendant} from './hierarchy.mjs';
 import {isUserActor} from './actors.mjs';
+import {SECRETARY} from './mailbox.mjs';
 
 // 담당이 이번 발령 뒤에 결과를 등록했고 원장 done은 아직 없는 실행인가. 결과를 등록한 실행의 '대기 중'은
 // 답을 기다리는 것이 아니라 감독의 확정을 기다리는 것이라, 대기 표시로 감시에서 빼지 않는다.
@@ -91,7 +92,8 @@ export function buildSupervisorScope(cards, entries, parents = new Map(), works 
   // 알리지 않는 사각이 된다(2026-10-05 점검). 활성 실행이 아래에 있을 때만 대상인 규칙은 다른 감독과 같다.
   const add = (role, entry) => {
     const visited = new Set();
-    while (role && role !== '@user' && !visited.has(role)) {
+    // 비서는 감시 대상이 아니다(docs/flows.md, peer-mail·watch-mail과 같은 기준). 비서로 올라가는 단계에서 멈춘다.
+    while (role && role !== '@user' && role !== SECRETARY && !visited.has(role)) {
       visited.add(role);
       const parent = parents.get(role);
       if (!parent) break; // 관계를 모르면 옛 전역 슈퍼감독을 임의로 붙이지 않는다.
