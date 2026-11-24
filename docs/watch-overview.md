@@ -162,7 +162,7 @@ flowchart LR
 | id | 종류 | 행동 | 보는 곳 | 표본 |
 |---|---|---|---|---|
 | `rate-limit-429`·`rate-limit-text` | 한도 | 자동 재개(`rate-limit-terminal`이 빈 입력창 구조를 확인) | 작업자(`rate-limit-text`는 감독도) | codex 429 방치 화면 |
-| `usage-limit` | 한도 | 보고만(`report`) — 자동 재개 없음, 대체 후보가 있으면 경보에 교대 명령 한 줄([사용 한도 교대 안내](rate-limit-retry.md#사용-한도-교대-안내)). agy의 `Resets in …` 남은 시간을 읽으면 화면을 읽은 시각 기준 대략 풀리는 시각을 붙이고(부정확할 수 있음 명시), 못 읽으면 문구만 | 작업자·검수자 (Claude는 빈 입력창 위 한도 줄 `claudeLimitLine`, codex는 현재 오류 덩어리, agy는 빈 `>` 입력칸 바로 위 `⚠ Individual quota reached` 덩어리 `agyQuotaLine` — 뒤에 새 출력이 있거나 인용·울타리·입력 중이면 제외) | claude `You've hit your session limit · resets 3pm`, codex `■ You've hit your usage limit.`, agy `⚠ Individual quota reached. … Resets in 1h15m59s.` |
+| `usage-limit` | 한도 | 보고만(`report`) — 자동 재개 없음, 대체 후보가 있으면 경보에 교대 명령 한 줄([사용 한도 교대 안내](rate-limit-retry.md#사용-한도-교대-안내)). agy의 `Resets in …` 남은 시간을 읽으면 화면을 읽은 시각 기준 대략 풀리는 시각을 붙이고(부정확할 수 있음 명시), 못 읽으면 문구만 | 작업자·검수자 (Claude는 빈 입력창 위 한도 줄 `claudeLimitLine`, codex는 현재 오류 덩어리, agy는 빈 `>` 입력칸 바로 위 `⚠ Individual quota reached` 덩어리 `agyQuotaLine` — 뒤에 새 출력이 있거나 인용·울타리·입력 중이면 제외. 한도 문장은 실측 꼴(머리 문장 + 선택 `Please upgrade …` 한 문장 + 선택 끝의 `Resets in <값>`)만, 입력칸 아래 상태 줄은 `? for shortcuts`일 때만 받고 그 밖은 정체 경로로 간다) | claude `You've hit your session limit · resets 3pm`, codex `■ You've hit your usage limit.`, agy `⚠ Individual quota reached. … Resets in 1h15m59s.` |
 | `no-api-key` | 설정 | 실행기 교체 필요 | 작업자·감독 | 없음 |
 | `auth-token` | 인증 | 실행기 교체 필요 | 작업자·감독 | 없음 |
 | `reconnecting`·`stream-error`·`bad-gateway`·`dns` | 끊김 | 직속 감독 경보 | 작업자(앞 셋은 감독도) | codex `Reconnecting... 2/5`·`Stream disconnected` |
