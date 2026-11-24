@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { adoptCommand, adoptPrompt, agySameConversationNotice, ADOPT_UNCHECKED_HARNESSES, detectConversation, detectForAdopt, runAdopt } from '../src/adopt.mjs';
 import { findAgyConversation } from '../src/adopt-process.mjs';
-import { inspectCardSendIdentity } from '../src/ai-identity.mjs';
+import { commandWords, inspectCardSendIdentity } from '../src/ai-identity.mjs';
 
 const ID = '158a8380-2bc4-4110-aea9-3a30417d29b5';
 
@@ -166,7 +166,9 @@ test('adopt 첫 안내: agy만 맨 앞에 "이 창이 새 감독 창" 한 줄과
   const message = agy.calls.send[0].message;
   assert.ok(message.startsWith(agySameConversationNotice('kadan-감독-agy')));
   assert.match(message.split('\n')[0], /^지금 이 창\(kadan-감독-agy\)이 kadan adopt로 이어 연 새 감독 창이다/);
-  assert.ok(message.endsWith(adoptPrompt('감독-agy', '@user')), '나머지 안내는 그대로');
+  assert.ok(message.endsWith(adoptPrompt('감독-agy', '@user', 'conductor', 'agy')), '나머지 안내는 그대로');
+  assert.match(message, /같은 대화로 이어 열어/);
+  assert.doesNotMatch(message, /복제해/, 'agy는 복제가 아니라 이어 열기다');
   for (const [harness, model] of [['codex', 'gpt-6'], ['omo', 'openai/gpt-6:high'], ['claude', 'opus']]) {
     const { calls, deps } = fakes();
     runAdopt({ role: `감독-${harness}`, flags: { model, resume: ID, harness }, env: {}, findTranscript: () => ({ ok: true }), ...deps });
@@ -177,7 +179,8 @@ test('adopt 첫 안내: agy만 맨 앞에 "이 창이 새 감독 창" 한 줄과
 
 // 실행기 표의 agy resume 틀(2026-11-24 [kyle]): adopt가 카단 start로 띄운 agy와 같은 권한 옵션으로 이어 연다.
 const AGY_RESUME = 'agy --model {model} --dangerously-skip-permissions --conversation {conversation}';
-const tableOf = (resume) => () => ({ runners: { agy: { spawn: 'agy --model {model} --dangerously-skip-permissions', resume } } });
+const SPAWN = 'agy --model {model} --dangerously-skip-permissions';
+const tableOf = (resume, spawn = SPAWN) => () => ({ runners: { agy: { spawn, resume } } });
 
 test('adopt agy: 실행기 표 resume 틀(권한 옵션 포함)로 이어 열고, 강도는 뒤에 덧붙이며, 카드 전송 신원 확인을 통과한다', () => {
   const { calls, deps } = fakes();
@@ -197,13 +200,14 @@ test('adopt agy: 실행기 표 resume 틀(권한 옵션 포함)로 이어 열고
 test('adopt agy: 표의 resume 틀을 바꾸면 명령이 따라간다(adopt에 명령 모양을 따로 두지 않는다)', () => {
   const { calls, deps } = fakes();
   runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {},
-    readRunnerSettings: tableOf('agy --conversation {conversation} --yolo --model {model}'), ...deps });
-  assert.equal(calls.start[0].flags.cmd, `agy --conversation ${ID} --yolo --model gemini-4-neon-high`);
+    readRunnerSettings: tableOf('agy --model {model} --yolo --conversation {conversation}', 'agy --model {model} --yolo'), ...deps });
+  assert.equal(calls.start[0].flags.cmd, `agy --model gemini-4-neon-high --yolo --conversation ${ID}`);
 });
 
 test('adopt agy: 표를 못 읽거나 resume 틀이 이어 열 꼴이 아니면 기본 명령으로 열고 사실대로 한 줄 알린다', () => {
   const bad = [() => null, () => { throw new Error('손상'); }, tableOf(''), tableOf('agy --model {model}'),
-    tableOf('agy --print {prompt} --model {model} --conversation {conversation}'), tableOf('sh -c {model} {conversation}')];
+    tableOf('agy --print {prompt} --model {model} --conversation {conversation}'), tableOf('sh -c {model} {conversation}'),
+    tableOf('agy --conversation {conversation} --model {model}'), tableOf('agy --dangerously-skip-permissions --conversation {conversation}', 'agy --dangerously-skip-permissions')];
   for (const readRunnerSettings of bad) {
     const { calls, deps } = fakes();
     runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {}, readRunnerSettings, ...deps });
@@ -242,4 +246,31 @@ test('adopt --parent <역할>: 네 실행기 모두 첫 안내에 상위 자기 
   }
   assert.equal(adoptPrompt('감독', '@user').includes('자기 소개'), false);
   assert.ok(adoptPrompt('감독', '슈퍼-감독', 'conductor').endsWith('마감·사고만 보냅니다.'));
+});
+
+// PR #481 검수 재현 1: 닫는 따옴표가 빠진 틀은 표의 검사가 거절하므로 기본 명령 + 경고 한 줄로 돌아가야 하고, 그 명령은 낱말로 읽혀야 한다.
+test('adopt agy: 닫는 따옴표가 빠진 resume 틀은 기본 명령 + 경고로 돌아가고 그 명령은 낱말로 읽힌다', () => {
+  const { calls, deps } = fakes();
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {},
+    readRunnerSettings: tableOf('agy --model {model} --dangerously-skip-permissions --conversation "{conversation}'), ...deps });
+  const cmd = calls.start[0].flags.cmd;
+  assert.equal(cmd, `agy --conversation ${ID} --model gemini-4-neon-high`);
+  assert.ok(commandWords(cmd), '낱말로 읽힌다');
+  assert.equal(calls.log.filter((l) => l.includes('권한 옵션 없는 기본 명령으로 연다')).length, 1);
+});
+
+// PR #481 검수 재현 2: 틀이 모델 자리를 따옴표로 감싸도 모델 값이 그대로(따옴표 겹침 없이) 낱말로 읽혀야 한다.
+test('adopt agy: 모델 자리에 따옴표가 있는 틀 + model[1m]도 인자 값이 그대로다', () => {
+  for (const model of ['model[1m]', 'gemini-4-neon-high']) {
+    const { calls, deps } = fakes();
+    runAdopt({ role: '감독', flags: { model, resume: ID, harness: 'agy', effort: 'high' }, env: {},
+      readRunnerSettings: tableOf('agy --model "{model}" --dangerously-skip-permissions --conversation {conversation}',
+        'agy --model "{model}" --dangerously-skip-permissions'), ...deps });
+    const words = commandWords(calls.start[0].flags.cmd);
+    assert.deepEqual(words, ['agy', '--model', model, '--dangerously-skip-permissions', '--conversation', ID, '--effort', 'high'], model);
+  }
+  // 따옴표 없는 기본 틀도 대괄호 모델은 낱말 하나로 읽힌다.
+  const { calls, deps } = fakes();
+  runAdopt({ role: '감독', flags: { model: 'model[1m]', resume: ID, harness: 'agy' }, env: {}, readRunnerSettings: tableOf(AGY_RESUME), ...deps });
+  assert.equal(commandWords(calls.start[0].flags.cmd)[2], 'model[1m]');
 });
