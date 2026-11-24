@@ -66,7 +66,7 @@ description: "평소 대화(앱·터미널의 Claude Code·Codex) 중에 사용�
    - Claude Code: `kadan adopt <레포>-<감독이름> --model <지금 모델>` — 대화 ID와 생각 강도는 자동으로 읽는다. 긴 대화면 지금과 같은 큰 문맥 모델(예: `claude-opus-5-5[1m]`)을 그대로 적는다.
    - Codex: `kadan adopt <감독이름> --model <지금 모델> --resume <대화ID> --harness codex` — 대화 ID는 자동으로 못 읽는다. 사용자에게 받거나 Codex 화면에서 확인한다.
    - agy: `kadan adopt <감독이름> --harness agy --model <지금 모델> [--effort <지금 강도>] [--parent <슈퍼감독>]` — 대화 ID는 자동으로 읽고, 못 찾으면 `--resume <대화ID>`를 붙인다. 복제가 아니라 **같은 대화를 이어 연다**: 권한 확인 없이 열리고, 인수 확인(`adopt accept`)과 원본 탭 자동 닫기가 없으니 원래 탭은 사용자가 직접 닫는다.
-   - omo: `kadan adopt <감독이름> --harness omo --model "<provider/모델:강도>" --resume <세션 UUID>` — 세션 UUID는 필수다(자동으로 못 읽는다). `--fork`로 새 세션에 복제해 연다. `--effort`는 받지 않으니 강도는 모델 문자열의 `:강도`로 적는다. 원본 권한은 못 읽어 기본 권한으로 뜨고, 원래 탭은 사용자가 직접 닫는다.
+   - omo: `kadan adopt <감독이름> --harness omo --model "<provider/모델:강도>" --resume <세션 UUID>` — 세션 UUID는 필수다(자동으로 못 읽는다). 카단이 `omo --fork`로 새 세션에 복제해 연다(사용자가 `--fork`를 따로 붙이지 않는다). `--effort`는 받지 않으니 강도는 모델 문자열의 `:강도`로 적는다. 원본 권한은 못 읽어 기본 권한으로 뜨고, 원래 탭은 사용자가 직접 닫는다.
    - 상위는 기본이 사용자(`@user`)다. 슈퍼감독 아래에 두려면 `--parent <슈퍼감독>`, 슈퍼감독으로 세우려면 `--profile super`.
    - 다른 폴더에서 실행하면 `adopt`가 "이 폴더에서 시작한 대화가 아니다(기록 폴더 …)"로 거부한다. 그 폴더로 옮겨 다시 실행한다.
    - herdr 바닥: 사용자가 `KADAN_FLOOR=herdr KADAN_HOME=… KADAN_HERDR_SOCKET=…`를 명시한 셸에서만 같은 명령이 herdr 서버 안에 열린다. 환경 변수가 없으면 지금처럼 tmux이고, 서버를 자동으로 켜거나 다른 바닥으로 바꾸지 않는다. 새 폴더의 신뢰 확인 화면은 자동 수락하지 않으니 안내된 명령으로 사람이 넘긴다.
