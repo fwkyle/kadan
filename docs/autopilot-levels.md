@@ -88,6 +88,7 @@ kadan autopilot repo <소유자/이름> --deploy-branch <브랜치|없음> --aut
   ```
   Autopilot이 켜져 있어 역할 세션에서는 `kadan autopilot repo <소유자/이름>`를 쓸 수 없습니다. kyle이 직접 치거나 Autopilot을 끈 뒤 하세요
   ```
+- **실행 모델 설정 쓰기도 같다**(2026-11-24 kyle). 켜진 동안 역할 세션의 `kadan runners set·runner·model·block·preset·import·fallback·favorite·init·compare on|off`는 거절되고, 읽기(`show`·`report`·`compare show`·`--out` 없는 `export`)만 통한다. 슈퍼감독이 kyle이 말한 그대로를 `--quote "<kyle 원문>"`으로 옮기면(비어 있지 않은 글) 같은 명령이 통하고, 설정 변경 사건(`runner-settings`)에 원문(`quote`)·`viaChat: true`·쓴 역할(`by`)이 남는다. 빈 값·공백·값 없는 `--quote`는 거절한다. `export --out`은 원장 사건이 없어 `--quote`로도 거절한다. 사람 셸과 꺼진 Autopilot은 그대로다. `window`·`trash`·`limit set`·`autopilot wingman`은 이 길이 없다.
 - **자동 머지에 넣지 않는 것도 정상 끝 상태다.** 필수 검사나 정책이 없는 저장소는 보류 기록과 결정 요청으로 남기고, 사용자 승인 머지로 두면 된다.
 
 ### 관문 거절 → 다음 행동
