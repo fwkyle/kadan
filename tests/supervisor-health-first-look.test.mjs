@@ -87,6 +87,27 @@ test('표 2: 일하는 표시에 시계가 직전과 같으면 연속 N분 본 �
   assert.deepEqual(late.input.statusLine, {kind: 'working', clockSec: 232, previousClockSec: 232});
 });
 
+// 검수 재현(exec-d49fe400 screen-read-gap): 화면 읽기에 실패한 순회는 이 감시기가 일하는 화면을 본 것이 아니라서 셈을 끊는다.
+test('표 2 읽기 공백: 읽기 실패 뒤 복구 첫 순회는 후보가 없고 복구 뒤 연속 N분이 차면 후보가 난다', () => {
+  const r = run(), start = 2 * 60 * MIN;
+  assert.equal(r.at(start, WORKING).candidate, undefined); // 첫 관찰 = 셈의 시작점
+  for (let m = 1; m < 5; m++) {
+    const failed = r.at(start + m * MIN, null);
+    assert.equal(failed.candidate, undefined);
+    assert.equal(failed.alerts.find(a => a.session === 'kadan-boss')?.kind, '모름');
+  }
+  const lastCheck = r.state().lastCheck;
+  // 복구 첫 순회(첫 관찰로부터 5분째)는 5분 연속 관찰이 아니다.
+  assert.equal(r.at(start + 5 * MIN, WORKING).candidate, undefined);
+  assert.equal(r.state().lastCheck, lastCheck); // 읽기 실패 동안·복구 뒤에도 lastCheck는 그대로
+  for (let m = 6; m < 10; m++) assert.equal(r.at(start + m * MIN, WORKING).candidate, undefined, `복구 뒤 ${m - 5}분`);
+  assert.equal(r.at(start + 10 * MIN, WORKING).candidate?.input.check, 'hourly');
+});
+test('표 2 읽기 공백 대조군: 매 순회 읽히면 5분째 후보가 난다', () => {
+  const r = run(), start = 2 * 60 * MIN;
+  for (let m = 0; m < 5; m++) assert.equal(r.at(start + m * MIN, WORKING).candidate, undefined);
+  assert.equal(r.at(start + 5 * MIN, WORKING).candidate?.input.check, 'hourly');
+});
 test('표 3: 일하는 표시에 시계가 바뀌면 안 나아감 셈을 0으로 되돌린다', () => {
   const r = run(), start = 2 * 60 * MIN;
   r.at(start, clockScreen('1m 0s'));

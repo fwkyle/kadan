@@ -294,9 +294,10 @@ test('도구 줄이 있어도 오류 줄이 있으면 억제하지 않고 오류
  assert.equal(e.check(SUPERVISOR_ERROR_MS,screen).candidate.input.check,'persistent-error');
 });
 test('응답 본문·우편 인용 속의 도구 줄 모양은 상태 구역이 아니라서 억제하지 않는다',()=>{
- const quoted=`카드 본문 인용:\n  ⎿  Running… (7s · timeout 4m)\n✶ Processing… (55s · ↓ 3.7k tokens)\n이 줄들은 우편 인용이다.\n\n────────\n❯ \n────────\n`;
+ // 인용 속 도구 줄의 T를 10분으로 둔다: 잘못 읽으면 보호가 처음 본 뒤 11분이라, 5분 확인이 끝나는 시각에는 후보가 안 나서 시험이 실패한다.
+ const quoted=`카드 본문 인용:\n  ⎿  Running… (7s · timeout 10m)\n✶ Processing… (55s · ↓ 3.7k tokens)\n이 줄들은 우편 인용이다.\n\n────────\n❯ \n────────\n`;
  // 도구 줄이 스피너 바로 위가 아닌 경우(그 사이에 글이 있다)와 스피너 줄이 입력창 바로 위가 아닌 경우.
- const apart=`  ⎿  Running… (7s · timeout 4m)\n본문 한 줄\n✶ Processing… (55s · ↓ 3.7k tokens)\n\n❯ \n`;
+ const apart=`  ⎿  Running… (7s · timeout 10m)\n본문 한 줄\n✶ Processing… (55s · ↓ 3.7k tokens)\n\n❯ \n`;
  for(const screen of [quoted,apart]){
   const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
   assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,screen).candidate.input.check,'hourly');
@@ -321,14 +322,14 @@ test('실제 입력창이 없거나 상태 구역이 아닌 인용·지난 출�
  const spin='✶ Processing… (55s · ↓ 3.7k tokens)';
  for(const screen of [
   // 도구·스피너 모양 아래에 인용 줄이 있고 실제 입력창이 없다.
-  `화면 인용\n  ⎿  Running… (7s · timeout 4m)\n${spin}\n> 이것은 인용의 마지막 줄입니다\n출력 끝`,
+  `화면 인용\n  ⎿  Running… (7s · timeout 10m)\n${spin}\n> 이것은 인용의 마지막 줄입니다\n출력 끝`,
   // 지난 Bash 출력 안의 들여쓴 도구·스피너 모양, 그 아래에 실제 입력창.
-  `⏺ Bash(지난 화면 예시 출력)\n  ⎿  지난 출력\n     ⎿  Running… (7s · timeout 4m)\n     ${spin}\n${BOX}`,
+  `⏺ Bash(지난 화면 예시 출력)\n  ⎿  지난 출력\n     ⎿  Running… (7s · timeout 10m)\n     ${spin}\n${BOX}`,
   // 스피너 줄이 들여쓰였다 / 도구 줄 들여쓰기가 다르다 / 도구 줄과 스피너 사이에 글이 낀다 / 입력창 위에 가로줄 없음.
-  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n\n  ${spin}\n\n${BOX}`,
-  `⏺ Bash(x)\n     ⎿  Running… (7s · timeout 4m)\n\n${spin}\n\n${BOX}`,
-  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n끼어든 글\n${spin}\n\n${BOX}`,
-  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n\n${spin}\n\n❯ \n────────\n  ? for shortcuts`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 10m)\n\n  ${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n     ⎿  Running… (7s · timeout 10m)\n\n${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 10m)\n끼어든 글\n${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 10m)\n\n${spin}\n\n❯ \n────────\n  ? for shortcuts`,
  ]){
   const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
   assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,screen).candidate.input.check,'hourly',screen);

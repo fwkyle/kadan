@@ -82,6 +82,9 @@ export class SupervisorHealth {
     for (const session of scope.sessions) {
       const seen = observations.get(session), role = session.slice(6);
       if (!seen || !seen.alive || seen.screen == null || seen.expectedPid != null && String(seen.pid) !== String(seen.expectedPid)) {
+        // 화면을 못 읽은 순회는 일하는 화면을 본 것이 아니다: '안 나아감' 연속 셈을 끊는다(복구 첫 순회가 새 시작점). lastCheck는 그대로다.
+        const lost = this.states.get(session);
+        if (lost) { lost.working = false; lost.stillSince = null; }
         const kind = seen?.alive === false ? '죽음' : '모름';
         // 상위가 kadan stop으로 일부러 끈 감독은 알릴 일이 아니다. 예기치 않은 죽음만 알린다.
         if (kind === '죽음' && intendedStop(entries, session)) continue;
