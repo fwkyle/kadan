@@ -8,6 +8,8 @@ import {setImmediate} from 'node:timers/promises';
 import {CardStore} from '../src/card-store.mjs';
 import {DecisionStore} from '../src/decisions.mjs';
 import {ExplainAI} from '../src/explain-ai.mjs';
+import {buildCardCenter} from '../src/card-center.mjs';
+import {briefInput} from '../src/human-brief.mjs';
 import {UNCONFIRMED_GRACE_MS} from '../src/explain-events.mjs';
 import {taskIdentity, taskConnectionError} from '../src/task-identity.mjs';
 import {appendLedger, readSystemLedger, readSessionLifecycleLedger} from '../src/ledger.mjs';
@@ -215,6 +217,54 @@ test('결함 1: unconfirmed 유예 만료·liveSessions 변화·off→on 재활�
   assert.equal(w.spawned(), 4);
 });
 
+test('결함 1 보강: 두 저장소에 같은 짧은 ID가 있으면 한 카드만 바뀌어도 정식 주소 없는 옛 발령을 붙이지 않는다', async t => {
+  const w = explainWorld();
+  t.after(() => w.ai.stop());
+  await w.run().done; // enabled 기록
+  w.clock.t = Date.now() + 1000;
+  const left = w.store.create({repo: 'left', id: 'shared', repoPath: w.home, title: 'left', body: '# left'});
+  const right = w.store.create({repo: 'right', id: 'shared', repoPath: w.home, title: 'right', body: '# right'});
+  const iso = offset => new Date(w.clock.t + offset).toISOString();
+  const old = {kind: 'send', role: 'old-worker', taskId: 'shared', t: iso(0)};
+  w.raw.push(old); // 정식 주소(executionKey)가 없는 옛 발령: 어느 카드의 것인지 모호하다
+  assert.equal((await w.run().result).queued, 0);
+  assert.equal(w.spawned(), 0);
+
+  const origGet = CardStore.prototype.get, gets = [];
+  CardStore.prototype.get = function (key, ...rest) { gets.push(key); return origGet.call(this, key, ...rest); };
+  t.after(() => { CardStore.prototype.get = origGet; });
+  const edited = w.store.update(left.key, {}, {revision: left.revision, by: 'sup', note: '메모', noteKind: 'progress'});
+  assert.equal(edited.revision, left.revision + 1);
+  gets.length = 0; // store.update 안의 읽기는 제외하고 tick의 읽기만 센다
+  w.clock.t += 60_000;
+  const second = w.run();
+  await second.done;
+  assert.equal(second.result.queued, 0, '바뀐 카드 1장만 읽어도 짧은 ID 충돌은 모호로 남아야 한다');
+  assert.equal(w.spawned(), 0);
+  assert.deepEqual(gets, [left.key], '본문은 바뀐 카드 1장만 읽는다');
+  gets.length = 0;
+  w.clock.t += 60_000;
+  await w.run().done; // 변동 없는 다음 순회
+  assert.deepEqual(gets, [], '변동 없는 순회는 본문을 읽지 않는다');
+
+  // freshQueuedJob: 두 카드를 모두 읽은 기준 지문과 같아야 한다(주소표가 좁으면 옛 발령이 붙어 지문이 달라져 null이 된다).
+  const full = buildCardCenter({cards: [w.store.get(left.key), w.store.get(right.key)], entries: w.raw, tree: [],
+    runtimeKnown: false, now: w.clock.t}).cards.find(card => card.key === left.key);
+  assert.equal(full.runs.length, 0);
+  const expected = briefInput(full, [], w.clock.t);
+  const fresh = w.ai.freshQueuedJob({key: left.key, hash: expected.hash, ids: [], revision: edited.revision});
+  assert.ok(fresh, '주소표가 전체 카드 기준이어야 재조회가 같은 지문을 낸다');
+  assert.deepEqual(w.ai.center([left.key], w.clock.t)[0].runs, []);
+
+  // 정식 주소가 있는 발령은 정상으로 붙는다.
+  w.raw.push({...old, executionKey: left.key, t: iso(1)});
+  w.clock.t += 60_000;
+  const third = w.run();
+  await third.done;
+  assert.equal(third.result.queued, 1);
+  assert.equal(w.spawned(), 1);
+});
+
 function sqliteHome(prefix) {
   const dir = fs.mkdtempSync(path.join(process.env.KADAN_HOME, prefix));
   createDatabase(dir);
@@ -327,6 +377,88 @@ test('결함 2: readSessionLifecycleLedger는 storageMode none, 주입 readEntri
   assert.throws(() => readSystemLedger(brokenSys), /도메인 원장 종류 손상/);
   assert.throws(() => readSessionLifecycleLedger(brokenSys, 'kadan-비서'), /도메인 원장 종류 손상/);
   assert.equal(typeof openSecretaryTab, 'function');
+});
+
+const LIFECYCLE_SESSION = 'kadan-fixture-secretary';
+const NOW_ISO = '2026-11-24T00:00:00.000Z';
+function lifecycleHome(tamper) {
+  const home = sqliteHome('sec-integrity-');
+  appendLedger({kind: 'start', role: 'fixture-secretary', session: LIFECYCLE_SESSION, panePid: '70', window: 'hidden'}, home);
+  if (tamper) transaction(home, db => tamper(row => appendRow(db, 'system/events.jsonl', row), row => appendRow(db, 'ledger.jsonl', row), db));
+  return home;
+}
+function attachLifecycle(home, readEntries) {
+  let opens = 0, records = 0;
+  const result = attachHiddenSecretary({
+    home, session: LIFECYCLE_SESSION, floor: {pid: () => '70'}, readEntries,
+    readSetting: () => ({version: 1, window: 'rottie', rottieBin: '/fixture/unused'}),
+    open: () => { opens++; return {window: 'rottie', rottieTerminalId: 'opened-fixture'}; },
+    record: () => { records++; },
+  });
+  return {attached: result.attached, reason: result.reason ?? null, opens, records};
+}
+
+test('결함 2 보강: 대상 외 원장 행의 손상 4가지를 좁은 읽기도 오류로 막아 탭 열기·기록을 하지 않는다', () => {
+  const corrupt = {
+    '대상 외 행 순번 중복': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 1, session: 'kadan-other'}), /순서 손상/],
+    '시스템 영역의 잘못된 사건 종류': [put => put({t: NOW_ISO, kind: 'done', _ledgerOrder: 2, role: 'other', taskId: 'a'}), /종류 손상/],
+    '시스템 행 kind 누락': [put => put({t: NOW_ISO, _ledgerOrder: 2}), /종류 손상/],
+    '옛 원장 행 kind 누락': [(put, legacy) => legacy({t: NOW_ISO}), /과거 원장 손상/],
+    '대상 외 행 broken': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 2, broken: true}), /종류 손상/],
+    '순번 빈틈': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 5, session: 'kadan-other'}), /순번 누락/],
+    '순번 형식(문자열)': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: '2'}), /순번 손상/],
+    '짝 없는 완료 우편': [(put, legacy, db) => appendRow(db, 'mail/events.jsonl', {
+      t: NOW_ISO, kind: 'send', mailId: 'orphan-completion', role: 'a', systemGenerated: 'task-completion', _ledgerOrder: 2,
+    }), /완료 사건 없는 우편/],
+  };
+  for (const [name, [tamper, message]] of Object.entries(corrupt)) {
+    const home = lifecycleHome(tamper);
+    assert.throws(() => readSystemLedger(home), undefined, `${name}: 전체 읽기는 오류여야 한다`);
+    assert.throws(() => readSessionLifecycleLedger(home, LIFECYCLE_SESSION), message, name);
+    const full = attachLifecycle(home, () => readSystemLedger(home));
+    const narrow = attachLifecycle(home);
+    assert.deepEqual(narrow, full, name);
+    assert.deepEqual([narrow.opens, narrow.records], [0, 0], `${name}: 탭을 열거나 기록하면 안 된다`);
+  }
+});
+
+test('결함 2 보강: 손상이 아닌 원장은 좁은 읽기가 전체 읽기와 같은 판정으로 통과하고 정상 비서 탭을 연다', () => {
+  const clean = lifecycleHome();
+  const opened = attachLifecycle(clean);
+  assert.deepEqual(opened, attachLifecycle(clean, () => readSystemLedger(clean)));
+  assert.deepEqual([opened.attached, opened.opens, opened.records], [true, 1, 1]);
+
+  const ok = {
+    '키 순서가 다른 유효 JSON': put => put({session: LIFECYCLE_SESSION, kind: 'window', t: NOW_ISO, _ledgerOrder: 2,
+      panePid: '70', rottieTerminalId: 'fixture-tab'}),
+    '옛 원장 broken:false·빈 kind': (put, legacy) => { legacy({t: NOW_ISO, kind: '', broken: false}); legacy({t: NOW_ISO, kind: 'x'}); },
+    '대상 행 순서가 앞뒤로 섞인 다른 세션 사건': put => put({t: NOW_ISO, kind: 'start', _ledgerOrder: 2, session: 'kadan-other'}),
+  };
+  for (const [name, tamper] of Object.entries(ok)) {
+    const home = lifecycleHome(tamper);
+    assert.deepEqual(readSessionLifecycleLedger(home, LIFECYCLE_SESSION),
+      readSystemLedger(home).filter(e => ['start', 'stop', 'window'].includes(e.kind) && e.session === LIFECYCLE_SESSION), name);
+    assert.deepEqual(attachLifecycle(home), attachLifecycle(home, () => readSystemLedger(home)), name);
+  }
+  const empty = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'sec-integrity-none-'));
+  assert.deepEqual(readSessionLifecycleLedger(empty, LIFECYCLE_SESSION), []);
+});
+
+test('결함 6a 보강: 인계받은 역할이 살아 있고 다른 카드에 담당으로 없으면 orphaned로 보지 않아 감독 할 일로 돌리지 않는다', () => {
+  const at = m => new Date(Date.UTC(2026, 10, 24, 0, m)).toISOString();
+  const now = Date.parse(at(30));
+  const card = {key: 'r/a', id: 'a', title: '검수', status: 'assigned', role: 'old', revision: 2, at: at(0), history: []};
+  const work = {key: 'r/w', status: 'open', owner: 'sup', ownedAt: at(0), at: at(1), executions: [{key: card.key}]};
+  const entries = [
+    {kind: 'send', role: 'old', taskId: 'a', executionKey: card.key, t: at(1)},
+    {kind: 'handover', phase: 'transferred', handoverId: 'h1', from: 'old', to: 'next', taskIds: [card.key], t: at(2)},
+  ];
+  const parents = new Map([['sup', '@user'], ['old', 'sup'], ['next', 'sup']]);
+  const idle = liveSessions => idleWorkEntries([work], [card], parents,
+    scoped => endedExecutionKeys({cards: scoped, entries, liveSessions, now}), now).map(row => row.taskId);
+  assert.deepEqual(idle(new Set(['kadan-next'])), [], '살아 있는 인계 역할의 진행 중 실행');
+  assert.deepEqual(idle(new Set()), ['work:r/w'], '인계 역할이 꺼졌으면 감독 할 일');
+  assert.deepEqual(idle(null), [], '생존을 모르면 세션 소실로 보지 않는다');
 });
 
 test('결함 6a: 닫힌 업무·완료 카드 다수, 짧은 id 별칭 충돌, 인계 세션 생존에서 idleWorkEntries 축소 전달이 전체 전달과 100% 같다', () => {

@@ -55,6 +55,9 @@ function selectAliasSafeCards(cards, targetKeys) {
   return (cards ?? []).filter(card => targetKeys.has(card.key) || (card.id && targetIds.has(card.id)));
 }
 
+// 살아 있는 세션 전체를 역할 목록으로 쓴다(카드에 등장하는 역할만 거르지 않는다).
+// 실행을 인계받은 역할은 다른 카드에는 담당으로 없을 수 있다. 카드 역할만 보면 살아 있는 인계 역할을
+// 없는 것(orphaned)으로 오판해 감독의 할 일로 되돌린다(2026-11-24 감독 승인한 기준 커밋 구멍 수정).
 function liveRolesTree(liveSessions) {
   if (liveSessions == null) return [];
   const roles = [...liveSessions]

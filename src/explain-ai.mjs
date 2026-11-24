@@ -117,7 +117,7 @@ export class ExplainAI {
       this.settled.clear();
       this.settledEnabledAt = this.enabledAt;
     }
-    this.context = {readEntries, liveSessions};
+    this.context = {readEntries, liveSessions, cards};
     const grouped = decisionsByCard(decisions);
     const cardByKey = new Map();
     const keys = new Set();
@@ -214,9 +214,14 @@ export class ExplainAI {
     const store = new CardStore(this.home), full = [];
     for (const key of keys) { try { full.push(store.get(key)); } catch { /* 없는 카드·손상은 건너뛴다 */ } }
     if (!full.length) return [];
-    const {readEntries, liveSessions} = this.context;
+    const {readEntries, liveSessions, cards} = this.context;
     const tree = liveSessions ? [{roles: [...liveSessions].map(s => ({role: String(s).replace(/^kadan-/, ''), life: {state: 'alive', pidState: 'match'}}))}] : [];
-    try { return buildCardCenter({cards: full, entries: readEntries(), tree, runtimeKnown: Boolean(liveSessions), now}).cards; }
+    try {
+      // 본문은 후보만 읽지만 짧은 ID 충돌 판정은 전체 카드 요약 기준이다(후보만 넘기면 충돌을 유일하다고 오판한다).
+      const identityCards = cards ?? new CardStore(this.home).listSummaries();
+      return buildCardCenter({cards: full, identityCards, entries: readEntries(), tree,
+        runtimeKnown: Boolean(liveSessions), now}).cards;
+    }
     catch { return []; }
   }
 

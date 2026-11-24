@@ -1,8 +1,6 @@
 import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
-import {
-  appendDomainLedger, readLedgerState, projectLedger, domainProjector,
-  ledgerStreams, legacyCorrupt, validateDomainEvent,
-} from './ledger-domains.mjs';
+import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams} from './ledger-domains.mjs';
+import {assertLedgerIntegrity} from './ledger-integrity.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -141,39 +139,22 @@ export function readRecoveryLedger(home = ledgerHome()) {
 }
 const LIFECYCLE_KINDS = new Set(['start', 'stop', 'window']);
 // 단일 세션의 수명 사건(start·stop·window)만 읽는다(up --auto가 매분 전체 시스템 원장을 파싱하지 않게).
-// SQLite에서 대상 세션의 수명 사건과 손상(broken·비객체·빈 kind) 후보만 골라 읽고, 기존 readSystemLedger와 같은 순서·파싱·손상 검사를 지킨다.
-// 원장이 10배면: SQL 스캔은 system/events.jsonl 행 수에 비례하지만 JS 파싱·힙은 대상 세션 수명 건수에만 비례한다.
+// 먼저 SQLite 안에서 readSystemLedger와 같은 원장 손상(순번·연결·종류·broken)을 검사해(assertLedgerIntegrity) 손상이면
+// 탭을 열기 전에 오류로 멈춘다. 통과한 뒤에만 대상 세션의 수명 행을 JS로 해석하고, 순서·모양은 readSystemLedger와 같다.
+// 원장이 10배면: SQL 검사·스캔은 원장 행 수에 비례하지만 JS 파싱·힙은 대상 세션 수명 건수에만 비례한다.
 export function readSessionLifecycleLedger(home = ledgerHome(), session) {
   if (storageMode(home) === 'none') return [];
   const target = typeof session === 'string' ? session : '';
   return storageSnapshot(home, db => {
+    assertLedgerIntegrity(db);
     const read = db.prepare(
-      `SELECT payload FROM events WHERE stream=? AND (`
-      + `(${RECOVERY_KIND} IN ('start','stop','window') AND json_extract(payload,'$.session')=?)`
-      + ` OR (instr(payload,'"broken"')>0 AND json_type(payload,'$.broken') IS NOT NULL)`
-      + ` OR (NOT (${RECOVERY_HEAD}) AND (json_type(payload)!='object'`
-      + ` OR json_type(payload,'$.kind')!='text' OR json_extract(payload,'$.kind')=''))`
-      + `) ORDER BY seq`
+      `SELECT payload FROM events WHERE stream=? AND ${RECOVERY_KIND} IN ('start','stop','window')`
+      + ` AND json_extract(payload,'$.session')=? ORDER BY seq`
     );
-    const legacyRows = [];
-    for (const row of read.iterate('ledger.jsonl', target)) {
-      const value = JSON.parse(row.payload);
-      if (legacyCorrupt([value])) throw new Error('과거 원장 손상: 도메인 조회 불가');
-      if (LIFECYCLE_KINDS.has(value.kind) && value.session === target) legacyRows.push(value);
-    }
-    const systemRows = [];
-    let prevOrder = 0;
-    for (const row of read.iterate(ledgerStreams.system, target)) {
-      const value = JSON.parse(row.payload);
-      validateDomainEvent(ledgerStreams.system, value);
-      if (value._ledgerOrder <= prevOrder) {
-        throw new Error(`도메인 원장 순서 손상: ${ledgerStreams.system}`);
-      }
-      prevOrder = value._ledgerOrder;
-      if (LIFECYCLE_KINDS.has(value.kind) && value.session === target) systemRows.push(value);
-    }
+    const rows = stream => read.all(stream, target).map(row => JSON.parse(row.payload))
+      .filter(value => LIFECYCLE_KINDS.has(value.kind) && value.session === target);
     const project = domainProjector('system');
-    return [...project.legacy(legacyRows), ...project.rows(systemRows)];
+    return [...project.legacy(rows('ledger.jsonl')), ...project.rows(rows(ledgerStreams.system))];
   });
 }
 // 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.
