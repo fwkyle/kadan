@@ -80,6 +80,7 @@ import { cmdRestore } from "./commands/restore.mjs";
 import { cmdRestart, RESTART_USAGE, RESTART_BOOLEANS } from "./commands/restart.mjs";
 import { cmdReopen, REOPEN_USAGE } from "./commands/reopen.mjs";
 import { cmdIdleRoles } from "./commands/idle-roles.mjs";
+import { cmdAgy, AGY_USAGE } from "./commands/agy-accounts.mjs";
 import { cmdClaude } from "./commands/claude.mjs";
 import { cmdWindow, WINDOW_USAGE } from "./commands/window.mjs";
 import { cmdTrash, TRASH_USAGE } from "./commands/trash.mjs";
@@ -290,6 +291,7 @@ export const COMMANDS = {
   restart: cmdRestart,
   reopen: cmdReopen,
   'idle-roles': cmdIdleRoles,
+  agy: cmdAgy,
   claude: cmdClaude,
   window: cmdWindow,
   trash: cmdTrash,
@@ -310,7 +312,7 @@ export function adoptWindowForCommand(command, env, home, {socket, warn} = {}) {
   return adoptMachineWindow(env, home, opts);
 }
 
-const HELP_ONLY={super:SUPER_USAGE,window:WINDOW_USAGE,trash:TRASH_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE,reopen:REOPEN_USAGE};
+const HELP_ONLY={agy:AGY_USAGE,super:SUPER_USAGE,window:WINDOW_USAGE,trash:TRASH_USAGE,stop:STOP_USAGE,restart:RESTART_USAGE,reopen:REOPEN_USAGE};
 
 export function main(argv) {
   const [command, ...rest] = argv;
