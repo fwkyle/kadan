@@ -5,6 +5,8 @@
 // 한도를 넘거나 한도 때문에 지금 필요한 값을 잃은 카드(needsHistory)만 이력 전체를 보관해 출력이 같게 한다.
 // 기본 모드는 옛 동작 그대로 모든 이력을 보관한다(시험·옛 호출자).
 // 운영 대시보드는 본문 요약 모드로 지문·짧은 발췌만 보관한다. 원문은 선택한 상세에서 읽는다.
+// readRows(): 사건에서 온 행만 돌려준다. 같은 동기화(heads 지문 대조·바뀐 스트림의 끝 행 대조·증분 적용)를 하지만
+// card.md는 stat·읽기를 하지 않고, 바뀐 것이 없으면 직전 배열 참조를 그대로 준다(요약·우편 읽기용).
 import fs from 'node:fs';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -50,7 +52,10 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false, f
     return history;
   }
 
-  function read(db) {
+  let rowsList = null;
+
+  // 사건에서 온 상태를 맞춘다. card.md 같은 파일은 만지지 않는다. 오류는 호출한 쪽이 상태를 비우고 다시 던진다.
+  function sync(db) {
     const currentIdentity = databaseIdentity(home);
     const heads = [];
     // heads만 읽어 지문을 만든다. 끝 행과 events의 대조는 처음·바뀐 스트림에만 한다(아래).
@@ -60,8 +65,9 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false, f
         hash: createHash('sha256').update(row.payload).digest('hex')});
     }
     const streams = new Set(heads.map(h => h.stream));
-    if (identity !== currentIdentity || heads.some(h => h.seq < (cached.get(h.stream)?.seq ?? 0))
-        || [...cached.keys()].some(s => !streams.has(s))) cached = new Map();
+    const reset = identity !== currentIdentity || heads.some(h => h.seq < (cached.get(h.stream)?.seq ?? 0))
+      || [...cached.keys()].some(s => !streams.has(s));
+    if (reset) cached = new Map();
     const changed = heads.filter(h => {
       const previous = cached.get(h.stream);
       return !previous || previous.seq !== h.seq || previous.hash !== h.hash;
@@ -110,12 +116,41 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false, f
         if (needsHistory(state) && !state.history) state.history = reload(db, head.stream, head.seq);
       }
     }
+    return {currentIdentity, heads, next, reset, changed: changed.length};
+  }
+  // 동기화 결과를 확정한다. 조회 중 파일이 교체됐으면 확정하지 않고 오류로 끝낸다.
+  function commit(synced) {
+    if (synced.currentIdentity !== databaseIdentity(home)) throw new Error('조회 중 저장소 파일 교체: 다시 읽어야 합니다');
+    identity = synced.currentIdentity;cached = synced.next;
+    if (synced.reset || synced.changed) rowsList = null;
+  }
+  const historyFieldsOf = (head, state, currentIdentity) => state.history ? {history: state.history}
+    : {...(kind === 'cards' ? {listFacts: state.facts} : {workFacts: state.facts}),
+      historyRef: {stream: head.stream, revision: head.seq, hash: state.hash, identity: currentIdentity}};
+
+  // 사건에서 온 행만. 바뀐 것이 없으면 직전 배열을 그대로 돌려 준다(참조 비교로 재사용하는 호출자용).
+  function readRows(db) {
+    const synced = sync(db);
+    commit(synced);
+    if (rowsList && !synced.reset && !synced.changed) return rowsList;
+    rowsList = synced.heads.map(head => {
+      const state = synced.next.get(head.stream), latest = state.last;
+      const historyFields = historyFieldsOf(head, state, synced.currentIdentity);
+      if (kind === 'works') return {...latest, ...historyFields};
+      const dir = cards.dir(latest.key);
+      return {...latest, ...historyFields, path: path.join(dir, 'card.md'),
+        ...(latest.artifactLayout === 'card-v1'
+          ? {resultPath: path.resolve(dir, 'result.md'), evidenceDir: path.resolve(dir, 'evidence')} : {})};
+    });
+    return rowsList;
+  }
+
+  function read(db) {
+    const synced = sync(db), {currentIdentity, heads, next} = synced;
     const nextBodies = new Map();
     const list = heads.map(head => {
       const state = next.get(head.stream), latest = state.last;
-      const historyFields = state.history ? {history: state.history}
-        : {...(kind === 'cards' ? {listFacts: state.facts} : {workFacts: state.facts}),
-          historyRef: {stream: head.stream, revision: head.seq, hash: state.hash, identity: currentIdentity}};
+      const historyFields = historyFieldsOf(head, state, currentIdentity);
       if (kind === 'works') return {...latest, ...historyFields};
       const dir = cards.dir(latest.key), file = path.join(dir, 'card.md'), stat = fs.statSync(file);
       const signature = [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(':');
@@ -133,17 +168,20 @@ export function createDashboardStoreReader(home, kind, {summaryBodies = false, f
         ...(latest.artifactLayout === 'card-v1'
           ? {resultPath: path.resolve(dir, 'result.md'), evidenceDir: path.resolve(dir, 'evidence')} : {})};
     });
-    if (currentIdentity !== databaseIdentity(home)) throw new Error('조회 중 저장소 파일 교체: 다시 읽어야 합니다');
-    identity = currentIdentity;cached = next;bodies = nextBodies;
+    commit(synced);
+    bodies = nextBodies;
     return list;
   }
+  const dropState = () => {cached.clear();bodies.clear();identity = null;rowsList = null;};
+  const guarded = reader => () => {
+    try {
+      if (storageMode(home) === 'none') {dropState();return [];}
+      return transaction(home, reader, {readOnly: true});
+    } catch (error) {dropState();throw error;}
+  };
   return {
-    read() {
-      try {
-        if (storageMode(home) === 'none') {cached.clear();bodies.clear();identity = null;return [];}
-        return transaction(home, read, {readOnly: true});
-      } catch (error) {cached.clear();bodies.clear();identity = null;throw error;}
-    },
+    read: guarded(read),
+    readRows: guarded(readRows),
     info: () => ({...stats, streams: cached.size}),
   };
 }

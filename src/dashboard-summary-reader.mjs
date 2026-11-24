@@ -10,9 +10,12 @@ import {createTreeInputCache} from './dashboard-tree-inputs.mjs';
 import {sidebarRepos} from './dashboard/repo-view.mjs';
 import {autopilotStrip} from './dashboard/autopilot-view.mjs';
 
-export function createDashboardSummaryReader(home, {listSessions, runtime = null, now = Date.now}) {
-  const stores = createWatchStoreReaders(home);
-  const treeInputs = createTreeInputCache();
+// readCards·readWorks·treeInputs: 호출한 쪽이 이미 가진 읽기를 같이 쓴다(대시보드 서버는 카드·업무 기억을 한 벌만 둔다).
+// 없으면 감시 읽기 도우미와 자기 트리 입력 기억을 쓴다(시험·옛 호출자).
+export function createDashboardSummaryReader(home, {listSessions, runtime = null, now = Date.now,
+  readCards, readWorks, treeInputs = createTreeInputCache()}) {
+  const own = readCards && readWorks ? null : createWatchStoreReaders(home);
+  const cardsOf = readCards ?? (() => own.cards.read()), worksOf = readWorks ?? (() => own.works.read());
   let decisionCache, countCache, treeCache, sidebarCache;
   return () => {
     const errors = [];
@@ -20,7 +23,7 @@ export function createDashboardSummaryReader(home, {listSessions, runtime = null
     const data = withMailboxView(home, store => storageSnapshot(home, () => {
       const entries = readLedgerIncremental(home);
       const waiting = mailboxWaitingCount(store);
-      const cards = stores.cards.read(), works = stores.works.read();
+      const cards = cardsOf(), works = worksOf();
       const heads = streamHeads(home, ['decisions/events.jsonl']);
       const identity = storageMode(home) === 'none' ? 'none' : databaseIdentity(home);
       const key = JSON.stringify([identity, heads.get('decisions/events.jsonl') ?? null]);

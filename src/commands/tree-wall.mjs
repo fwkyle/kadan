@@ -3,7 +3,7 @@ import { readLedgerState, projectLedger } from "../ledger-domains.mjs";
 import { readLedgerViewIncremental } from "../ledger-incremental.mjs";
 import { storageMode, storageSnapshot } from "../storage.mjs";
 import { captureRuntimeVersion } from "../runtime-version.mjs";
-import { attachWatchOverview } from "../watch-overview.mjs";
+import { attachWatchOverview, createCachedWatchProcesses } from "../watch-overview.mjs";
 import { watchProcessName } from "../watch-system.mjs";
 import { defaultProfilePath } from "../watch-profile.mjs";
 import { CardStore } from "../card-store.mjs";
@@ -67,7 +67,7 @@ function dashboardStores(home) {
 }
 // 원장/카드/업무 버전을 나눠 바뀐 입력만 다시 읽는다. 사건 분류는 새 부분만 이어서 한다.
 // 생존 여부·자원·감시 프로세스는 원장에 없는 값이라 매번 새로 읽는다.
-function readWallData(runtime, listOnly, summaryBodies) {
+function readWallData(runtime, listOnly, summaryBodies, includeWaitSnapshots) {
   const collectedAt = new Date();
   const home = ledgerHome();
   let versions;
@@ -104,11 +104,13 @@ function readWallData(runtime, listOnly, summaryBodies) {
   if(registeredWorks)try{
     operationsInputs=readOperationsFlowInputs(home,registeredWorks,{cards,ledgerState,decisions,decisionError});
   }catch(error){operationsInputsError=error.message;}
-  return {runtime,listOnly,summaryBodies,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
-    errors,cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
-    decisions,decisionError};
+  return {runtime,listOnly,summaryBodies,includeWaitSnapshots,collectedAt,home,versions,version,file,entries,
+    ledgerLines,ledgerState,errors,cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,
+    operationsInputsError,decisions,decisionError};
 }
 
+// 감시 프로세스 목록도 ps라 같은 15초로 재사용한다(실패는 저장하지 않는다).
+const cachedWatchProcesses = createCachedWatchProcesses();
 // 카단 tmux 서버 아래 프로세스. 대시보드 요청마다 ps를 부르지 않도록 15초 재사용한다.
 const cachedProcesses = createProcessCache(() => collectProcesses(spawnSync, { socket: currentSocket() }));
 function processSnapshot() {
@@ -120,9 +122,9 @@ function processSnapshot() {
 }
 
 function buildWallData(data) {
-  const {runtime,listOnly,summaryBodies,collectedAt,home,versions,version,file,entries,ledgerLines,ledgerState,
-    cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,operationsInputsError,
-    decisions,decisionError}=data;
+  const {runtime,listOnly,summaryBodies,includeWaitSnapshots,collectedAt,home,versions,version,file,entries,
+    ledgerLines,ledgerState,cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,
+    operationsInputsError,decisions,decisionError}=data;
   const errors=[...data.errors];
   const resourceSnapshot = listOnly ? {} : buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   let sessions = [];
@@ -140,8 +142,9 @@ function buildWallData(data) {
   const aliveKey = JSON.stringify(Object.keys(aliveBySession).sort()
     .map(name => [name, aliveBySession[name].pid ?? null]));
   const treeKey = version && JSON.stringify([versions.cards, inputs.revision, aliveKey]);
-  const tree=withWaitSnapshots(wallCache.memo('tree', treeKey,
-    () => buildTree(inputs.entries,aliveBySession,cards)),home);
+  const baseTree = wallCache.memo('tree', treeKey, () => buildTree(inputs.entries,aliveBySession,cards));
+  // 대기 출력 꼬리(out/*.wait-*.txt)는 옛 HTML 화면만 쓴다. 새 화면 수집은 건너뛰고 옛 화면을 그릴 때 붙인다.
+  const tree = includeWaitSnapshots ? withWaitSnapshots(baseTree,home) : baseTree;
   let center=null, centerError=null,centerKey=null;
   try {
     if (ledgerLines===null) throw new Error("원장을 읽을 수 없어 카드 상태 모름");
@@ -164,11 +167,15 @@ function buildWallData(data) {
     center = { ...cached, roles: roles.map(r => ({ ...r, executionKind: kinds.get(r.role) ?? null,
       supersedes: lineage.get(r.role) ?? [], firstStartedAt: built.firstStartedAt.get(r.role) ?? null })) };
     if(workError)throw workError;
-    if(!listOnly)center=attachWatchOverview(center,entries,{works:registeredWorks,watchName:watchProcessName(home),profilePath:fs.existsSync(defaultProfilePath(home))?defaultProfilePath(home):null});
+    if(!listOnly){
+      const watchName=watchProcessName(home),profilePath=defaultProfilePath(home);
+      center=attachWatchOverview(center,entries,{works:registeredWorks,watchName,
+        readProcesses:()=>cachedWatchProcesses(watchName),profilePath:fs.existsSync(profilePath)?profilePath:null});
+    }
   } catch(error) { centerError=error.message; }
   let cardFiles = null;
   return {
-    center,centerError,tree,ledgerState,registeredWorks,runtime,
+    center,centerError,tree,waitSnapshotsApplied:includeWaitSnapshots,ledgerState,registeredWorks,runtime,
     registeredWorkError:workError?.message??null,
     briefInputs,operationsInputs,operationsInputsError,decisions,decisionError,
     ...resourceSnapshot,
@@ -194,12 +201,26 @@ function buildWallData(data) {
 
 // 서버는 read만 DB snapshot으로 묶고 build·렌더는 닫힌 뒤 실행한다.
 // 10배 이력에서 원본 배열 보관은 여전히 늘지만 OS 조회와 상태 계산은 DB를 붙잡지 않는다.
-export function createWallSnapshotLoader(runtime=null,{listOnly=false,summaryBodies=false}={}) {
-  return {read:()=>readWallData(runtime,listOnly,summaryBodies),build:buildWallData};
+// includeWaitSnapshots: 대기 출력 꼬리를 tree에 붙일지. 기본은 옛 호출자와 같게 요약 본문 모드(대시보드 서버)만 끈다.
+export function createWallSnapshotLoader(runtime=null,
+  {listOnly=false,summaryBodies=false,includeWaitSnapshots=!summaryBodies}={}) {
+  return {read:()=>readWallData(runtime,listOnly,summaryBodies,includeWaitSnapshots),build:buildWallData};
 }
 export function loadWallSnapshot(runtime=null,options={}) {
   const loader=createWallSnapshotLoader(runtime,options);
   return loader.build(storageSnapshot(ledgerHome(),loader.read));
+}
+
+// 대시보드 서버의 요약·우편 읽기를 한 벌로 묶는다. 둘이 같은 카드·업무 읽기와 트리 입력을 쓴다.
+// Why: cmdWall 하나에 카드 약 7,600장 기억이 3벌, 트리 입력이 2벌 올라 있었다. 요약·우편은 사건에서 온 행만 쓰므로
+// 본문(card.md)을 읽지 않는 readRows()를 직접 연결한다: 무관한 사건 뒤에도 파일 stat이 없고, heads 손상은 호출마다
+// 잡히며, 바뀐 것이 없으면 같은 배열이라 요약 쪽의 "입력 그대로면 다시 세지 않기"가 유지된다.
+export function createDashboardReaders(home, {runtime = null, listSessions = () => floor.list(), now = Date.now} = {}) {
+  const readCards = () => dashboardStores(home).summaryCards.readRows();
+  const readWorks = () => dashboardStores(home).works.readRows();
+  return {readCards, readWorks, treeInputs,
+    loadSummary: createDashboardSummaryReader(home, {runtime, listSessions, now, readCards, readWorks, treeInputs}),
+    loadMail: createDashboardMailReader(home, {runtime, now, readCards})};
 }
 
 export function cmdWall(_argv, flags) {
@@ -220,11 +241,11 @@ export function cmdWall(_argv, flags) {
   if(!Number.isInteger(cacheSec)||cacheSec<0)die('--cache-sec는 0 이상의 정수여야 한다');
   const runtime=captureRuntimeVersion();
   const home = ledgerHome();
-  const loadSummary = createDashboardSummaryReader(home, {runtime, listSessions: () => floor.list()});
+  const {loadSummary, loadMail} = createDashboardReaders(home, {runtime});
   const server = createWallServer(createWallSnapshotLoader(runtime, {summaryBodies:true}),
     {home,cacheSec,gui:true,loadSummary,runtime,
     loadLedger:createDashboardLedgerReader(home, {runtime}),
-    loadMail:createDashboardMailReader(home, {runtime}),
+    loadMail,
     loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly:true,summaryBodies:true})});
   server.on("error", (error) => {
     console.error(`오류: 관제 화면 서버 시작 실패: ${error.message}`);
