@@ -799,6 +799,35 @@ export function hasTrustPrompt(screen) {
   return no >= 0 && group.lastIndexOf(TRUST_QUESTION, no) >= 0;
 }
 
+// agy(Antigravity CLI)의 폴더 신뢰 창(2026-11-24 실측 화면 꼴, 공백은 모두 걷고 비교한다):
+//   Accessing workspace: / <경로 한 줄> / Do you trust the contents of this project? / <설명 줄들> /
+//   > Yes, I trust this folder / No, exit / ↑/↓ Navigate · enter Confirm
+// 안내 줄(`↑/↓ Navigate · enter Confirm`)이 비지 않은 마지막 줄이고 그 바로 위 두 줄이 Yes·No 선택지일 때만 창이다 — 인용만 한 글은 아래에
+// 입력창·상태 줄이 이어지므로 창으로 보지 않는다. 기본 선택이 Yes라 여기에 우편이 들어가면 Enter가 신뢰를 승인한다(2026-11-24 검수).
+// 반환: 창이 아니면 null, 맞으면 { path, pathAmbiguous, selected }(의미는 trust-accept.mjs의 readTrustSelection과 같다).
+const AGY_QUESTION = "Doyoutrustthecontentsofthisproject?", AGY_FOOTER = "↑/↓Navigate·enterConfirm", AGY_WORKSPACE = "Accessingworkspace:";
+const AGY_MARK = /^\s*[>❯]/u;
+export function readAgyTrustSelection(screen) {
+  if (typeof screen !== "string") return null;
+  const squash = text => text.replace(/\s+/gu, "");
+  const rows = screen.replace(CONTROL_SEQUENCES, "").split("\n").filter(line => squash(line));
+  const footer = rows.length - 1;
+  if (footer < 3 || squash(rows[footer]) !== AGY_FOOTER) return null;
+  const option = line => squash(line).replace(/^[>❯]/u, "");
+  const [first, second] = [rows[footer - 2], rows[footer - 1]].map(option);
+  const isYes = value => value === TRUST_YES, isNo = value => value === TRUST_NO;
+  if (!((isYes(first) && isNo(second)) || (isNo(first) && isYes(second)))) return null;
+  const yes = isYes(first) ? footer - 2 : footer - 1, no = yes === footer - 2 ? footer - 1 : footer - 2;
+  const question = rows.findLastIndex((line, i) => i < footer - 2 && squash(line) === AGY_QUESTION);
+  if (question < 0) return null;
+  const marked = rows.map((line, i) => (i > question && i < footer && AGY_MARK.test(line) ? i : -1)).filter(i => i >= 0);
+  const selected = marked.length === 1 ? (marked[0] === yes ? "yes" : marked[0] === no ? "no" : null) : null;
+  const workspace = rows.findLastIndex((line, i) => i < question && squash(line) === AGY_WORKSPACE);
+  const between = workspace < 0 ? 0 : question - workspace - 1;
+  return { path: between === 1 ? rows[workspace + 1].trim() : null, pathAmbiguous: between > 1, selected };
+}
+export const hasAgyTrustPrompt = screen => readAgyTrustSelection(screen) !== null;
+
 // Claude Code의 선택 질문 창(AskUserQuestion)이 화면 맨 끝에 떠 있는지(2026-11-23 사고: 투자감독 우편이 슈퍼감독의 질문 창
 // 직접 입력 칸("Type something.")에 붙었다. 이 창은 사람이 키를 누르지 않고 읽는 중이라 사람 입력 보호가 통과시킨다).
 // 위 신뢰 창과 같은 방식으로 이 창 하나만 양성으로 알아본다. '빈 입력창인지' 판정하는 장치는 만들지 않는다(2026-10-17 [kyle] 결정, 위 주석).
@@ -843,6 +872,13 @@ function checkTrustPrompt(session, run) {
     const error = new Error("전송 보류: 받는 Claude가 선택 질문 창을 띄워 사람의 답을 기다리는 중이다 — 보내면 본문이 그 창의 입력 칸에 섞여 " +
       "Enter로 답처럼 제출될 수 있다. 사람이 답하거나 Esc로 닫은 뒤 다시 보내라");
     error.code = "KADAN_QUESTION_DIALOG";
+    throw error;
+  }
+  if (hasAgyTrustPrompt(screen)) {
+    // 기본 선택이 Yes라 본문 뒤 Enter가 신뢰를 승인한다(역할이 사라지진 않지만 사람이 정할 일을 우편이 대신한다).
+    const error = new Error("전송 보류: 받는 agy가 폴더 신뢰 확인 창에 멈춰 있다 — 보내면 Enter가 기본 선택 \"Yes, I trust this folder\"를 눌러 " +
+      "사람 대신 신뢰를 승인한다. 사람이 창에서 직접 고르거나, 역할을 작업 저장소 폴더에서 다시 시작하라");
+    error.code = "KADAN_TRUST_PROMPT";
     throw error;
   }
   if (!hasTrustPrompt(screen)) return;
