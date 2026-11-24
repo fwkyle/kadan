@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {autoAcceptTrust, hasAgyTrustPrompt, readAgyTrustSelection} from '../src/trust-accept.mjs';
-import {hasTrustPrompt} from '../src/floor-tmux.mjs';
+import {hasTrustPrompt, sendTmux} from '../src/floor-tmux.mjs';
 import {readLedger} from '../src/ledger.mjs';
 
 const CLI = path.resolve(import.meta.dirname, '../src/cli.mjs');
@@ -127,7 +127,7 @@ test('판정 경계: 창이 아닌 화면(인용·claude 창·입력창)은 agy 
   assert.equal(hasAgyTrustPrompt(CLAUDE_SCREEN), false);
   assert.equal(hasAgyTrustPrompt(''), false);
   assert.equal(hasAgyTrustPrompt(undefined), false);
-  // 반대 방향: agy 화면에 claude 판정을 쓰는 우편 보호(sendTmux)는 걸리지 않는다 — 바꾸지 않은 것을 못 박는다.
+  // claude 판정(hasTrustPrompt)은 agy 화면을 창으로 보지 않는다 — claude 판정을 바꾸지 않은 것을 못 박는다(agy는 별도 판정).
   assert.equal(hasTrustPrompt(agyScreen()), false);
   // 실행기를 잘못 짚으면 창으로 보지 않아 키 0개.
   const wrongKind = run(CLAUDE_SCREEN);
@@ -139,11 +139,69 @@ test('판정 경계: 창이 아닌 화면(인용·claude 창·입력창)은 agy 
   assert.equal(autoAcceptTrust({...claudeOnAgy.deps, harness: 'codex'}), null);
 });
 
+test('성공: 화면 폭으로 접혀 -J로 합쳐진 긴 경로(한 줄로 읽힘)가 작업 폴더와 같으면 accepted, 합쳐도 다르면 skipped', () => {
+  const long = path.join(root, 'a'.repeat(40), 'b'.repeat(40), 'work');
+  fs.mkdirSync(long, {recursive: true});
+  assert.ok(long.length > 80);
+  const same = run(agyScreen({shown: long}), {}, {workdir: long});
+  assert.deepEqual(same.keys, ['Enter']);
+  assert.deepEqual([same.result.result, same.result.path], ['accepted', long]);
+  const other = run(agyScreen({shown: `${long}-other`}), {}, {workdir: long});
+  assert.deepEqual(other.keys, []);
+  assert.equal(other.result.result, 'skipped');
+});
+
+// ---- 우편·알림(sendTmux)도 agy 신뢰 창에서 멈춘다 ----
+function fakeRun(screen, calls) {
+  return args => {
+    calls.push(args);
+    if (args[0] === 'capture-pane') return screen;
+    if (args[0] === 'display-message') return '0\n';
+    if (args[0] === 'list-clients') return '';
+    return undefined;
+  };
+}
+const noopSpawn = () => ({});
+const keysSent = calls => calls.filter(c => ['load-buffer', 'paste-buffer', 'send-keys'].includes(c[0])).length;
+
+test('sendTmux: agy 신뢰 창이면 일반·카드·알림 전송 모두 키 0회 + KADAN_TRUST_PROMPT + not-sent', () => {
+  const variants = {
+    '일반 우편': {},
+    '카드 발령(cardIdentity)': {cardIdentity: {currentPid: '1', harness: 'agy', model: 'm'}},
+    '감시 알림(강제 차례)': {notificationGuard: {force: true, humanIdleMs: 30000}},
+  };
+  for (const selected of ['yes', 'no']) {
+    for (const [name, options] of Object.entries(variants)) {
+      const calls = [];
+      assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(agyScreen({selected}), calls), spawn: noopSpawn, ...options}), error => {
+        assert.equal(error.code, 'KADAN_TRUST_PROMPT', name);
+        assert.equal(error.delivery, 'not-sent', name);
+        assert.match(error.message, /agy가 폴더 신뢰 확인 창/);
+        return true;
+      }, name);
+      assert.equal(keysSent(calls), 0, `${name}: 키 0회`);
+      assert.deepEqual(calls.map(c => c[0]), ['capture-pane'], `${name}: 화면 읽기 한 번뿐`);
+    }
+  }
+});
+
+test('sendTmux: agy 보통 입력창·창 문구를 인용한 화면은 그대로 보낸다, claude 신뢰 창은 지금처럼 멈춘다', () => {
+  for (const screen of [INPUT_BOX, `${agyScreen()}\n${INPUT_BOX}`, '  Do you trust the contents of this project?\n> ']) {
+    const calls = [];
+    const receipt = sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn});
+    assert.equal(receipt.keyDelivery, 'sent');
+    assert.equal(calls.filter(c => c[0] === 'send-keys').length, 1);
+  }
+  const calls = [];
+  assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(CLAUDE_SCREEN, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT' && /Claude/.test(e.message));
+  assert.equal(keysSent(calls), 0);
+});
+
 // ---- 격리 tmux: 가짜 agy가 받은 키 이름을 파일로 남긴다 ----
-function world(t, tag) {
+function world(t, tag, {deep = false} = {}) {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `kadan-aa-${tag}-`)));
-  const home = path.join(dir, 'home'), work = path.join(dir, 'work'), bin = path.join(dir, 'bin');
-  for (const d of [home, work, bin]) fs.mkdirSync(d);
+  const home = path.join(dir, 'home'), work = deep ? path.join(dir, 'a'.repeat(40), 'b'.repeat(40), 'work') : path.join(dir, 'work'), bin = path.join(dir, 'bin');
+  for (const d of [home, work, bin]) fs.mkdirSync(d, {recursive: true});
   const socket = `kaa${process.pid}${tag}`;
   const env = {...process.env, PATH: `${bin}:${process.env.PATH}`, KADAN_HOME: home, KADAN_SOCKET: socket, KADAN_FLOOR: 'tmux',
     KADAN_WINDOW: 'none', KADAN_NOTIFY: 'off', KADAN_ALT_CHECK_MS: '0', KADAN_TRUST_INTERVAL_MS: '200'};
@@ -233,4 +291,25 @@ test('격리 tmux: 선택이 No인 agy 창·경로가 다른 창·끄는 스위�
   }
   assert.deepEqual(readKeys(log), []);
   assert.equal(readLedger(w.home).filter(e => e.kind === 'trust' && ['trust-e', 'trust-f'].includes(e.role)).length, 0);
+});
+
+test('격리 tmux: 화면 폭(80)으로 접힌 긴 경로가 -J로 합쳐져 작업 폴더와 같으면 Enter 1회·accepted, 합쳐도 다르면 키 0개', t => {
+  if (!hasTmux()) return t.skip('tmux 없음');
+  const w = world(t, 'f', {deep: true});
+  assert.ok(w.work.length > 90, `접힘이 일어나려면 80자를 넘어야 한다: ${w.work.length}`);
+  const log = writeFakeAgy(w, {shown: '%CWD%-other'});
+  // 대조군(먼저): 합쳐도 작업 폴더와 다른 경로. 화면이 남아 있어 실제로 접혔는지(-J 없이 읽으면 한 줄에 안 들어감)도 확인한다.
+  assert.equal(start(w, 'trust-g', 'agy').status, 0);
+  assert.deepEqual(readKeys(log), []);
+  assert.deepEqual(readLedger(w.home).filter(e => e.kind === 'trust').map(e => [e.result, e.reason, e.keys, e.screenPath]),
+    [['skipped', 'path-mismatch', [], `${w.work}-other`]]);
+  const plain = w.tmux('capture-pane', '-p', '-t', '=kadan-trust-g:').stdout;
+  assert.ok(!plain.split('\n').some(line => line.includes(`${w.work}-other`)), '-J 없이는 경로가 한 줄에 없다(접힘)');
+  // 같은 경로(접힘): accepted
+  writeFakeAgy(w, {shown: '%CWD%'});
+  const r = start(w, 'trust-h', 'agy');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(readKeys(log), ['Enter']);
+  assert.deepEqual(readLedger(w.home).filter(e => e.role === 'trust-h' && e.kind === 'trust').map(e => [e.result, e.keys, e.screenPath]),
+    [['accepted', ['Enter'], w.work]]);
 });
