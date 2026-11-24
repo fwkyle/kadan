@@ -101,7 +101,52 @@ function recentAlertsFor(index,names){
  return [...picked].sort((a,b)=>a[0]-b[0]).slice(-RECENT_ALERTS).map(([,e])=>({at:e.t,role:e.role??null,
   kind:e.alertKind,recipient:e.recipient,route:e.route??null,delivered:e.delivered??null,resolved:e.resolved===true}));
 }
-export function watchOverview({center,entries,works=[],processes,processError=null,readFile=file=>fs.readFileSync(file,'utf8'),now=Date.now(),profilePath=null}){
+// 비싼 파생(감시 범위·판 목록)은 입력 참조가 같으면 다시 만들지 않는다. 한 세대만 든다.
+// Why: 대시보드 수집마다 원장 전체 훑기(감독 범위 약 0.5초)와 1,477개 판 순회를 반복했다. 입력이 10배면 이 계산도 10배다.
+// 시각·프로세스·주기·알림에 달린 값(cycle·verdict·aiActivity·recentAlerts)은 담지 않고 매번 새로 계산한다.
+const MEMO_MAX_AGE_MS=60_000,NO_WORKS=Object.freeze([]);
+let scopeMemo=null,boardMemo=null;
+const memoBuilds={scopes:0,boards:0};
+// 시험·진단용: 비싼 파생을 만든 횟수.
+export function watchOverviewMemoInfo(){return {...memoBuilds};}
+const fresh=(memo,now)=>now>=memo.at&&now-memo.at<MEMO_MAX_AGE_MS;
+function scopesFor({cardsRef,cardsOf,entries,parents,parentsKey,works,now}){
+ const m=scopeMemo;
+ const same=m&&m.cardsRef===cardsRef&&m.entries===entries&&m.length===entries.length
+  &&m.works===works&&m.parentsKey===parentsKey&&fresh(m,now);
+ if(same)return m;
+ const cards=cardsOf();
+ const next={cardsRef,entries,length:entries.length,works,parentsKey,at:now,
+  scope:buildWatchScope(cards,entries,parents,works),supervisorScope:buildSupervisorScope(cards,entries,parents,works)};
+ scopeMemo=next;memoBuilds.scopes++;
+ return next;
+}
+const sameSet=(a,b)=>a.size===b.size&&[...a].every(x=>b.has(x));
+// 판마다 대상 역할 목록. 시각과 무관한 값만 만든다(aiActivity·recentAlerts는 부르는 쪽이 매번 붙인다).
+function prepareBoards({center,scope,supervisorScope,works,parents,live,index,ledgerKnown,processState}){
+ const cardList=center.cards??center.boards.flatMap(b=>b.cards);
+ const identity=taskIdentity(Array.isArray(cardList)?cardList:[]);
+ return center.boards.map(board=>{
+  const ids=new Set(board.cards.map(c=>identity.taskIdFor(c))),keys=new Set(board.cards.map(c=>c.key));
+  const names=new Set(scope?.entries.filter(e=>ids.has(e.taskId)).map(e=>e.role)??[]);
+  const ownsWork=e=>works.some(w=>w.key===e.workKey&&(w.board===board.name||w.executions.some(x=>keys.has(x.key))));
+  const supervisors=new Set(supervisorScope?.entries.filter(e=>ids.has(e.taskId)||ownsWork(e)).map(e=>e.role)??[]);
+  for(const role of supervisors)names.add(role);
+  const roles=[...names].map(role=>({role,parent:parents?.get(role)??null,registered:parents?parents.has(role):null,
+   recipient:parents?.has(role)&&center.runtimeKnown?hierarchyRecipient(role,parents,live):null,
+   route:parents?.has(role)&&center.runtimeKnown?hierarchyRoute(role,parents,live):null,
+   recipientKnown:!!(parents?.has(role)&&center.runtimeKnown),scope:supervisors.has(role)?'supervisor-health':'card',
+   observer:watchAILabel(supervisors.has(role)?'supervisor-health':'worker'),
+   ...(supervisors.has(role)?{checkIntervalMinutes:60,lastCheckedAt:index.lastChecked.get(role)??null}: {})}));
+  const missing=roles.filter(r=>r.registered===false).map(r=>r.role);
+  const state=!ledgerKnown?'unknown':processState==='absent'?'absent':processState==='duplicate'?'duplicate'
+   :!scope?'unknown':!roles.length?'not-required':missing.length?'incomplete':'configured';
+  return {name:board.name,state,names,roles:orderWatchRoles(roles),missingRoles:missing,
+   registeredRoles:scope?roles.filter(r=>r.registered).length:null,totalRoles:scope?roles.length:null};
+ });
+}
+export function watchOverview({center,entries,works=NO_WORKS,processes,processError=null,
+ readFile=file=>fs.readFileSync(file,'utf8'),now=Date.now(),profilePath=null}){
  const result={checkedAt:new Date(now).toISOString(),process:{state:processError?'unknown':processes.length===1?'running':processes.length?'duplicate':'absent',instances:processes,error:processError},configuration:{state:'unknown'},cycle:{state:'unknown',reason:'감시 주기 완료 기록 없음 — 프로세스 생존과 구분'},boards:[],profilePath};
  let parents=null;
  const worker=processes.length===1?processes[0]:null;
@@ -126,35 +171,49 @@ export function watchOverview({center,entries,works=[],processes,processError=nu
   }
  }
  let scope=null,supervisorScope=null;
+ const parentsKey=parents?result.configuration.currentHash:null;
  if(ledgerKnown&&parents){
-  try{const cards=center.cards??center.boards.flatMap(b=>b.cards);scope=buildWatchScope(cards,entries,parents,works);supervisorScope=buildSupervisorScope(cards,entries,parents,works);}
+  try{
+   const cardsOf=()=>center.cards??center.boards.flatMap(b=>b.cards);
+   const found=scopesFor({cardsRef:center.cards??center.boards,cardsOf,entries,parents,parentsKey,works,now});
+   scope=found.scope;supervisorScope=found.supervisorScope;
+  }
   catch{Object.assign(result.configuration,{state:'unknown',reason:'감시 대상 카드를 읽거나 검증할 수 없습니다'});}
  }
  const live=new Set((center.roles??[]).filter(r=>r.life?.state==='alive'&&r.life?.pidState==='match').map(r=>'kadan-'+r.role));
- const cardList=center.cards??center.boards.flatMap(b=>b.cards);
- const identity=taskIdentity(Array.isArray(cardList)?cardList:[]);
- for(const board of center.boards){
-  const ids=new Set(board.cards.map(c=>identity.taskIdFor(c))),keys=new Set(board.cards.map(c=>c.key));
-  const names=new Set(scope?.entries.filter(e=>ids.has(e.taskId)).map(e=>e.role)??[]);
-  const supervisors=new Set(supervisorScope?.entries.filter(e=>ids.has(e.taskId)||works.some(w=>w.key===e.workKey&&(w.board===board.name||w.executions.some(x=>keys.has(x.key))))).map(e=>e.role)??[]);
-  for(const role of supervisors)names.add(role);
-  const roles=[...names].map(role=>({role,parent:parents?.get(role)??null,registered:parents?parents.has(role):null,
-   recipient:parents?.has(role)&&center.runtimeKnown?hierarchyRecipient(role,parents,live):null,
-   route:parents?.has(role)&&center.runtimeKnown?hierarchyRoute(role,parents,live):null,
-   recipientKnown:!!(parents?.has(role)&&center.runtimeKnown),scope:supervisors.has(role)?'supervisor-health':'card',
-   observer:watchAILabel(supervisors.has(role)?'supervisor-health':'worker'),
-   ...(supervisors.has(role)?{checkIntervalMinutes:60,lastCheckedAt:index.lastChecked.get(role)??null}: {})}));
-  const missing=roles.filter(r=>r.registered===false).map(r=>r.role);
-  const state=!ledgerKnown?'unknown':result.process.state==='absent'?'absent':result.process.state==='duplicate'?'duplicate':!scope?'unknown':!roles.length?'not-required':missing.length?'incomplete':'configured';
-  result.boards.push({name:board.name,state,roles:orderWatchRoles(roles),missingRoles:missing,registeredRoles:scope?roles.filter(r=>r.registered).length:null,totalRoles:scope?roles.length:null,
+ const memo=boardMemo,processState=result.process.state;
+ const reuse=memo&&memo.boards===center.boards&&memo.scope===scope&&memo.supervisorScope===supervisorScope
+  &&memo.works===works&&memo.parentsKey===parentsKey&&memo.index===index&&memo.ledgerKnown===ledgerKnown
+  &&memo.runtimeKnown===center.runtimeKnown&&memo.processState===processState&&sameSet(memo.live,live)&&fresh(memo,now);
+ let prepared;
+ if(reuse)prepared=memo.prepared;
+ else{
+  prepared=prepareBoards({center,scope,supervisorScope,works,parents,live,index,ledgerKnown,processState});
+  boardMemo={boards:center.boards,scope,supervisorScope,works,parentsKey,index,ledgerKnown,
+   runtimeKnown:center.runtimeKnown,processState,live,prepared,at:now};
+  memoBuilds.boards++;
+ }
+ for(const {names,...board} of prepared){
+  result.boards.push({name:board.name,state:board.state,roles:board.roles,missingRoles:board.missingRoles,
+   registeredRoles:board.registeredRoles,totalRoles:board.totalRoles,
    aiActivity:aiActivityFor(scope?index:null,names,now),
-  recentAlerts:ledgerKnown?recentAlertsFor(index,names):null});
+   recentAlerts:ledgerKnown?recentAlertsFor(index,names):null});
  }
  // 감시기가 쓰는 route/--super 이름이 살아 있는 세션인지(주기 기록의 설정 + 지금 살아 있는 역할). 모르면 경고하지 않는다.
  const cs=result.cycle?.settings;
  result.routeNames=worker&&center.runtimeKnown&&cs&&(cs.routes||cs.superRole)?watchRouteNameWarnings(cs.routes??{},cs.superRole??null,live):[];
  result.verdict=watchVerdict(result,now);
  return result;
+}
+// 감시 프로세스 목록(ps)을 잠깐 재사용한다. 대시보드 수집마다 ps를 부르지 않는다(실측 약 60ms).
+// 실패는 저장하지 않고 그대로 던져 '모름'으로 보인다. 감시 이름이 바뀌면 다시 읽는다.
+export function createCachedWatchProcesses({read=readWatchProcesses,spawn=spawnSync,ttlMs=15_000,now=Date.now}={}){
+ let cached=null;
+ return name=>{
+  const at=now();
+  if(!cached||cached.name!==name||at<cached.at||at-cached.at>=ttlMs)cached={name,at,value:read(spawn,name)};
+  return cached.value;
+ };
 }
 export function attachWatchOverview(center,entries,options={}){
  let processes=[],processError=null;

@@ -340,8 +340,11 @@ test('원장 밖 입력은 다음 요청에 바로 보인다: 세션 생존·대
     clock.tick(15_000);
     const snapshots = f.collect();
     assertSame(f, snapshots, '대기 꼬리 ' + text);
-    assert.ok(JSON.stringify(snapshots.full.center.roles).includes(text) || JSON.stringify(snapshots.full.tree).includes(text),
-      '꼬리 글이 수집 결과에 들어 있다');
+    // 대기 출력 꼬리는 옛 화면 전용이라 서버 수집(요약 본문 모드)은 건너뛴다. 켜 달라고 하면 최신 꼬리가 들어 있다.
+    const served = JSON.stringify([snapshots.full.center.roles, snapshots.full.tree]);
+    assert.ok(!served.includes(text), '서버 수집에는 꼬리 글이 없다');
+    const withTail = loadWallSnapshot(null, {summaryBodies: true, includeWaitSnapshots: true});
+    assert.ok(JSON.stringify(withTail.tree).includes(text), '꼬리 글을 켠 수집에는 최신 꼬리가 들어 있다');
   }
   // 관계표 파일만 바뀜(원장 사건 없음): 새 관계표가 보이고 관계표를 읽는 조각만 다시 계산한다.
   const before = misses(['previous-generation', 'hierarchy', 'briefs', 'workspace-rows']);
