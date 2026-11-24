@@ -8,6 +8,9 @@ import { waitForSettled } from './quickstart.mjs';
 import { shellArg } from './adopt-permissions.mjs';
 
 export const ADOPT_PROFILES = ['conductor', 'super'];
+export const ADOPT_HARNESSES = ['claude', 'codex', 'agy', 'omo'];
+// agy·omo는 새 창의 대화 ID·권한을 확인할 길이 없어 인수 확인(accept)과 원본 탭 자동 닫기를 하지 않는다(2026-11-24).
+export const ADOPT_UNCHECKED_HARNESSES = ['agy', 'omo'];
 const SAFE = /^[\w.:/@-]+$/;
 // 큰 문맥 모델 이름(예: claude-opus-5-5[1m])은 대괄호가 있어 셸이 파일 이름 패턴으로 읽지 않게 따옴표로 감싼다.
 // 긴 대화를 옮길 때는 원래와 같은 큰 문맥 모델이어야 문맥이 넘치지 않는다.
@@ -25,7 +28,14 @@ export function adoptCommand({ harness, id, model, effort, permissionArgs = [] }
   const permissions = permissionArgs.map(arg => ` ${shellArg(arg)}`).join('');
   if (harness === 'claude') return `claude --resume ${id} --fork-session --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}${permissions}`;
   if (harness === 'codex') return `codex fork ${id} --model ${shellModel(model)}${effort ? ` -c model_reasoning_effort=${effort}` : ''}${permissions}`;
-  throw usageError('--harness는 claude 또는 codex다');
+  // agy는 복제 옵션이 없어 같은 대화를 이어 연다(원본 탭을 닫는 흐름이라 충돌하지 않는다). omo는 --fork로 복제한다.
+  // omo의 생각 강도는 모델 문자열의 `:<thinking>`이라 따로 붙이지 않는다 — 몰래 버리지 않고 거절한다.
+  if (harness === 'agy') return `agy --conversation ${id} --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}`;
+  if (harness === 'omo') {
+    if (effort) throw usageError('omo는 --effort 대신 --model provider/모델:<강도>로 강도를 적는다');
+    return `omo --fork ${id} --model ${shellModel(model)}`;
+  }
+  throw usageError(`--harness는 ${ADOPT_HARNESSES.join('·')} 중 하나다`);
 }
 
 // 지금 대화가 스스로 밝힌 ID와 생각 강도. Claude Code는 실행 중인 대화 ID를 CLAUDE_CODE_SESSION_ID로, 강도를 CLAUDE_EFFORT로
@@ -55,12 +65,12 @@ export function adoptPrompt(role, parent, profile = 'conductor') {
 
 export function runAdopt({role, flags = {}, env = process.env, floor, sessionName, start, send,
   log = console.log, sleep, findTranscript = findClaudeTranscript, inherit, prepare,
-  notice = () => {}, monitor = () => {}} = {}) {
-  if (!role || /\s/.test(role)) throw usageError('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt] [--inherit-mail]');
+  notice = () => {}, monitor = () => {}, detect = detectConversation} = {}) {
+  if (!role || /\s/.test(role)) throw usageError('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex|agy|omo] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt] [--inherit-mail]');
   const conversation = typeof flags.resume === 'string'
     ? { harness: typeof flags.harness === 'string' ? flags.harness : 'claude', id: flags.resume }
-    : detectConversation(env);
-  if (!conversation) throw usageError('옮길 대화를 모른다 — Claude Code 안에서 실행하거나 --resume <대화ID> --harness codex로 알려 줘라');
+    : detect(env);
+  if (!conversation) throw usageError('옮길 대화를 모른다 — Claude Code·agy 안에서 실행하거나 --resume <대화ID> --harness codex|agy|omo로 알려 줘라');
   const profile = typeof flags.profile === 'string' ? flags.profile : 'conductor';
   if (!ADOPT_PROFILES.includes(profile)) throw usageError('--profile은 conductor(감독) 또는 super(슈퍼감독)다');
   const parent = typeof flags.parent === 'string' ? flags.parent : '@user';
@@ -80,6 +90,7 @@ export function runAdopt({role, flags = {}, env = process.env, floor, sessionNam
   const cmd = adoptCommand({...conversation, model: flags.model,
     effort: typeof flags.effort === 'string' ? flags.effort : conversation.effort,
     permissionArgs: inherited?.permissions.args || []});
+  if (inherited?.unsupported) log(inherited.unsupported);
   const nameCheck = start([role], {cmd, profile, parent, hidden: Boolean(flags.hidden),
     reason: `대화 옮기기(adopt): ${conversation.harness} ${conversation.id}`,
     ...(flags['inherit-mail'] === true ? {'inherit-mail': true} : {})});

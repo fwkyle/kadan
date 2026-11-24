@@ -41,6 +41,8 @@ kadan adopt 프로젝트-감독 --model opus
 kadan adopt 프로젝트-감독 --model opus --resume <대화ID> --harness claude
 ```
 
+실행기는 `--harness claude|codex|agy|omo` 중 하나다. [agy·omo](#agyomo-대화)는 아래 표의 제한이 있다.
+
 1. 원본 대화의 현재 권한을 읽고 같은 모델·지정한 생각 강도로 복제본을 연다.
 2. 새 감독이 목표·승인 범위·다음 행동을 읽고 첫 안내의 인수 명령을 한 번 실행한다.
 3. 새 감독의 실제 권한과 프로세스, 원본 탭이 그대로인지 확인한 뒤 원본 탭을 닫고 목록에서 제거한다.
@@ -72,6 +74,19 @@ kadan adopt status <인수ID>
   그 밖의 모드에서는 새 감독이 그 도구를 쓸 때 확인 창이 더 뜰 수 있다(더 엄격해질 뿐 넓어지지 않는다).
   제한 옵션이 함께 있으면 위 규칙대로 거절한다.
   허용 목록 값 안에 제한 옵션 이름이 들어 있으면(예: `Bash(dotnet test --settings x *)`) 인자 경계를 확인할 수 없어 거절한다.
+
+## agy·omo 대화
+
+agy(Antigravity CLI)와 omo 대화도 감독·슈퍼감독 세션으로 이어 연다. 새 창에서 대화 ID·권한을 확인할 길이 없어 claude·codex와 다른 점이 있다.
+
+| 실행기 | 이어 여는 명령 | 대화 ID | 권한·강도 | 원본 탭 |
+| --- | --- | --- | --- | --- |
+| agy | `agy --conversation <ID> --model <모델> [--effort <강도>]`. 복제 옵션이 없어 같은 대화를 이어 연다 | agy 안에서 실행하면 자동. 그 agy 프로세스가 열어 둔 `~/.gemini/antigravity-cli/presence/<ID>.lock`이 정확히 하나이고 같은 ID의 `conversations/<ID>.db`가 있을 때만 쓴다. 아니면 `--resume <ID>` 필수 | 못 읽는다. 기본 권한으로 열고 화면에 한 줄 안내한다 | 닫지 않는다. 같은 대화이므로 직접 닫는다 |
+| omo | `omo --fork <ID> --model <provider/모델[:강도]>`. 새 세션으로 복제한다 | 알 방법이 없어 `--resume <ID>` 필수(세션 파일 이름의 UUID, 같은 폴더에서 실행) | 못 읽는다. `--effort`는 받지 않고 거절한다 — 강도는 `--model openai/모델:high`처럼 모델 이름에 적는다 | 닫지 않는다. omo는 bun으로 도는 스크립트라 프로세스 이름으로 원본을 찾지 못한다 |
+
+- agy·omo는 인수 확인(`adopt accept`)과 원본 Rottie 탭 닫기를 하지 않는다(새 창의 대화·권한을 원본과 대조할 수 없다). 첫 안내에 인수 명령이 없고, 원본 탭은 사용자가 직접 닫는다.
+- 없던 권한을 새로 붙이지 않는다. 원본의 권한 옵션(예: agy `--dangerously-skip-permissions`)은 이어받지 못하므로 새 감독은 기본 권한으로 뜬다.
+- agy는 같은 대화를 두 창이 동시에 열 수 있다. 옮긴 뒤 원본 탭에서는 더 지시하지 않는다.
 
 ## 비서가 이어받는 경우
 
