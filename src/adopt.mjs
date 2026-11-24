@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { waitForSettled } from './quickstart.mjs';
 import { shellArg } from './adopt-permissions.mjs';
+import { fillTemplate, runnerTemplate } from './runner-table.mjs';
 
 export const ADOPT_PROFILES = ['conductor', 'super'];
 export const ADOPT_HARNESSES = ['claude', 'codex', 'agy', 'omo'];
@@ -21,7 +22,7 @@ const usageError = message => Object.assign(new Error(message), {code: ADOPT_USA
 const shellModel = (model) => (/[[\]]/.test(model) ? `'${model}'` : model);
 
 // 실행기마다 "복제해서 이어 열기" 명령이 다르다. 모델은 꼭 적는다 — 모델이 안 적힌 창에는 카드 전송이 거부된다.
-export function adoptCommand({ harness, id, model, effort, permissionArgs = [] } = {}) {
+export function adoptCommand({ harness, id, model, effort, permissionArgs = [], resumeTemplate } = {}) {
   if (!id || !SAFE.test(id)) throw usageError('대화 ID가 비었거나 쓸 수 없는 글자가 있다');
   if (!model || !SAFE_MODEL.test(model)) throw usageError('--model이 필요하다 — 옮긴 감독 창에 모델이 적혀 있어야 카드 전송이 된다');
   if (effort !== undefined && !/^[a-z]+$/.test(effort)) throw usageError('--effort는 영문 소문자 한 낱말이다(예: high)');
@@ -29,7 +30,13 @@ export function adoptCommand({ harness, id, model, effort, permissionArgs = [] }
   if (harness === 'claude') return `claude --resume ${id} --fork-session --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}${permissions}`;
   if (harness === 'codex') return `codex fork ${id} --model ${shellModel(model)}${effort ? ` -c model_reasoning_effort=${effort}` : ''}${permissions}`;
   // agy는 복제 옵션이 없어 같은 대화를 이어 연다(원본 탭을 닫는 흐름이라 충돌하지 않는다). omo는 --fork로 복제한다.
+  // agy는 실행기 표의 resume 틀(카단 start로 띄운 agy와 같은 권한 옵션)이 있으면 그 틀로 만든다(2026-11-24 [kyle]).
+  // 틀에 {effort} 자리가 없으면 강도는 지금처럼 뒤에 덧붙인다.
   // omo의 생각 강도는 모델 문자열의 `:<thinking>`이라 따로 붙이지 않는다 — 몰래 버리지 않고 거절한다.
+  if (harness === 'agy' && resumeTemplate) {
+    const filled = fillTemplate(resumeTemplate, { model: shellModel(model), effort, conversation: id });
+    return resumeTemplate.includes('{effort}') || !effort ? filled : `${filled} --effort ${effort}`;
+  }
   if (harness === 'agy') return `agy --conversation ${id} --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}`;
   if (harness === 'omo') {
     if (effort) throw usageError('omo는 --effort 대신 --model provider/모델:<강도>로 강도를 적는다');
@@ -61,6 +68,21 @@ export function findClaudeTranscript({ id, cwd = process.cwd(), userHome = os.ho
   return { ok: false, elsewhere };
 }
 
+// 실행기 표(runner-settings)의 agy resume 틀을 꺼낸다. 못 읽거나 이어 열 틀로 쓸 수 없으면 {error}만 돌려 부른 쪽이 기본 명령으로 내려간다.
+export function agyResumeTemplate(readSettings) {
+  try {
+    const settings = readSettings?.();
+    if (!settings) return { error: '실행 모델 설정 파일이 없다' };
+    const template = runnerTemplate(settings, 'agy', 'resume');
+    if (!/^agy\s/.test(template) || !template.includes('{conversation}') || !template.includes('{model}') || /\{(prompt|cwd)\}/.test(template)) {
+      return { error: 'agy resume 틀이 `agy … {model} … {conversation}` 꼴이 아니다' };
+    }
+    return { template };
+  } catch (error) {
+    return { error: error.message };
+  }
+}
+
 export function adoptPrompt(role, parent, profile = 'conductor') {
   const title = profile === 'super' ? '슈퍼감독' : '감독';
   return `당신은 이제 카단의 ${title} '${role}'입니다(직속 상위 ${parent === '@user' ? '사용자' : parent}). ` +
@@ -69,9 +91,15 @@ export function adoptPrompt(role, parent, profile = 'conductor') {
     '감독은 직접 구현하지 않고 작업자·검수자에게 맡깁니다. 결정이 필요하면 사용자에게 묻습니다.';
 }
 
+// agy는 복제가 아니라 같은 대화를 이어 열어서, 새 창이 자기를 원래 탭으로 여기고 원래 탭의 "여기서 멈춘다"를 따랐다(2026-11-24 첫 실사용).
+// 그래서 agy일 때만 첫 안내 맨 앞에 이 창이 새 감독 창임을 밝힌다. claude·codex·omo는 새 세션이라 넣지 않는다.
+export function agySameConversationNotice(session) {
+  return `지금 이 창(${session})이 kadan adopt로 이어 연 새 감독 창이다. 원래 탭이 아니며, 원래 탭에서 한 "멈춘다"는 말은 이 창에 해당하지 않는다. 맡은 범위를 이어서 진행하라.`;
+}
+
 export function runAdopt({role, flags = {}, env = process.env, floor, sessionName, start, send,
   log = console.log, sleep, findTranscript = findClaudeTranscript, inherit, prepare,
-  notice = () => {}, monitor = () => {}, detect = detectConversation} = {}) {
+  notice = () => {}, monitor = () => {}, detect = detectConversation, readRunnerSettings} = {}) {
   if (!role || /\s/.test(role)) throw usageError('사용법: kadan adopt <감독이름> --model <모델> [--resume <대화ID> --harness claude|codex|agy|omo] [--effort high] [--parent @user|<역할>] [--profile conductor|super] [--hidden] [--no-prompt] [--inherit-mail]');
   // 실행기를 지정했으면 이름부터 검증하고, 지정한 실행기와 다른 대화는 자동 감지로도 열지 않는다(검수 exec-b189a814).
   if (flags.harness !== undefined && typeof flags.harness !== 'string') throw usageError('--harness에는 값이 필요하다(claude·codex·agy·omo)');
@@ -98,10 +126,14 @@ export function runAdopt({role, flags = {}, env = process.env, floor, sessionNam
   }
 
   const inherited = inherit ? inherit(conversation) : null;
+  // agy: 실행기 표 resume 틀(권한 옵션 포함)로 연다. 틀을 못 읽으면 기본 명령(권한 옵션 없음)으로 열고 사실대로 한 줄 알린다.
+  const agy = conversation.harness === 'agy' ? agyResumeTemplate(readRunnerSettings) : null;
   const cmd = adoptCommand({...conversation, model: flags.model,
     effort: typeof flags.effort === 'string' ? flags.effort : conversation.effort,
-    permissionArgs: inherited?.permissions.args || []});
+    permissionArgs: inherited?.permissions.args || [], resumeTemplate: agy?.template});
   if (inherited?.unsupported) log(inherited.unsupported);
+  if (agy?.template) log('agy 권한: 실행기 표의 agy resume 틀대로 연다(카단 start로 띄운 agy와 같은 권한).');
+  else if (agy) log(`agy 권한: 실행기 표 resume 틀을 쓰지 못해(${agy.error}) 권한 옵션 없는 기본 명령으로 연다 — 우편 전송 때마다 확인 창이 뜰 수 있다.`);
   const nameCheck = start([role], {cmd, profile, parent, hidden: Boolean(flags.hidden),
     reason: `대화 옮기기(adopt): ${conversation.harness} ${conversation.id}`,
     ...(flags['inherit-mail'] === true ? {'inherit-mail': true} : {})});
@@ -109,7 +141,8 @@ export function runAdopt({role, flags = {}, env = process.env, floor, sessionNam
   const out = { role, session, cmd, parent, profile, prompt: 'skipped', ...(nameCheck ?? {}),
     ...(transfer ? {adoptionId: transfer.id, status: 'awaiting-acceptance'} : {}) };
   if (transfer && !flags['no-prompt']) monitor(transfer.id);
-  const firstMessage = adoptPrompt(role, parent, profile)
+  const firstMessage = (conversation.harness === 'agy' ? `${agySameConversationNotice(session)}\n\n` : '')
+    + adoptPrompt(role, parent, profile)
     + (transfer ? `\n\n${transfer.instruction}` : '');
   if (!flags['no-prompt']) {
     const settled = waitForSettled({ read: () => floor.read(session), ...(sleep ? { sleep } : {}) });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { adoptCommand, ADOPT_UNCHECKED_HARNESSES, detectConversation, detectForAdopt, runAdopt } from '../src/adopt.mjs';
+import { adoptCommand, adoptPrompt, agySameConversationNotice, ADOPT_UNCHECKED_HARNESSES, detectConversation, detectForAdopt, runAdopt } from '../src/adopt.mjs';
 import { findAgyConversation } from '../src/adopt-process.mjs';
 import { inspectCardSendIdentity } from '../src/ai-identity.mjs';
 
@@ -158,4 +158,71 @@ test('adopt 출력: agy는 같은 대화 이어 열기, 첫 안내 전송 줄에
   const omo = fakes();
   runAdopt({ role: '감독', flags: { model: 'openai/gpt-6', resume: ID, harness: 'omo' }, env: {}, ...omo.deps });
   assert.ok(omo.calls.log.some((l) => l.startsWith('복제 창 생성: omo 대화')));
+});
+
+test('adopt 첫 안내: agy만 맨 앞에 "이 창이 새 감독 창" 한 줄과 세션 이름이 들어가고 claude·codex·omo는 그대로다', () => {
+  const agy = fakes();
+  runAdopt({ role: '감독-agy', flags: { model: 'gemini-4-neon-xhigh', resume: ID, harness: 'agy' }, env: {}, ...agy.deps });
+  const message = agy.calls.send[0].message;
+  assert.ok(message.startsWith(agySameConversationNotice('kadan-감독-agy')));
+  assert.match(message.split('\n')[0], /^지금 이 창\(kadan-감독-agy\)이 kadan adopt로 이어 연 새 감독 창이다/);
+  assert.ok(message.endsWith(adoptPrompt('감독-agy', '@user')), '나머지 안내는 그대로');
+  for (const [harness, model] of [['codex', 'gpt-6'], ['omo', 'openai/gpt-6:high'], ['claude', 'opus']]) {
+    const { calls, deps } = fakes();
+    runAdopt({ role: `감독-${harness}`, flags: { model, resume: ID, harness }, env: {}, findTranscript: () => ({ ok: true }), ...deps });
+    assert.equal(calls.send[0].message, adoptPrompt(`감독-${harness}`, '@user'), harness);
+    assert.doesNotMatch(calls.send[0].message, /새 감독 창이다/, harness);
+  }
+});
+
+// 실행기 표의 agy resume 틀(2026-11-24 [kyle]): adopt가 카단 start로 띄운 agy와 같은 권한 옵션으로 이어 연다.
+const AGY_RESUME = 'agy --model {model} --dangerously-skip-permissions --conversation {conversation}';
+const tableOf = (resume) => () => ({ runners: { agy: { spawn: 'agy --model {model} --dangerously-skip-permissions', resume } } });
+
+test('adopt agy: 실행기 표 resume 틀(권한 옵션 포함)로 이어 열고, 강도는 뒤에 덧붙이며, 카드 전송 신원 확인을 통과한다', () => {
+  const { calls, deps } = fakes();
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {},
+    readRunnerSettings: tableOf(AGY_RESUME), ...deps });
+  const cmd = `agy --model gemini-4-neon-high --dangerously-skip-permissions --conversation ${ID}`;
+  assert.equal(calls.start[0].flags.cmd, cmd);
+  assert.ok(calls.log.some((l) => l.includes('실행기 표의 agy resume 틀대로')));
+  const identity = inspectCardSendIdentity({ entries: [{ kind: 'start', session: 'kadan-r', panePid: '1', cmd }], session: 'kadan-r', currentPid: '1' });
+  assert.equal(identity.ok, true);
+  const withEffort = fakes();
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy', effort: 'high' }, env: {},
+    readRunnerSettings: tableOf(AGY_RESUME), ...withEffort.deps });
+  assert.equal(withEffort.calls.start[0].flags.cmd, `${cmd} --effort high`);
+});
+
+test('adopt agy: 표의 resume 틀을 바꾸면 명령이 따라간다(adopt에 명령 모양을 따로 두지 않는다)', () => {
+  const { calls, deps } = fakes();
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {},
+    readRunnerSettings: tableOf('agy --conversation {conversation} --yolo --model {model}'), ...deps });
+  assert.equal(calls.start[0].flags.cmd, `agy --conversation ${ID} --yolo --model gemini-4-neon-high`);
+});
+
+test('adopt agy: 표를 못 읽거나 resume 틀이 이어 열 꼴이 아니면 기본 명령으로 열고 사실대로 한 줄 알린다', () => {
+  const bad = [() => null, () => { throw new Error('손상'); }, tableOf(''), tableOf('agy --model {model}'),
+    tableOf('agy --print {prompt} --model {model} --conversation {conversation}'), tableOf('sh -c {model} {conversation}')];
+  for (const readRunnerSettings of bad) {
+    const { calls, deps } = fakes();
+    runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {}, readRunnerSettings, ...deps });
+    assert.equal(calls.start[0].flags.cmd, `agy --conversation ${ID} --model gemini-4-neon-high`);
+    assert.ok(calls.log.some((l) => l.includes('권한 옵션 없는 기본 명령으로 연다')));
+  }
+});
+
+test('adopt: omo·claude·codex 명령은 표를 읽어도 그대로다', () => {
+  const settings = tableOf(AGY_RESUME);
+  for (const [harness, model, cmd] of [
+    ['omo', 'openai/gpt-6:high', `omo --fork ${ID} --model openai/gpt-6:high`],
+    ['codex', 'gpt-6', `codex fork ${ID} --model gpt-6`],
+    ['claude', 'opus', `claude --resume ${ID} --fork-session --model opus`],
+  ]) {
+    const { calls, deps } = fakes();
+    runAdopt({ role: `감독-${harness}`, flags: { model, resume: ID, harness }, env: {}, findTranscript: () => ({ ok: true }),
+      readRunnerSettings: settings, ...deps });
+    assert.equal(calls.start[0].flags.cmd, cmd, harness);
+    assert.ok(!calls.log.some((l) => l.startsWith('agy 권한')), harness);
+  }
 });

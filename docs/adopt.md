@@ -81,12 +81,12 @@ agy(Antigravity CLI)와 omo 대화도 감독·슈퍼감독 세션으로 이어 �
 
 | 실행기 | 이어 여는 명령 | 대화 ID | 권한·강도 | 원본 탭 |
 | --- | --- | --- | --- | --- |
-| agy | `agy --conversation <ID> --model <모델> [--effort <강도>]`. 복제 옵션이 없어 같은 대화를 이어 연다 | agy 안에서 실행하면 자동. 그 agy 프로세스가 열어 둔 `~/.gemini/antigravity-cli/presence/<ID>.lock`이 정확히 하나이고 같은 ID의 `conversations/<ID>.db`가 있을 때만 쓴다. 아니면 `--resume <ID>` 필수 | 못 읽는다. 기본 권한으로 열고 화면에 한 줄 안내한다 | 닫지 않는다. 같은 대화이므로 직접 닫는다 |
+| agy | 실행 모델 설정 실행기 표 `agy`의 `resume` 틀(기본 `agy --model {model} --dangerously-skip-permissions --conversation {conversation}`)에 값을 채우고, `--effort`는 뒤에 덧붙인다. 복제 옵션이 없어 같은 대화를 이어 연다. 표를 못 읽거나 틀이 이어 열 꼴이 아니면 `agy --conversation <ID> --model <모델> [--effort <강도>]`(권한 옵션 없음)로 열고 화면에 사실대로 한 줄 알린다 | agy 안에서 실행하면 자동. 그 agy 프로세스가 열어 둔 `~/.gemini/antigravity-cli/presence/<ID>.lock`이 정확히 하나이고 같은 ID의 `conversations/<ID>.db`가 있을 때만 쓴다. 아니면 `--resume <ID>` 필수 | 원본 권한은 못 읽는다. 표의 resume 틀 권한을 따른다(위) | 닫지 않는다. 같은 대화이므로 직접 닫는다 |
 | omo | `omo --fork <ID> --model <provider/모델[:강도]>`. 새 세션으로 복제한다 | 알 방법이 없어 `--resume <ID>` 필수(세션 파일 이름의 UUID, 같은 폴더에서 실행) | 못 읽는다. `--effort`는 받지 않고 거절한다 — 강도는 `--model openai/모델:high`처럼 모델 이름에 적는다 | 닫지 않는다. omo는 bun으로 도는 스크립트라 프로세스 이름으로 원본을 찾지 못한다 |
 
 - agy·omo는 인수 확인(`adopt accept`)과 원본 Rottie 탭 닫기를 하지 않는다(새 창의 대화·권한을 원본과 대조할 수 없다). 첫 안내에 인수 명령이 없고, 원본 탭은 사용자가 직접 닫는다.
-- 없던 권한을 새로 붙이지 않는다. 원본의 권한 옵션(예: agy `--dangerously-skip-permissions`)은 이어받지 못하므로 새 감독은 기본 권한으로 뜬다.
-- agy는 같은 대화를 두 창이 동시에 열 수 있다. 옮긴 뒤 원본 탭에서는 더 지시하지 않는다.
+- claude·codex·omo는 없던 권한을 새로 붙이지 않는다(omo는 원본 권한을 못 읽어 기본 권한으로 뜬다). 예외로 agy는 kyle 결정(2026-11-24, 첫 실사용에서 `--conversation`만으로 뜬 agy가 우편을 보낼 때마다 "Run this command?" 확인 창에서 멈춤)으로 카단 `start`와 같은 실행기 표 resume 틀(권한 확인 건너뜀)로 연다. 명령 모양은 코드에 두지 않고 표를 읽으므로 표를 바꾸면 따라간다.
+- agy는 같은 대화를 두 창이 동시에 열 수 있다. 옮긴 뒤 원본 탭에서는 더 지시하지 않는다. 새 창이 자기를 원래 탭으로 여겨 멈추지 않도록(2026-11-24 첫 실사용) agy의 첫 안내 맨 앞에만 "이 창이 이어 연 새 감독 창이며 원래 탭의 '멈춘다'는 이 창에 해당하지 않는다"는 한 줄이 붙는다. claude·codex·omo는 새 세션이라 붙지 않는다.
 
 ## 비서가 이어받는 경우
 
