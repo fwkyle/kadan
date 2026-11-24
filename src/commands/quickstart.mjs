@@ -8,6 +8,7 @@ import {captureSource, sourceAgent, checkLaunchPermissions, findAgyConversation}
 import {prepareTransfer, acceptTransfer, transferStatus} from '../adopt-transfer.mjs';
 import {notifyAdoption} from '../adopt-notice.mjs';
 import {startAdoptMonitor} from '../adopt-monitor.mjs';
+import {readSettings as readRunnerSettings} from '../runner-settings.mjs';
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -299,11 +300,13 @@ export function cmdAdopt(argv, flags) {
     runAdopt({
       role: argv[0], flags, floor, sessionName,
             detect: (env, harness) => detectForAdopt(env, harness, findAgyConversation),
+      readRunnerSettings: () => readRunnerSettings(home),
       inherit: conversation => {
         const cwd = process.cwd();
         // agy·omo는 새 창의 대화 ID·권한을 확인할 길이 없어 권한은 기본값으로 열고 원본 탭은 닫지 않는다.
         if (ADOPT_UNCHECKED_HARNESSES.includes(conversation.harness)) {
-          return {permissions: {args: []}, unsupported: `${conversation.harness}는 권한·원본 탭을 확인할 수 없어 기본 권한으로 열고 원본 탭은 닫지 않습니다. 원본 탭은 직접 닫으세요.`};
+          const opened = conversation.harness === 'agy' ? '' : ' 기본 권한으로 열고';
+          return {permissions: {args: []}, unsupported: `${conversation.harness}는 권한·원본 탭을 확인할 수 없어${opened} 원본 탭은 닫지 않습니다. 원본 탭은 직접 닫으세요.`};
         }
         const file = conversationFile({...conversation, cwd});
         const sourceConversation = {...conversation, cwd, file};

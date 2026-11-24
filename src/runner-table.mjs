@@ -221,6 +221,23 @@ export function rebuildResumeCommand(settings, runner, oldCmd, conversation) {
   return result;
 }
 
+// adopt처럼 "새로 여는" 명령을 표의 resume 틀로 만든다(2026-11-24 PR #481 검수). 틀은 resumeTail과 같은 검사를 거치므로
+// spawn 틀 뒤에 대화 인자를 붙인 모양이 아니거나 낱말로 읽을 수 없는 틀(닫히지 않은 따옴표 등)은 던진다.
+// 틀을 낱말로 읽어 자리 표식만 실제 값으로 바꾸고 shellWord로 다시 묶는다 — 틀 작성자가 자리에 친 따옴표가 값에 겹쳐 남지 않고,
+// 값 안의 글자(예: 모델 `x[1m]`)는 셸이 파일 이름 패턴으로 읽지 않게 필요한 때만 따옴표로 감싼다.
+// 틀에 {effort} 자리가 없으면 강도는 `--effort <값>`으로 뒤에 덧붙인다(effort가 있을 때만). {model} 자리는 정확히 한 번 있어야 한다.
+export function resumeCommandFromTable(settings, runner, {model, effort, conversation}) {
+  resumeTail(settings, runner);
+  const words = commandWords(fillTemplate(runnerTemplate(settings, runner, 'resume'),
+    {model: SENTINEL.model, effort: SENTINEL.effort, conversation: SENTINEL.conversation, prompt: 'P', cwd: '/'}));
+  const count = mark => words.filter(word => word.includes(mark)).length;
+  if (count(SENTINEL.model) !== 1) throw new Error(`${runner}.resume 틀에는 {model}이 정확히 한 번 있어야 한다`);
+  const hasEffortSlot = count(SENTINEL.effort) > 0;
+  const values = {[SENTINEL.model]: model, [SENTINEL.effort]: effort ?? '', [SENTINEL.conversation]: conversation};
+  const filled = words.map(word => word.replace(/KADANMODEL|KADANEFFORT|KADANCONVERSATION/g, mark => values[mark]));
+  return [...filled, ...(effort && !hasEffortSlot ? ['--effort', effort] : [])].map(shellWord).join(' ');
+}
+
 // 모델 목록 명령의 표준 출력: 줄마다 첫 낱말이 모델 id다. 이름 규칙에 맞지 않는 줄·빈 줄·중복은 버린다.
 // 나머지 글(탭 뒤 표시 이름 등)은 사람이 보는 이름으로만 돌려준다.
 export function parseModelList(stdout) {
