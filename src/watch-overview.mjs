@@ -172,6 +172,7 @@ export function watchOverview({center,entries,works=NO_WORKS,processes,processEr
  }
  let scope=null,supervisorScope=null;
  const parentsKey=parents?result.configuration.currentHash:null;
+ if(!parents)scopeMemo=null; // 관계를 못 읽으면 이전 원장·카드 참조를 붙들지 않는다.
  if(ledgerKnown&&parents){
   try{
    const cardsOf=()=>center.cards??center.boards.flatMap(b=>b.cards);
@@ -219,5 +220,8 @@ export function attachWatchOverview(center,entries,options={}){
  let processes=[],processError=null;
  try{processes=(options.readProcesses??(()=>readWatchProcesses(spawnSync,options.watchName)))();}catch{processError='프로세스 목록을 읽을 수 없습니다';}
  const monitoring=watchOverview({center,entries,works:options.works,processes,processError,readFile:options.readFile,now:options.now,profilePath:options.profilePath??null});
- return {...center,monitoring,boards:center.boards.map(b=>({...b,monitoring:monitoring.boards.find(x=>x.name===b.name)}))};
+ // 판 이름으로 한 번에 찾는다(판마다 목록을 훑으면 판 수의 제곱이다). 같은 이름이 둘이면 앞의 것(옛 find와 같음).
+ const byName=new Map();
+ for(const x of monitoring.boards)if(!byName.has(x.name))byName.set(x.name,x);
+ return {...center,monitoring,boards:center.boards.map(b=>({...b,monitoring:byName.get(b.name)}))};
 }

@@ -6,14 +6,17 @@ import os from 'node:os';
 import path from 'node:path';
 import {dashboardFixture} from './helpers/dashboard-fixture.mjs';
 import {appendLedger, saveMailBody} from '../src/ledger.mjs';
-import {createDatabase, writeStorageMarker, storageSnapshot} from '../src/storage.mjs';
+import {createDatabase, writeStorageMarker, storageSnapshot, storagePath} from '../src/storage.mjs';
+import {DatabaseSync} from 'node:sqlite';
 import {floor} from '../src/floor.mjs';
 import {wallCache} from '../src/wall-snapshot-cache.mjs';
 import {createWallServer, withWaitSnapshots} from '../src/wall.mjs';
 import {createWallSnapshotLoader, createDashboardReaders, loadWallSnapshot} from '../src/commands/tree-wall.mjs';
 import {createDashboardSummaryReader} from '../src/dashboard-summary-reader.mjs';
 import {createDashboardMailReader} from '../src/dashboard-mail-reader.mjs';
-import {watchOverview, watchOverviewMemoInfo, createCachedWatchProcesses} from '../src/watch-overview.mjs';
+import {createDashboardStoreReader} from '../src/dashboard-store-reader.mjs';
+import {watchOverview, watchOverviewMemoInfo, createCachedWatchProcesses, attachWatchOverview}
+  from '../src/watch-overview.mjs';
 import {createHash} from 'node:crypto';
 
 // 시험이 실제 카단 세션(tmux)을 보지 않게 존재하지 않는 소켓을 쓴다.
@@ -219,6 +222,25 @@ test('감시 개요 재사용은 원장·업무·관계 파일·생존 상태·�
   assert.deepEqual(delta(before, mark()), {scopes: 1, boards: 1}, '60초가 지나면 같은 입력도 다시 만든다');
 });
 
+test('관계 파일을 못 읽으면 이전 범위 기억을 놓고, 판 연결은 이름으로 한 번에 찾는다', () => {
+  const input = makeInput();
+  watchOverview(input);
+  const before = watchOverviewMemoInfo();
+  watchOverview({...input, readFile: () => {throw new Error('read failed');}});
+  watchOverview(input);
+  assert.equal(delta(before, watchOverviewMemoInfo()).scopes, 1, '읽기 실패 뒤에는 이전 범위를 붙들지 않아 다시 만든다');
+  const center = {...makeCenter(), boards: [
+    {name: 'p', cards: makeCenter().boards[0].cards, runs: []}, {name: 'p', cards: [], runs: []},
+    {name: 'q', cards: [], runs: []}]};
+  const attached = attachWatchOverview(center, makeEntries(), {works: [], readFile: () => text, now,
+    readProcesses: () => [{pid: 42, startedAt: '2026-09-07T00:00:00Z'}]});
+  const names = attached.monitoring.boards.map(b => b.name);
+  assert.deepEqual(names, ['p', 'p', 'q']);
+  for (const board of attached.boards) {
+    assert.equal(board.monitoring, attached.monitoring.boards.find(x => x.name === board.name), board.name);
+  }
+});
+
 test('감시 프로세스 목록은 15초 재사용하고 실패는 저장하지 않으며 이름이 바뀌면 다시 읽는다', () => {
   let clock = 0, calls = 0, failing = false;
   const read = (spawn, name) => {
@@ -300,7 +322,7 @@ test('요약 읽기는 카드·업무 읽기와 트리 입력 기억을 넘겨�
   assert.deepEqual(calls, {cards: 1, works: 1});
 });
 
-test('수집과 요약·우편 읽기는 같은 카드·업무 기억을 쓰고 요약이 수집 기억을 흔들지 않는다', t => {
+test('요약·우편 읽기는 한 벌을 공유하고 요약을 읽어도 수집의 카드 상태 기억이 흔들리지 않는다', t => {
   const f = dashboardFixture({count: 3});made.push(f.home);
   process.env.KADAN_HOME = f.home;wallCache.clear();
   const list = floor.list;floor.list = () => [];
@@ -308,19 +330,125 @@ test('수집과 요약·우편 읽기는 같은 카드·업무 기억을 쓰고 
   const loader = createWallSnapshotLoader(null, {summaryBodies: true});
   const build = () => loader.build(storageSnapshot(f.home, loader.read));
   const readers = createDashboardReaders(f.home, {listSessions: () => [], now: () => 1});
-  const stat = name => ({hit: wallCache.stats()[name]?.hit ?? 0, miss: wallCache.stats()[name]?.miss ?? 0});
-  const first = build();
-  const cardsBefore = stat('summaryCards');
-  const cards = readers.readCards();
-  assert.deepEqual(stat('summaryCards').miss, cardsBefore.miss, '수집이 읽어 둔 카드 기억을 그대로 쓴다(새로 읽지 않음)');
-  assert.equal(readers.readWorks(), first.registeredWorks, '수집과 같은 업무 목록 배열이다');
-  const afterShared = stat('summaryCards');
-  assert.equal(readers.readCards(), cards);
-  assert.deepEqual(stat('summaryCards'), afterShared, '사건 번호가 같으면 카드 파일 지문·기억 조회 없이 직전 값을 쓴다');
-  const centerBefore = stat('center');
+  build();
+  const cards = readers.readCards(), works = readers.readWorks();
+  assert.equal(cards.length, 3);
+  assert.equal(readers.readCards(), cards, '바뀐 것이 없으면 같은 배열 참조');
+  assert.equal(readers.readWorks(), works);
+  const stat = () => ({hit: wallCache.stats().center?.hit ?? 0, miss: wallCache.stats().center?.miss ?? 0});
+  const before = stat();
   readers.loadSummary();
-  const second = build();
-  assert.deepEqual(stat('center'), {hit: centerBefore.hit + 1, miss: centerBefore.miss},
-    '요약을 읽은 사이에도 수집의 카드 상태 기억이 그대로 적중한다(트리 입력 공유가 흔들지 않음)');
-  assert.equal(second.registeredWorks, first.registeredWorks);
+  build();
+  assert.deepEqual(stat(), {hit: before.hit + 1, miss: before.miss},
+    '요약을 읽은 사이에도 수집의 카드 상태 기억이 그대로 적중한다(트리 입력 공유가 revision을 흔들지 않음)');
+  assert.equal(readers.readCards(), cards, '수집(본문 읽기)을 거쳐도 사건에서 온 행 배열은 그대로');
+});
+
+// ---- 검수 중요 3건: 요약·우편 경로는 본문(card.md)과 파일 지문을 쓰지 않는다 ----
+function summaryServer(t, f, readers) {
+  process.env.KADAN_HOME = f.home;wallCache.clear();
+  const list = floor.list;floor.list = () => [];
+  t.after(() => {floor.list = list;});
+  const server = createWallServer(createWallSnapshotLoader(null, {summaryBodies: true}), {home: f.home, cacheSec: 0,
+    gui: true, warmAfterMs: 600_000, loadSummary: readers.loadSummary, loadMail: readers.loadMail});
+  closeAfter(t, server);
+  return start(server);
+}
+function mailedFixture() {
+  const f = dashboardFixture({count: 2});made.push(f.home);
+  appendLedger({kind: 'send', mailId: 'mail-1', t: '2026-01-01T00:00:00Z', role: 'fixture-0', by: 'lead',
+    taskId: 'card-1', executionKey: 'demo/card-1', workKey: 'demo/dashboard', preview: '첫 우편'}, f.home);
+  return f;
+}
+const unrelated = f => appendLedger({kind: 'watch-cycle', t: new Date().toISOString(), by: 'watch'}, f.home);
+
+test('다른 카드 한 장의 card.md가 없어도 요약은 200이고 정상 카드의 우편 링크가 남는다', async t => {
+  const f = mailedFixture();
+  const readers = createDashboardReaders(f.home, {listSessions: () => []});
+  const base = await summaryServer(t, f, readers);
+  const summary = async () => (await fetch(base + '/api/dashboard/summary?fresh=1'));
+  const mail = async () => (await fetch(base + '/api/dashboard/mail?fresh=1'));
+  const linked = async () => (await (await mail()).json()).items[0]?.card?.key;
+  assert.equal((await (await summary()).json()).counts.executions, 2);
+  assert.equal(await linked(), 'demo/card-1');
+  const second = path.join(f.home, 'cards/demo/card-2/card.md'), moved = second + '.moved';
+  fs.renameSync(second, moved);
+  unrelated(f);
+  const missing = await summary();
+  assert.equal(missing.status, 200, '다른 카드의 본문 누락이 요약을 503으로 바꾸지 않는다');
+  assert.equal((await missing.json()).counts.executions, 2);
+  const withMissing = await mail();
+  assert.equal(withMissing.status, 200);
+  assert.equal((await withMissing.json()).items[0]?.card?.key, 'demo/card-1', '정상 카드의 우편 링크가 남는다');
+  fs.renameSync(moved, second);
+  assert.equal((await summary()).status, 200, '본문을 돌려놓아도 정상');
+  assert.equal(await linked(), 'demo/card-1');
+});
+
+test('카드가 그대로인 채 무관한 원장 사건이 생겨도 요약·우편은 카드 본문 파일을 stat하지 않는다', async t => {
+  const f = mailedFixture();
+  const readers = createDashboardReaders(f.home, {listSessions: () => []});
+  const base = await summaryServer(t, f, readers);
+  const get = async route => (await fetch(base + '/api/dashboard/' + route + '?fresh=1')).status;
+  assert.equal(await get('summary'), 200);assert.equal(await get('mail'), 200);
+  const seen = [];
+  const original = fs.statSync;
+  t.mock.method(fs, 'statSync', (target, ...rest) => {
+    if (String(target).endsWith('card.md')) seen.push(String(target));
+    return original(target, ...rest);
+  });
+  unrelated(f);
+  assert.equal(await get('summary'), 200);assert.equal(await get('mail'), 200);
+  unrelated(f);
+  assert.equal(await get('summary'), 200);assert.equal(await get('mail'), 200);
+  assert.deepEqual(seen, [], '요약·우편 경로의 card.md stat은 0회');
+});
+
+test('같은 사건 번호에서 heads 최신 행이 events와 어긋나면 요약이 바로 이력 손상으로 실패한다', async t => {
+  const f = mailedFixture();
+  const readers = createDashboardReaders(f.home, {listSessions: () => []});
+  const base = await summaryServer(t, f, readers);
+  const summary = async () => fetch(base + '/api/dashboard/summary?fresh=1');
+  assert.equal((await summary()).status, 200);
+  const db = new DatabaseSync(storagePath(f.home));
+  try {
+    const stream = 'cards/demo/card-1/events.jsonl';
+    const changed = db.prepare("UPDATE heads SET payload=json_set(payload,'$.title','변조') WHERE stream=?").run(stream);
+    assert.equal(changed.changes, 1, '시험 준비: heads 한 행을 바꿨다');
+  } finally {db.close();}
+  const broken = await summary();
+  assert.equal(broken.status, 503);
+  assert.match(await broken.text(), /카드 이력 손상/, '무관 사건이 없어도 같은 사건 번호에서 바로 잡는다');
+  unrelated(f);
+  const again = await summary();
+  assert.equal(again.status, 503);
+  assert.match(await again.text(), /카드 이력 손상/, '무관 사건 뒤에도 마찬가지');
+});
+
+test('readRows는 본문 없이 사건에서 온 행을 주고 read와 같은 동기화 상태를 공유한다', t => {
+  const f = dashboardFixture({count: 2});made.push(f.home);
+  const reader = createDashboardStoreReader(f.home, 'cards', {summaryBodies: true, facts: true});
+  const original = fs.statSync, original2 = fs.readFileSync;
+  const touched = [];
+  t.mock.method(fs, 'statSync', (target, ...rest) => {
+    if (String(target).endsWith('card.md')) touched.push('stat');
+    return original(target, ...rest);
+  });
+  t.mock.method(fs, 'readFileSync', (target, ...rest) => {
+    if (String(target).endsWith('card.md')) touched.push('read');
+    return original2(target, ...rest);
+  });
+  const rows = reader.readRows();
+  assert.equal(rows.length, 2);
+  assert.deepEqual(touched, [], 'readRows는 card.md를 읽지도 stat하지도 않는다');
+  assert.equal(reader.readRows(), rows, '바뀐 것이 없으면 같은 배열');
+  assert.ok(rows.every(row => row.path.endsWith('card.md') && !('bodySummary' in row)));
+  const full = reader.read();
+  assert.ok(touched.length > 0 && full.every(row => row.bodySummary), 'read는 본문 요약을 붙인다');
+  assert.equal(reader.readRows(), rows, 'read를 거쳐도 사건이 같으면 같은 배열');
+  assert.equal(full.length, rows.length);
+  f.cards.create({repo: 'demo', id: 'card-9', repoPath: f.home, title: '새', body: '# 새', by: '사람'});
+  const next = reader.readRows();
+  assert.notEqual(next, rows);
+  assert.equal(next.length, 3);
 });
