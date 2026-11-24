@@ -786,8 +786,9 @@ export async function runWatch({
         states:roleStates,alerted:alertedStartReports(entries),active:new Set(activeAlerts.map(a=>a.id))
       });
       // 명확히 연결된 답 대기에 걸린 실행은 정체·입력대기 판정(progress)에서만 뺀다. 화면 오류·세션 죽음 경로(stall·생존 경보)와 그 감독의 다른 실행은 그대로다.
-      const projected=identityNow.project(entries);
-      waitingKeys=waitingCardKeys(cards,works,progressWaits,waitsRead,card=>effectiveCardRole(card,projected,identityNow));
+      // entries는 369행 projectEntries(entries, cards)에서 이미 투영했고 handover에는 taskConnectionError가 붙지 않아 그대로 재사용한다.
+      waitingKeys=waitingCardKeys(cards,works,progressWaits,waitsRead,
+        card=>effectiveCardRole(card,entries,identityNow));
       if(waitingKeys.size){
         // 걸리기 전의 비정상 보고는 풀어 둔다: 답이 온 뒤에도 재개하지 않으면 새 비정상으로 다시 알린다(재알림 묶음은 이 풀림 앞뒤를 가른다).
         for(const report of latestWatchReports(entries))

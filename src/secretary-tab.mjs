@@ -7,6 +7,7 @@ import {readWindowSetting} from './window-setting.mjs';
 import {rottieConnectivity, showRottieWindow, removeRottieWindow, openWindow, sessionClientCount} from './floor-tmux.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {cleanWindowMessage} from './cli-start-support.mjs';
+import {readSystemLedger, readSessionLatestLifecycle} from './ledger.mjs';
 
 const ALIVE_STATES = new Set(['running', 'created']);
 // 로티가 "이 탭은 끝났다"고 확정해 주는 상태만 교체한다. unknown·빈 값·처음 보는 값은 모르는 것이라 열지 않는다.
@@ -151,11 +152,23 @@ function inheritsOnlyOldTab(entries, session) {
 // 로티 없이 숨김으로 뜬 비서에 로티가 뜬 뒤 탭을 한 번 붙인다(`up --auto` 주기에서). 탭 기록이 이미 있으면 아무것도 하지 않는다
 // (사람이 닫은 탭을 다시 열지 않는다). 성공하면 window 사건 하나만 남기고, 실패는 아무것도 기록하지 않는다.
 // readEntries는 함수다: 기계 설정이 rottie일 때만 원장을 읽어, 로티를 안 쓰는 기계는 매분 원장을 읽지 않는다.
-export function attachHiddenSecretary({home, floor, session, readEntries, record, env = process.env, auto = true,
+// 읽기는 두 단계다. (1) 빠른 길 readFastEntries: 이 세션의 마지막 start부터의 수명 사건만 거꾸로 읽어 has-tab이면 바로 끝낸다
+// (탭을 열거나 기록하지 않으므로 전체 검증이 필요 없다). 판단할 수 없으면(null)·stop이 끼면·탭이 없으면 (2)로 간다.
+// (2) 느린 길 readEntries(기본 readSystemLedger): 원장 전체 검증을 거친 뒤에만 탭을 열고 기록한다. 손상이면 오류로 막힌다.
+// readEntries만 주입한 호출은 빠른 길 없이 그 함수만 쓴다.
+export function attachHiddenSecretary({home, floor, session, readEntries = null,
+  readFastEntries = readEntries ? null : () => readSessionLatestLifecycle(home, session),
+  record, env = process.env, auto = true,
   open = openSecretaryTab, readSetting = readWindowSetting}) {
   try {
     if (readSetting(home)?.window !== 'rottie') return {attached: false, reason: 'setting-not-rottie'};
-    const entries = readEntries();
+    let tail = null;
+    try { tail = readFastEntries?.() ?? null; } catch { tail = null; }
+    if (Array.isArray(tail) && !tail.some(e => e.kind === 'stop')
+      && currentRottieWindow(tail, session) && !inheritsOnlyOldTab(tail, session)) {
+      return {attached: false, reason: 'has-tab'};
+    }
+    const entries = (readEntries ?? (() => readSystemLedger(home)))();
     // 이어받은 옛 탭 ID(숨김으로 뜬 세대에 남은 것)는 탭이 있다는 뜻이 아니다. 로티에 물어 닫힌 탭이면 붙인다.
     // 이 세대에 실제로 연결한 탭(start가 rottie이거나 그 뒤 window 사건)은 사람이 닫았어도 다시 열지 않는다.
     if (currentRottieWindow(entries, session) && !inheritsOnlyOldTab(entries, session)) {

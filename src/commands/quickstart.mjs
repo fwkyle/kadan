@@ -21,7 +21,7 @@ import { floor } from "../floor.mjs";
 import { notifyUser } from "../user-notify.mjs";
 import { readBridgeExit } from "../discord-bridge-exit.mjs";
 import { acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, changedOutput, clearForUp, finishRevive, prepareRevive } from "../revive.mjs";
-import { appendLedger, ledgerHome, readSystemLedger } from "../ledger.mjs";
+import { appendLedger, ledgerHome, readSystemLedger, readSessionLatestLifecycle } from "../ledger.mjs";
 import { readActiveHierarchy } from "../hierarchy-register.mjs";
 import { runServerRestoreCycle } from "../server-restore-cycle.mjs";
 import { claimIdleRolesGate, runIdleRolesGate } from "./idle-roles.mjs";
@@ -172,7 +172,9 @@ function runUpOnce({ home, flags, auto, deferNotices }) {
     try {
       const sessionOfSecretary = sessionName("비서");
       const attached = withRecoveryLock(home, "kadan-비서", () => attachHiddenSecretary({
-        home, floor, session: sessionOfSecretary, readEntries: () => readSystemLedger(home),
+        home, floor, session: sessionOfSecretary,
+        readFastEntries: () => readSessionLatestLifecycle(home, sessionOfSecretary),
+        readEntries: () => readSystemLedger(home),
         record: entry => appendLedger(entry, home) }));
       if (attached.attached) {
         secretaryLines.push(`비서 로티 탭 붙임: ${attached.rottieTerminalId}${attached.restoredFrom

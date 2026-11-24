@@ -116,12 +116,15 @@ export function readSystemLedger(home = ledgerHome()) {
 // 사건 종류를 앞머리에서 읽는다: 저장되는 사건은 {"t":"<24자 시각>","kind":"<종류>" 로 시작한다(appendDomainLedger).
 // 앞머리가 정확히 그 모양이고 그 구간에 따옴표·역슬래시가 없을 때만 앞머리를 믿고, 아니면 JSON을 해석한다(결과는 같다).
 // 이유: 감시AI 호출 기록 약 4천 건이 건당 2만 자라, 종류 하나 보려고 모두 해석하면 조회의 절반 이상이 거기서 든다.
-const RECOVERY_KIND = (() => {
+const RECOVERY_HEAD = (() => {
   const plain = part => `instr(${part},'"')=0 AND instr(${part},char(92))=0`;
   const kindEnd = `instr(substr(payload,41,64),'"')`;
-  const head = `substr(payload,1,6)='{"t":"' AND substr(payload,31,10)='","kind":"' AND ${kindEnd}>1`
+  return `substr(payload,1,6)='{"t":"' AND substr(payload,31,10)='","kind":"' AND ${kindEnd}>1`
     + ` AND ${plain('substr(payload,7,24)')} AND instr(substr(payload,41,${kindEnd}-1),char(92))=0`;
-  return `CASE WHEN ${head} THEN substr(payload,41,${kindEnd}-1) ELSE json_extract(payload,'$.kind') END`;
+})();
+const RECOVERY_KIND = (() => {
+  const kindEnd = `instr(substr(payload,41,64),'"')`;
+  return `CASE WHEN ${RECOVERY_HEAD} THEN substr(payload,41,${kindEnd}-1) ELSE json_extract(payload,'$.kind') END`;
 })();
 export function readRecoveryLedger(home = ledgerHome()) {
   if (storageMode(home) === 'none') return [];
@@ -132,6 +135,37 @@ export function readRecoveryLedger(home = ledgerHome()) {
     const project = domainProjector('system');
     return [...project.legacy(rows('ledger.jsonl')),...project.rows(rows(ledgerStreams.system))];
   });
+}
+const LIFECYCLE_KINDS = new Set(['start', 'stop', 'window']);
+// 한 세션의 현재 세대 수명 사건(마지막 start부터의 start·stop·window)만 최신 쪽부터 거꾸로 읽는다(up --auto의 has-tab 빠른 길).
+// 로티 탭 판정(currentRottieWindow·inheritsOnlyOldTab)은 그 세션의 마지막 start 이후 사건에만 달려 있어 결과가 전체 읽기와 같다.
+// 이 읽기는 원장 전체를 검증하지 않는다. 판단할 수 없으면(저장소 없음·start 없음·해석 실패·broken) null을 돌려
+// 호출한 쪽이 readSystemLedger 전체 검증으로 넘어가게 한다. 탭을 열거나 기록하기 전에는 반드시 그 전체 검증을 거친다.
+// 원장이 10배면: SQL 스캔은 마지막 start 이후 구간의 행 수에 비례하고,
+// JS 파싱·힙은 그 구간의 이 세션 수명 사건 수에만 비례한다.
+export function readSessionLatestLifecycle(home = ledgerHome(), session) {
+  if (storageMode(home) === 'none' || typeof session !== 'string') return null;
+  try {
+    return storageSnapshot(home, db => {
+      const read = db.prepare(`SELECT payload FROM events WHERE stream=?`
+        + ` AND ${RECOVERY_KIND} IN ('start','stop','window')`
+        + ` AND json_extract(payload,'$.session')=? ORDER BY seq DESC`);
+      const found = {system: [], legacy: []};
+      for (const [name, stream] of [['system', ledgerStreams.system], ['legacy', 'ledger.jsonl']]) {
+        for (const row of read.iterate(stream, session)) {
+          const value = JSON.parse(row.payload);
+          if (!value || typeof value !== 'object' || value.broken || value.session !== session
+            || !LIFECYCLE_KINDS.has(value.kind)) return null;
+          found[name].push(value);
+          if (value.kind === 'start') {
+            const project = domainProjector('system');
+            return [...project.legacy(found.legacy.reverse()), ...project.rows(found.system.reverse())];
+          }
+        }
+      }
+      return null;
+    });
+  } catch { return null; }
 }
 // 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.
 // requestId 글자 포함(instr)으로 먼저 걸러 해당 줄만 해석한다. 저장소가 없으면 null.

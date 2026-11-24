@@ -32,9 +32,10 @@ export function liveSessionTree(cards,liveSessions) {
 const firstSentAtOf=(old,e)=>old&&Object.hasOwn(old,'firstSentAt')?old.firstSentAt:Date.parse(e.t)?e.t:null;
 
 // 카드 한 장과 그 카드에 대한 여러 역할의 실행을 분리한다.
-export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now()}) {
+// identityCards: 짧은 ID 충돌 판정에 쓰는 주소표 카드. 일부 카드(cards)만 읽어 넘겨도 전체 카드 목록을 주면 해석이 달라지지 않는다.
+export function buildCardCenter({cards,entries,tree,runtimeKnown=true,now=Date.now(),identityCards=cards}) {
   if(entries.some(e=>e?.broken))throw new Error('원장 손상: 카드 실행 상태 모름');
-  const identity=taskIdentity(cards);
+  const identity=taskIdentity(identityCards);
   entries=identity.project(entries);
   const roles=new Map(tree.flatMap(b=>b.roles).map(r=>[r.role,r]));
   const plans=new Map(),runs=new Map();
