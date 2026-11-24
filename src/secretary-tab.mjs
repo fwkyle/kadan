@@ -7,6 +7,7 @@ import {readWindowSetting} from './window-setting.mjs';
 import {rottieConnectivity, showRottieWindow, removeRottieWindow, openWindow, sessionClientCount} from './floor-tmux.mjs';
 import {currentRottieWindow} from './restore.mjs';
 import {cleanWindowMessage} from './cli-start-support.mjs';
+import {readSessionLifecycleLedger} from './ledger.mjs';
 
 const ALIVE_STATES = new Set(['running', 'created']);
 // 로티가 "이 탭은 끝났다"고 확정해 주는 상태만 교체한다. unknown·빈 값·처음 보는 값은 모르는 것이라 열지 않는다.
@@ -151,7 +152,9 @@ function inheritsOnlyOldTab(entries, session) {
 // 로티 없이 숨김으로 뜬 비서에 로티가 뜬 뒤 탭을 한 번 붙인다(`up --auto` 주기에서). 탭 기록이 이미 있으면 아무것도 하지 않는다
 // (사람이 닫은 탭을 다시 열지 않는다). 성공하면 window 사건 하나만 남기고, 실패는 아무것도 기록하지 않는다.
 // readEntries는 함수다: 기계 설정이 rottie일 때만 원장을 읽어, 로티를 안 쓰는 기계는 매분 원장을 읽지 않는다.
-export function attachHiddenSecretary({home, floor, session, readEntries, record, env = process.env, auto = true,
+export function attachHiddenSecretary({home, floor, session,
+  readEntries = () => readSessionLifecycleLedger(home, session),
+  record, env = process.env, auto = true,
   open = openSecretaryTab, readSetting = readWindowSetting}) {
   try {
     if (readSetting(home)?.window !== 'rottie') return {attached: false, reason: 'setting-not-rottie'};

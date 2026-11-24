@@ -1,5 +1,8 @@
 import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
-import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams} from './ledger-domains.mjs';
+import {
+  appendDomainLedger, readLedgerState, projectLedger, domainProjector,
+  ledgerStreams, legacyCorrupt, validateDomainEvent,
+} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -116,12 +119,15 @@ export function readSystemLedger(home = ledgerHome()) {
 // 사건 종류를 앞머리에서 읽는다: 저장되는 사건은 {"t":"<24자 시각>","kind":"<종류>" 로 시작한다(appendDomainLedger).
 // 앞머리가 정확히 그 모양이고 그 구간에 따옴표·역슬래시가 없을 때만 앞머리를 믿고, 아니면 JSON을 해석한다(결과는 같다).
 // 이유: 감시AI 호출 기록 약 4천 건이 건당 2만 자라, 종류 하나 보려고 모두 해석하면 조회의 절반 이상이 거기서 든다.
-const RECOVERY_KIND = (() => {
+const RECOVERY_HEAD = (() => {
   const plain = part => `instr(${part},'"')=0 AND instr(${part},char(92))=0`;
   const kindEnd = `instr(substr(payload,41,64),'"')`;
-  const head = `substr(payload,1,6)='{"t":"' AND substr(payload,31,10)='","kind":"' AND ${kindEnd}>1`
+  return `substr(payload,1,6)='{"t":"' AND substr(payload,31,10)='","kind":"' AND ${kindEnd}>1`
     + ` AND ${plain('substr(payload,7,24)')} AND instr(substr(payload,41,${kindEnd}-1),char(92))=0`;
-  return `CASE WHEN ${head} THEN substr(payload,41,${kindEnd}-1) ELSE json_extract(payload,'$.kind') END`;
+})();
+const RECOVERY_KIND = (() => {
+  const kindEnd = `instr(substr(payload,41,64),'"')`;
+  return `CASE WHEN ${RECOVERY_HEAD} THEN substr(payload,41,${kindEnd}-1) ELSE json_extract(payload,'$.kind') END`;
 })();
 export function readRecoveryLedger(home = ledgerHome()) {
   if (storageMode(home) === 'none') return [];
@@ -131,6 +137,43 @@ export function readRecoveryLedger(home = ledgerHome()) {
     const rows = stream => read.all(stream).map(row => JSON.parse(row.payload));
     const project = domainProjector('system');
     return [...project.legacy(rows('ledger.jsonl')),...project.rows(rows(ledgerStreams.system))];
+  });
+}
+const LIFECYCLE_KINDS = new Set(['start', 'stop', 'window']);
+// 단일 세션의 수명 사건(start·stop·window)만 읽는다(up --auto가 매분 전체 시스템 원장을 파싱하지 않게).
+// SQLite에서 대상 세션의 수명 사건과 손상(broken·비객체·빈 kind) 후보만 골라 읽고, 기존 readSystemLedger와 같은 순서·파싱·손상 검사를 지킨다.
+// 원장이 10배면: SQL 스캔은 system/events.jsonl 행 수에 비례하지만 JS 파싱·힙은 대상 세션 수명 건수에만 비례한다.
+export function readSessionLifecycleLedger(home = ledgerHome(), session) {
+  if (storageMode(home) === 'none') return [];
+  const target = typeof session === 'string' ? session : '';
+  return storageSnapshot(home, db => {
+    const read = db.prepare(
+      `SELECT payload FROM events WHERE stream=? AND (`
+      + `(${RECOVERY_KIND} IN ('start','stop','window') AND json_extract(payload,'$.session')=?)`
+      + ` OR (instr(payload,'"broken"')>0 AND json_type(payload,'$.broken') IS NOT NULL)`
+      + ` OR (NOT (${RECOVERY_HEAD}) AND (json_type(payload)!='object'`
+      + ` OR json_type(payload,'$.kind')!='text' OR json_extract(payload,'$.kind')=''))`
+      + `) ORDER BY seq`
+    );
+    const legacyRows = [];
+    for (const row of read.iterate('ledger.jsonl', target)) {
+      const value = JSON.parse(row.payload);
+      if (legacyCorrupt([value])) throw new Error('과거 원장 손상: 도메인 조회 불가');
+      if (LIFECYCLE_KINDS.has(value.kind) && value.session === target) legacyRows.push(value);
+    }
+    const systemRows = [];
+    let prevOrder = 0;
+    for (const row of read.iterate(ledgerStreams.system, target)) {
+      const value = JSON.parse(row.payload);
+      validateDomainEvent(ledgerStreams.system, value);
+      if (value._ledgerOrder <= prevOrder) {
+        throw new Error(`도메인 원장 순서 손상: ${ledgerStreams.system}`);
+      }
+      prevOrder = value._ledgerOrder;
+      if (LIFECYCLE_KINDS.has(value.kind) && value.session === target) systemRows.push(value);
+    }
+    const project = domainProjector('system');
+    return [...project.legacy(legacyRows), ...project.rows(systemRows)];
   });
 }
 // 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.

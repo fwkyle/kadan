@@ -14,7 +14,7 @@ import {CardStore} from './card-store.mjs';
 import {buildCardCenter} from './card-center.mjs';
 import {BriefStore, briefInput} from './human-brief.mjs';
 import {readStream, appendStream} from './storage.mjs';
-import {cardEvents} from './explain-events.mjs';
+import {cardEvents, UNCONFIRMED_GRACE_MS} from './explain-events.mjs';
 import {explainChain, readSettings} from './runner-settings.mjs';
 import {execCommand} from './runner-table.mjs';
 import {bindExec} from './exec-agent.mjs';
@@ -31,6 +31,35 @@ export const EXPLAIN_MAX_OUTPUT_BYTES = 1024 * 1024;
 // AI를 한 번이라도 부른 입력은 결과와 상관없이 "시도했다"로 센다(쓰기 성공 여부와 별개). 같은 입력으로 두 번 부르지 않는다.
 const at = value => { const t = Date.parse(value); return Number.isFinite(t) ? t : 0; };
 const handledKey = (key, id) => `${key}|${id}`;
+const decisionSig = list => (!list?.length ? '' : JSON.stringify(list.map(d => [
+  d.id ?? null, d.revision ?? null, d.status ?? null, d.at ?? null,
+  d.answer?.at ?? null, d.answer?.choice ?? null, d.answer?.text ?? null,
+  d.cancelledAt ?? null, d.cancelReason ?? null, d.question ?? null,
+  d.recommendation ?? null, d.options ?? null,
+])));
+const entrySig = entry => (!entry ? ''
+  : `${entry.count}|${entry.sendT}|${entry.sendRole}|${entry.doneT}|${entry.doneRole}|${entry.doneResult}`);
+const liveSignature = (liveSessions, roles) => {
+  if (!roles?.length) return '';
+  if (!liveSessions) return 'unknown';
+  return roles.map(r => (liveSessions.has(`kadan-${r}`) ? '1' : '0')).join('');
+};
+const openRolesOf = card => [...new Set(
+  (card.runs ?? []).filter(r => r.state === 'unconfirmed' || r.state === 'orphaned').map(r => r.role).filter(Boolean)
+)].sort();
+function recheckAtOf(card, enabledAt, now) {
+  let wake = null;
+  const take = t => { if (t > now && (wake === null || t < wake)) wake = t; };
+  if (card.displayState === 'unconfirmed') {
+    const runs = [...(card.runs ?? [])].sort((a, b) => at(a.sentAt ?? a.at) - at(b.sentAt ?? b.at));
+    const last = runs.at(-1);
+    const sent = last?.sentAt ? at(last.sentAt) : 0;
+    if (sent >= enabledAt) take(sent + UNCONFIRMED_GRACE_MS);
+  }
+  const actAt = at(card.activityAt);
+  if (actAt > now) take(actAt);
+  return wake;
+}
 
 export class ExplainAI {
   constructor({home, readSettings: read = () => readSettings(home), spawn = runJudgeProcess, now = Date.now,
@@ -43,6 +72,9 @@ export class ExplainAI {
     this.ownsCollections = !collections;
     this.handled = this.collections.set();
     this.attempted = this.collections.set();
+    // 이미 검사·처리를 마친 카드의 요약 서명 캐시. 바뀐 카드만 center()(CardStore.get + buildCardCenter)로 읽는다.
+    this.settled = this.collections.map();
+    this.settledEnabledAt = null;
     this.queue = createExplainQueue();
     this.staleQueued = 0;
     this.running = null;
@@ -75,33 +107,102 @@ export class ExplainAI {
     if (!chain) {
       // 칸을 비우면 대기열도 무효로 한다. 다시 켠 뒤 옛 사건이 실행되지 않게.
       this.queue.clear();
+      this.settled.clear();
+      this.settledEnabledAt = null;
       if (this.enabledAt != null) { this.record({kind: 'explain-state', state: 'disabled'}); this.enabledAt = null; }
       return {state: 'off', queued: 0};
     }
     if (this.enabledAt == null) { this.record({kind: 'explain-state', state: 'enabled', chain: chain.map(({runner, model, effort}) => ({runner, model, effort}))}); this.enabledAt = now; }
+    if (this.settledEnabledAt !== this.enabledAt) {
+      this.settled.clear();
+      this.settledEnabledAt = this.enabledAt;
+    }
     this.context = {readEntries, liveSessions};
     const grouped = decisionsByCard(decisions);
+    const cardByKey = new Map();
     const keys = new Set();
-    for (const card of cards) if (at(card.at) >= this.enabledAt) keys.add(card.key);
-    for (const e of entries.slice(-5000)) if (e.executionKey && ['send', 'done'].includes(e.kind) && at(e.t) >= this.enabledAt) keys.add(e.executionKey);
-    for (const d of decisions) if (Math.max(at(d.at), at(d.answer?.at), at(d.cancelledAt)) >= this.enabledAt && typeof d.card === 'string') keys.add(d.card);
+    for (const card of cards) {
+      cardByKey.set(card.key, card);
+      if (at(card.at) >= this.enabledAt) keys.add(card.key);
+    }
+    const recentEntries = entries.slice(-5000);
+    const entrySummary = new Map();
+    const handoverByTask = new Map();
+    for (const e of recentEntries) {
+      if (e?.executionKey && (e.kind === 'send' || e.kind === 'done')) {
+        if (at(e.t) >= this.enabledAt) keys.add(e.executionKey);
+        const prev = entrySummary.get(e.executionKey)
+          ?? {count: 0, sendT: '', sendRole: '', doneT: '', doneRole: '', doneResult: ''};
+        prev.count += 1;
+        if (e.kind === 'send') { prev.sendT = e.t ?? ''; prev.sendRole = e.role ?? ''; }
+        else { prev.doneT = e.t ?? ''; prev.doneRole = e.role ?? ''; prev.doneResult = e.result ?? ''; }
+        entrySummary.set(e.executionKey, prev);
+      } else if (e?.kind === 'handover' && e.phase === 'transferred' && Array.isArray(e.taskIds)) {
+        const mark = `${e.handoverId ?? ''}|${e.from ?? ''}|${e.to ?? ''}|${e.t ?? ''}`;
+        for (const tid of e.taskIds) handoverByTask.set(tid, mark);
+      }
+    }
+    for (const d of decisions) {
+      if (Math.max(at(d.at), at(d.answer?.at), at(d.cancelledAt)) >= this.enabledAt && typeof d.card === 'string') {
+        keys.add(d.card);
+      }
+    }
+    const cardSignature = key => {
+      const card = cardByKey.get(key);
+      const cardPart = card ? [
+        card.revision ?? null, card.at ?? null, card.status ?? null, card.role ?? null,
+        card.activity ?? null, card.activityAt ?? null, card.activityRole ?? null,
+        card.result?.at ?? null, card.result?.sha256 ?? null, card.result?.outcome ?? null,
+        card.title ?? null, card.statusReason ?? null, card.nextAction ?? null,
+      ] : null;
+      const handover = card
+        ? (handoverByTask.get(key) ?? handoverByTask.get(card.id) ?? '')
+        : (handoverByTask.get(key) ?? '');
+      return JSON.stringify([cardPart, decisionSig(grouped.get(key)), entrySig(entrySummary.get(key)), handover]);
+    };
+    const pendingKeys = [];
+    const sigByKey = new Map();
+    for (const key of keys) {
+      // 대기열뿐 아니라 지금 호출 중인 카드도 다시 읽거나 예약하지 않는다.
+      if (this.active?.key === key) continue;
+      const sig = cardSignature(key);
+      const cached = this.settled.get(key);
+      if (cached && cached.sig === sig && liveSignature(liveSessions, cached.watchRoles) === cached.live
+        && (cached.recheckAt === null || now < cached.recheckAt)) continue;
+      sigByKey.set(key, sig);
+      pendingKeys.push(key);
+    }
     let queued = 0;
-    for (const card of this.center([...keys], now)) {
-      // 대기열뿐 아니라 지금 호출 중인 카드도 다시 예약하지 않는다.
-      if (queued >= this.maxPerCycle || this.active?.key === card.key) continue;
+    const resolved = pendingKeys.length ? this.center(pendingKeys, now) : [];
+    for (const card of resolved) {
+      if (this.active?.key === card.key) continue;
       const mine = grouped.get(card.key) ?? [];
-      const events = cardEvents(card, mine, now).filter(e => e.at >= this.enabledAt && !this.handled.has(handledKey(card.key, e.id)));
-      if (!events.length) continue;
+      const events = cardEvents(card, mine, now)
+        .filter(e => e.at >= this.enabledAt && !this.handled.has(handledKey(card.key, e.id)));
+      const watchRoles = openRolesOf(card);
+      const settledState = {
+        sig: sigByKey.get(card.key),
+        watchRoles,
+        live: liveSignature(liveSessions, watchRoles),
+        recheckAt: recheckAtOf(card, this.enabledAt, now),
+      };
+      if (!events.length) {
+        this.settled.set(card.key, settledState);
+        continue;
+      }
+      if (queued >= this.maxPerCycle) continue;
       const {input, hash} = briefInput(card, mine, now);
       const ids = events.map(e => ({id: e.id, at: e.at}));
       let brief = null;
       try { brief = new BriefStore(this.home).read(card.key); } catch { /* 손상된 설명 기록은 건드리지 않고 이번엔 지나간다 */ continue; }
       if (this.attempted.has(`${card.key}|${hash}`) || (brief?.by === EXPLAIN_BY && brief.inputHash === hash)) {
         for (const {id} of ids) this.handled.add(handledKey(card.key, id));
+        this.settled.set(card.key, settledState);
         continue;
       }
       if (this.queue.enqueue({key: card.key, input, hash, ids, revision: card.revision,
-        resultPath: card.result?.path ?? null, resultSha256: card.result?.sha256 ?? null})) queued++;
+        resultPath: card.result?.path ?? null, resultSha256: card.result?.sha256 ?? null,
+        enabledAt: this.enabledAt, settledState})) queued++;
     }
     if (this.queue.length) this.pump();
     return {state: 'on', queued};
@@ -216,6 +317,9 @@ export class ExplainAI {
     this.record({kind: 'explain-call', key: job.key, inputHash: job.hash, eventIds: job.ids.map(e => e.id), outcome, ...(reason ? {reason} : {}), attempts});
     this.attempted.add(`${job.key}|${job.hash}`);
     for (const {id} of job.ids) this.handled.add(handledKey(job.key, id));
+    if (job.settledState && outcome !== 'stale' && this.enabledAt === job.enabledAt) {
+      this.settled.set(job.key, job.settledState);
+    }
   }
 
   // revision이 어긋나면 오류가 아니라 생략이다. 카드를 다시 읽어 입력 지문이 그대로면 받은 답을 새 revision으로 쓰고(AI를 다시 부르지 않는다),
