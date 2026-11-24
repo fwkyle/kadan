@@ -13,6 +13,8 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 // - `trash`: `window`와 같다. 하위 명령 없음(사용법 출력)·`show`만 통과. `set`·`clear`와 모르는 것은 거절(휴지통 자리를 KADAN_HOME 밖으로 바꾸지 못하게).
 // - `runners`: 하위 명령 없음(사용법)·`show`·`report`·`compare show`·`--out` 없는 `export`만 통과.
 //   `set`·`runner`·`model`·`block`·`preset`·`import`·`fallback`·`favorite`·`init`·`compare on|off`·`export --out`은 거절.
+//   예외(2026-11-24 kyle): `export --out`을 뺀 쓰기는 `--quote "<kyle 원문>"`이 비어 있지 않으면 통과하고, 명령이 설정 변경 사건(`runner-settings`)에
+//   원문·`viaChat: true`·쓴 역할(by)을 남긴다. `export --out`은 원장 사건이 없어 원문을 남길 수 없으므로 `--quote`로도 거절한다.
 // - `limit`: `run`·`status`·사용법은 통과. `set`(기준 개수 등 기계 설정 쓰기)은 거절.
 // - `stop`: 기반 프로세스(TARGETS = 비서·대시보드·디코·watch)만 거절. 작업자·검수자 세션 종료는 감독의 정상 정리라 통과.
 // - `restart watch|대시보드`: 통과(끄고 같은 명령 안에서 다시 띄운다). `restart --force`는 그대로 거절.
@@ -22,6 +24,8 @@ import {LEVEL_FULL} from './autopilot-terms.mjs';
 // - `autopilot repo`: 인자 없음·`list`·`show`만 통과. `autopilot repo <저장소> …`(쓰기)는 거절(저장소 이름이 list·show면 읽기로 본다).
 //   예외(2026-11-23 kyle): `--quote "<kyle 원문>"`이 비어 있지 않으면 통과하고 명령이 원장에 원문과 쓴 역할을 남긴다.
 // 거절 검사는 `--help`와 상관없이 먼저 한다(명령 함수가 --help를 무시하고 실행하던 길이 샜다, F1).
+const hasQuoteFlag = flags => typeof flags.quote === 'string' && flags.quote.trim() !== '';
+
 function runnersIsReadOnly(args, flags) {
   const [action, sub] = args;
   if (action === undefined || action === 'show' || action === 'report') return true;
@@ -37,13 +41,12 @@ export function guardedReason(command, args = [], flags = {}) {
   if (command === 'stop' && TARGETS.includes(first)) return `stop ${first}`;
   if (command === 'window' && first !== undefined && first !== 'show') return `window ${first}`;
   if (command === 'trash' && first !== undefined && first !== 'show') return `trash ${first}`;
-  if (command === 'runners' && !runnersIsReadOnly(args, flags)) return `runners ${first}`;
+  if (command === 'runners' && !runnersIsReadOnly(args, flags) && !(hasQuoteFlag(flags) && first !== 'export')) return `runners ${first}`;
   // `limit`: 실행(run)·보기(status)는 통과. 기계 설정을 바꾸는 `set`만 거절한다.
   if (command === 'limit' && first === 'set') return 'limit set';
   if (command === 'autopilot' && first === 'on' && flags.level === LEVEL_FULL) return `autopilot on --level ${LEVEL_FULL}`;
   // `autopilot repo`: 인자 없음·list·show만 읽기다. 저장소 이름 뒤 값(쓰기)과 모르는 모양은 거절한다.
-  const hasQuote = typeof flags.quote === 'string' && flags.quote.trim() !== '';
-  if (command === 'autopilot' && first === 'repo' && ![undefined, 'list', 'show'].includes(args[1]) && !hasQuote) return `autopilot repo ${args[1]}`;
+  if (command === 'autopilot' && first === 'repo' && ![undefined, 'list', 'show'].includes(args[1]) && !hasQuoteFlag(flags)) return `autopilot repo ${args[1]}`;
   // `autopilot wingman`: 인자 없음이 읽기다. 이름을 주거나 --clear를 주는 쓰기는 거절한다.
   if (command === 'autopilot' && first === 'wingman' && (args[1] !== undefined || flags.clear !== undefined)) return 'autopilot wingman 저장';
   return null;
@@ -61,7 +64,8 @@ export function autopilotGuard({command, args, flags, home, env = process.env, n
   // 기반 프로세스를 끄고 끝내는 것은 막는다(자리를 비운 동안 끄고 못 살리면 아무도 못 본다). 감시기·대시보드는 끄고 다시 띄우는 한 명령이 있다.
   const infra = command === 'stop' && TARGETS.includes(args?.[0]);
   const hint = infra ? ` — 기반 프로세스를 끄고 끝내면 자리를 비운 동안 아무도 못 봅니다.${INFRA_RESTART_TARGETS.includes(args[0]) ? ` 다시 띄우려면 \`kadan restart ${args[0]}\`(끄고 같은 명령 안에서 다시 띄웁니다)를 쓰세요` : ' 이 대상은 역할 세션이 재시작할 수 없습니다'}` : '';
-  const quoteHint = command === 'autopilot' && args?.[0] === 'repo' ? ' — kyle이 말한 그대로 `--quote "<kyle 원문>"`을 붙이면 역할 세션도 저장소 설정을 쓸 수 있습니다' : '';
+  const quoteHint = command === 'autopilot' && args?.[0] === 'repo' ? ' — kyle이 말한 그대로 `--quote "<kyle 원문>"`을 붙이면 역할 세션도 저장소 설정을 쓸 수 있습니다'
+    : command === 'runners' && args?.[0] !== 'export' ? ' — kyle이 말한 그대로 `--quote "<kyle 원문>"`을 붙이면 역할 세션도 실행 모델 설정을 쓸 수 있습니다' : '';
   const error = new Error(base + hint + quoteHint);
   error.exitCode = 2;
   throw error;
