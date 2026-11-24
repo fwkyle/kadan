@@ -58,21 +58,25 @@ function lineage(pid, byPid) {
 }
 
 // 프로세스 ↔ 로그 짝짓기: lsof가 보여 준 로그가 정확히 하나면 그것(방법 lsof). 아니면 시작 시각(파일 이름의 시각)으로 짝짓되,
-// 후보가 정확히 하나이고 그 로그를 다른 프로세스가 쓰지 않을 때만 인정한다(방법 시각). 그 밖은 모름(추측하지 않는다).
+// 로그 하나와 프로세스 하나가 **서로 유일할 때만** 인정한다(방법 시각): 프로세스의 시각 후보 로그가 정확히 하나이고, 그 로그를
+// 시각 후보로 삼는 프로세스도 그 하나뿐이어야 한다(lsof가 못 찾은 프로세스끼리만 센다). 그 밖은 모두 모름(추측하지 않는다).
 export function pairLogs(agy, {openLogs, logs}) {
   const namesOf = pid => [...new Set((openLogs.get(pid) ?? []).map(file => LOG_PATH.exec(file)?.[1]).filter(Boolean))];
   const claimed = new Map(); // 로그 이름 → lsof로 그 로그를 연 프로세스들
   for (const proc of agy) for (const name of namesOf(proc.pid)) claimed.set(name, [...(claimed.get(name) ?? []), proc.pid]);
+  const loose = agy.filter(proc => !namesOf(proc.pid).length); // lsof로 로그를 못 찾은 프로세스
+  const near = (proc, log) => Math.abs(log.startMs - proc.startMs) <= START_PAIR_MS;
   const result = new Map();
   for (const proc of agy) {
     const names = namesOf(proc.pid);
     if (names.length === 1 && claimed.get(names[0]).length === 1) { result.set(proc.pid, {name: names[0], by: 'lsof'}); continue; }
     if (names.length === 1) { result.set(proc.pid, {name: null, by: null, why: '같은 로그를 여럿이 열고 있음'}); continue; }
     if (names.length > 1) { result.set(proc.pid, {name: null, by: null, why: '로그가 둘 이상 열려 있음'}); continue; }
-    const near = logs.filter(log => Math.abs(log.startMs - proc.startMs) <= START_PAIR_MS && !claimed.has(log.name));
-    const rivals = agy.filter(other => other.pid !== proc.pid && !namesOf(other.pid).length && Math.abs(other.startMs - proc.startMs) <= START_PAIR_MS);
-    if (near.length === 1 && !rivals.length) result.set(proc.pid, {name: near[0].name, by: '시각'});
-    else result.set(proc.pid, {name: null, by: null, why: near.length > 1 || rivals.length ? '같은 시각 후보가 여럿' : '짝이 되는 로그를 못 찾음'});
+    const logsNear = logs.filter(log => near(proc, log) && !claimed.has(log.name));
+    const only = logsNear.length === 1 ? logsNear[0] : null;
+    const procsNear = only ? loose.filter(other => near(other, only)) : [];
+    if (only && procsNear.length === 1) result.set(proc.pid, {name: only.name, by: '시각'});
+    else result.set(proc.pid, {name: null, by: null, why: logsNear.length > 1 || procsNear.length > 1 ? '같은 시각 후보가 여럿' : '짝이 되는 로그를 못 찾음'});
   }
   return result;
 }
@@ -124,11 +128,18 @@ export function collectAgy(deps) {
       pairedBy: pair?.by ?? null, pairWhy: pair?.why ?? null, expiryMs: log?.expiryMs ?? null,
       status: where.kind === 'role' ? screenStatus(deps.readScreen(where.session)) : '모름'};
   });
-  // 저장소를 마지막으로 덮은 사건: 최근 로그(끝난 프로세스의 것 포함)의 마지막 덮어쓰기 중 가장 늦은 것.
+  // 저장소를 마지막으로 덮은 사건: 최근 로그(끝난 프로세스의 것 포함)의 마지막 덮어쓰기 중 가장 늦은 것. 소수초까지 비교한다.
+  // 판정은 좁히는 쪽으로만: 가장 최근 사건의 계정을 못 정했거나, 소수초까지 같은 사건들의 계정이 다르면 예전 사건으로 넘어가지 않고 모름이다.
+  const events = logs.filter(item => nowMs - item.mtimeMs <= RECENT_LOG_MS).map(log => info(log.name)?.lastWrite).filter(Boolean);
   let overwrite = null;
-  for (const log of logs.filter(item => nowMs - item.mtimeMs <= RECENT_LOG_MS)) {
-    const value = info(log.name)?.lastWrite;
-    if (value?.atMs != null && value.account != null && (!overwrite || value.atMs > overwrite.atMs)) overwrite = {atMs: value.atMs, kind: value.kind, account: value.account};
+  if (events.some(event => event.atMicros == null)) overwrite = {unknown: true, why: '시각을 읽지 못한 덮어쓰기 사건이 있음'};
+  else if (events.length) {
+    const top = Math.max(...events.map(event => event.atMicros));
+    const latest = events.filter(event => event.atMicros === top);
+    const accounts = new Set(latest.map(event => event.account ?? null));
+    if (accounts.has(null)) overwrite = {unknown: true, why: '가장 최근 사건 계정 미확정'};
+    else if (accounts.size > 1) overwrite = {unknown: true, why: '같은 시각의 최근 사건들이 서로 다른 계정'};
+    else overwrite = {atMs: latest[0].atMs, kind: latest[0].kind, account: latest[0].account};
   }
   // 다음 덮어쓰기: 살아 있는 프로세스가 쥔 토큰의 만료 시각(갱신은 만료보다 0.5~4분 뒤에 찍혔다). 한참 지난 것은 건너뛴다.
   const due = rows.filter(row => row.expiryMs != null && row.expiryMs >= nowMs - OVERDUE_MS).sort((a, b) => a.expiryMs - b.expiryMs)[0];
@@ -159,7 +170,8 @@ export function formatReport(report, {target = null, close = null} = {}) {
         row.pairedBy ?? `모름(${row.pairWhy ?? '이유 모름'})`].join('\t'));
     }
   }
-  if (overwrite) {
+  if (overwrite?.unknown) lines.push(`지금 새로 띄우면 뜰 계정(추정): 모름(${overwrite.why})`);
+  else if (overwrite) {
     lines.push(`지금 새로 띄우면 뜰 계정(추정): ${mask(overwrite.account)}${tag(overwrite.account)} — 저장소를 마지막으로 덮은 것: ` +
       `${fmtTime(overwrite.atMs, nowMs)} ${overwrite.kind === 'refreshed' ? '토큰 갱신' : '브라우저 로그인'}`);
   } else lines.push(`지금 새로 띄우면 뜰 계정(추정): 모름${logsReadable ? ' — 최근 로그에 덮어쓴 기록이 없음' : ' — 로그 폴더를 읽지 못함'}`);
@@ -176,21 +188,28 @@ export function formatReport(report, {target = null, close = null} = {}) {
 }
 
 // 시니어 창 닫기 계획과 실행. 목표가 관측 계정 정확히 하나일 때만 부른다(부르기 전에 resolveTarget으로 거른다).
-// 목표와 다른 계정의 시니어 창 중, 끝난 호출이고 기록 대조가 맞는 것(state: kept)만 killOwn으로 닫는다.
-// 진행 중(running)·기록 없음·대조 실패·계정 모름인 창은 건드리지 않고 이유를 낸다.
+// 닫는 단위는 창(세션)이다: 창에 속한 agy 프로세스 **전체**가 확정된 "다름"일 때만, 끝난 호출이고 기록 대조가 맞는 것(state: kept)을
+// killOwn으로 한 번 닫는다. 하나라도 "같음"이거나 "모름"이면 그 창은 남기고 이유를 낸다. 진행 중(running)·기록 없음·대조 실패도 둔다.
 //  seniorStates: Map(세션 이름 → {state, why, dir}), kill(dir) → {killed, why}
 export function closeSeniors(rows, {target, seniorStates, kill}) {
+  const windows = new Map();
+  for (const row of rows.filter(item => item.where.kind === 'senior')) windows.set(row.where.session, [...(windows.get(row.where.session) ?? []), row]);
   const lines = [];
-  for (const row of rows.filter(item => item.where.kind === 'senior')) {
-    const name = row.where.session;
-    if (row.account == null) { lines.push(`둠  ${name} (PID ${row.pid}) — 계정 모름`); continue; }
-    if (matches(row.account, target)) continue;
+  for (const [name, group] of windows) {
+    const pids = group.map(row => row.pid).join(', ');
+    const unknown = group.filter(row => row.account == null);
+    const same = group.filter(row => row.account != null && matches(row.account, target));
+    if (unknown.length) {
+      lines.push(`둠  ${name} (PID ${pids}) — ${group.length === 1 ? '계정 모름' : `같은 창에 계정 모름 프로세스가 있음(PID ${unknown.map(row => row.pid).join(', ')})`}`);
+      continue;
+    }
+    if (same.length === group.length) continue; // 목표와 같은 계정의 창은 건드리지 않는다
+    if (same.length) { lines.push(`둠  ${name} (PID ${pids}) — 같은 창에 목표 계정 프로세스가 있음(PID ${same.map(row => row.pid).join(', ')})`); continue; }
     const state = seniorStates.get(name);
-    if (!state) { lines.push(`둠  ${name} (PID ${row.pid}) — 세션 상태를 읽지 못함`); continue; }
-    if (state.state !== 'kept') { lines.push(`둠  ${name} (PID ${row.pid}) — ${state.why === 'running' ? '진행 중인 호출' : `끝난 호출로 확인되지 않음(${state.why})`}`); continue; }
+    if (!state) { lines.push(`둠  ${name} (PID ${pids}) — 세션 상태를 읽지 못함`); continue; }
+    if (state.state !== 'kept') { lines.push(`둠  ${name} (PID ${pids}) — ${state.why === 'running' ? '진행 중인 호출' : `끝난 호출로 확인되지 않음(${state.why})`}`); continue; }
     const result = kill(state.dir);
-    lines.push(result.killed ? `끔  ${name} (PID ${row.pid})` : `둠  ${name} (PID ${row.pid}) — 끄지 못함(${result.why})`);
+    lines.push(result.killed ? `끔  ${name} (PID ${pids})` : `둠  ${name} (PID ${pids}) — 끄지 못함(${result.why})`);
   }
   return lines.length ? lines : ['닫을 시니어 창 없음'];
 }
-

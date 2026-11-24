@@ -12,7 +12,7 @@ export const CHUNK = 64 * 1024;
 export const READ_BUDGET = 32 * 1024 * 1024;
 const HEAD_BYTES = 256 * 1024;
 
-const STAMP = /^[IWEF](\d\d)(\d\d) (\d\d):(\d\d):(\d\d)/u;
+const STAMP = /^[IWEF](\d\d)(\d\d) (\d\d):(\d\d):(\d\d)(?:\.(\d+))?/u;
 // `OAuth: authenticated successfully as <계정>` — 파일 열 때(저장소에서 읽음)와 브라우저 로그인 직후에 찍힌다.
 const AUTH = /server_oauth\.go:\d+\] OAuth: authenticated successfully as (\S+)/u;
 const LOADED = /keyringAuth: loaded token, expiry=(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)(?:\.\d+)? ([+-]\d{4})/u;
@@ -40,6 +40,14 @@ export function lineMs(line, fileStartMs) {
   let ms = new Date(start.getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4], +m[5]).getTime();
   if (ms < fileStartMs - 86_400_000) ms = new Date(start.getFullYear() + 1, +m[1] - 1, +m[2], +m[3], +m[4], +m[5]).getTime();
   return ms;
+}
+
+// 같은 초의 두 사건을 가르려고 소수초까지 마이크로초 단위로 읽는다(Number로 안전한 범위: 약 1.9e15). 소수초가 없으면 0이다.
+export function lineMicros(line, fileStartMs) {
+  const ms = lineMs(line, fileStartMs);
+  if (ms == null) return null;
+  const frac = STAMP.exec(line)[6] ?? '';
+  return ms * 1000 + Number(frac.padEnd(6, '0').slice(0, 6));
 }
 
 // 파일을 끝에서부터 줄 단위로 부른다. onLine이 true를 돌려주면 멈춘다. 읽은 바이트가 budget을 넘으면 멈추고 {complete: false}.
@@ -82,7 +90,7 @@ function readHead(file, bytes = HEAD_BYTES) {
 
 // 로그 하나의 상태. 못 읽으면 null. 계정은 여기서만 전체 글자로 다루고, 보여 주기 전에 가린다(agy-accounts.mjs).
 //  account      — 마지막 인증 줄의 계정. 못 찾았거나 읽기 상한 안에서 확정 못 하면 null
-//  lastWrite    — 저장소를 덮은 마지막 사건 {kind: 'refreshed'|'browser-login', atMs, expiryMs, account}. 없으면 null
+//  lastWrite    — 저장소를 덮은 마지막 사건 {kind: 'refreshed'|'browser-login', atMs, atMicros(소수초까지), expiryMs, account(못 정하면 null)}. 없으면 null
 //  expiryMs     — 이 프로세스가 지금 쥔 토큰의 만료 시각(마지막 덮어쓰기의 것, 없으면 시작 때 읽은 것). 모르면 null
 //  loadedExpiry — 시작 때 저장소에서 읽은 토큰의 만료 시각
 //  exited       — 끝 표지(`CLI program exited`)가 있는가. 살아 있는지는 lsof로 정한다(끝 표지 없이 죽은 로그도 있다).
@@ -123,7 +131,7 @@ export function readAgyLog(file, {budget = READ_BUDGET, chunk = CHUNK} = {}) {
         const refreshed = login ? null : REFRESHED.exec(line);
         const hit = login ?? refreshed;
         if (hit) {
-          lastWrite = {kind: login ? 'browser-login' : 'refreshed', atMs: lineMs(line, startMs),
+          lastWrite = {kind: login ? 'browser-login' : 'refreshed', atMs: lineMs(line, startMs), atMicros: lineMicros(line, startMs),
             expiryMs: expiryMs(hit[1], hit[2]), account: login ? nearestAfter : null};
           if (!login) waitingRefreshAccount = true;
           else return account != null;
