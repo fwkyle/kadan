@@ -153,7 +153,8 @@ export function readAgyAnswer(capture, {line, marker, agent = NOEXEC_AGENT}) {
   const region = lines.slice(ends[0] + 1, composer.top);
   // 경계 뒤에 또 다른 제출 줄(첫 칸 `>`)이 있으면 이 세션에 다른 입력이 들어간 것이다.
   if (region.some(row => /^>/u.test(row))) return {ok: false, why: 'other-input-after-boundary', lost: true};
-  const alone = region.map((row, index) => (row.trim() === marker ? index : -1)).filter(index => index >= 0);
+  // agy가 표지 줄을 마크다운 강조로 그려 `<표지>*`처럼 끝에 기호가 붙는 경우가 있다(운영 기록 5건). 줄 앞뒤의 `*`·`_`·`` ` ``만 걷고 견준다.
+  const alone = region.map((row, index) => (row.trim().replace(/^[*_`]+|[*_`]+$/gu, '') === marker ? index : -1)).filter(index => index >= 0);
   const mentions = region.join('\n').split(marker).length - 1;
   if (alone.length === 0) return {ok: false, why: mentions ? 'marker-not-alone' : 'no-marker'};
   if (alone.length > 1 || mentions > 1) return {ok: false, why: 'marker-repeated'};
