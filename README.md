@@ -166,6 +166,7 @@ kadan stop worker-a                      # 카단이 만든 세션만 끌 수 �
 | `kadan doctor` | 막힌 곳 한 번에 점검하기 |
 | `kadan help --all` | 전체 명령 목록 보기 |
 | `kadan start <역할>` | 역할 세션 만들기 |
+| `kadan super` | 지금 폴더 레포의 슈퍼감독 열기 (없으면 띄움) |
 | `kadan dispatch <역할> --task <카드ID> <지시>` | 명시한 실행 카드 발령 |
 | `kadan send <역할> <메시지>` | 기존 호출 호환. 새 우편은 `mail`, 새 발령은 `dispatch` |
 | `kadan wait <역할>` | 완료 마커나 조용함 기다리기 |
