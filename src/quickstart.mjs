@@ -91,7 +91,7 @@ export function runInit({ home, repoRoot, flags = {}, floorName = 'tmux', spawn 
 }
 
 // 화면이 두 번 연속 같으면 TUI가 첫 그림을 다 그린 것으로 본다. 판정이 아니라 붙여넣기 시점 선택이다.
-// blocked(text)가 true인 화면(예: agy 시작 배너)은 가만히 있어도 안정으로 세지 않고 다음 확인으로 넘긴다. 없으면 기존 동작 그대로다.
+// blocked(text)가 true인 화면(예: agy 입력 줄이 아직 없는 시작 화면)은 가만히 있어도 안정으로 세지 않고 다음 확인으로 넘긴다. 없으면 기존 동작 그대로다.
 export function waitForSettled({ read, tries = 20, sleep = sleepMs, intervalMs = 1000, blocked } = {}) {
  let last = null;
  for (let i = 0; i < tries; i++) {
