@@ -2,7 +2,7 @@
 import { proceedHint } from "./decision-proceed.mjs";
 import { normalWatchVerdict } from "./watch-report.mjs";
 import { DISCONNECT_ALERT_KINDS } from "./watch.mjs";
-import { phraseAction, resumeHint } from "./watch-stop-phrases.mjs";
+import { phraseAction, phraseOfLine, parseResetInMs, resumeHint } from "./watch-stop-phrases.mjs";
 import { idleCountsText, idleOwnText, idleRegisterHint, idleTurnHint, buildIdleNudge } from "./watch-supervisor.mjs";
 import { ocxAlertLine } from "./ocx-refresh.mjs";
 import { WATCH_ALERT_FOOTER } from "./watch-notice-format.mjs";
@@ -77,12 +77,30 @@ function watchAIErrorBody(alert) {
 // 재시작 뒤 원장에서 복원한 경보에는 시각·줄이 없다. 없는 값은 지어내지 않고 뺀다.
 const alertRole = (alert) => alert.role ?? String(alert.session ?? "").replace(/^kadan-/u, "");
 
-function waitingStopBasis(alert) {
+// 사용 한도 줄에 `Resets in …` 상대 시간이 있으면 화면을 읽은 시각(observedAt) 기준으로 대략 풀리는 시각 문구를 만든다.
+// 못 읽거나 기준 시각이 없으면 null(문구만 남긴다). 화면에 찍힌 뒤 시간이 지났을 수 있으므로 부정확할 수 있음을 드러낸다.
+export function resetAtNote(line, observedAt) {
+  if (phraseOfLine(line)?.id !== "usage-limit") return null;
+  if (!Number.isFinite(observedAt)) return null;
+  const ms = parseResetInMs(line);
+  if (ms == null) return null;
+  const base = new Date(observedAt);
+  const target = new Date(Math.round((observedAt + ms) / 60_000) * 60_000);
+  if (!Number.isFinite(base.getTime()) || !Number.isFinite(target.getTime())) return null;
+  const sameDay = base.getFullYear() === target.getFullYear()
+    && base.getMonth() === target.getMonth()
+    && base.getDate() === target.getDate();
+  const when = sameDay ? clockTime(target) : `${target.getMonth() + 1}/${target.getDate()} ${clockTime(target)}`;
+  return `풀리는 시각(대략) ${when} (화면을 읽은 시각 기준 계산·부정확할 수 있음)`;
+}
+
+function waitingStopBasis(alert, now = null) {
   const at = new Date(alert.waitingAt);
   const when = Number.isFinite(at.getTime()) ? ` ${at.getMonth() + 1}/${at.getDate()} ${clockTime(at)}` : "";
   const note = alert.waitingNote ? ` "${alert.waitingNote}"` : "";
   const screen = alert.line ? `; 화면: ${alert.line}` : "";
-  return `대기 표시${when}${note}${screen}; 대기 표시 때문에 정체 감시 밖이었음`;
+  const reset = resetAtNote(alert.line, alert.observedAt ?? now);
+  return `대기 표시${when}${note}${screen}${reset ? `; ${reset}` : ""}; 대기 표시 때문에 정체 감시 밖이었음`;
 }
 
 // 대기 시간 상한 경보(watch-waiting-stop.mjs assessWaitingCap) 근거: 대기 표시 시각·사유, 화면이 그대로인 시간.
@@ -99,7 +117,7 @@ function waitingCapBasis(alert) {
 const backgroundNote = (alert) => Number.isFinite(alert.backgroundMs)
   ? `, 백그라운드 셸 표시 ${Math.floor(alert.backgroundMs / 60_000)}분째(${alert.backgroundCount ?? "?"}개 — 끝나지 않는 백그라운드일 수 있음)` : "";
 
-export function formatAlertBody(alert) {
+export function formatAlertBody(alert, now = null) {
   if (alert.kind === "감시AI오류") return watchAIErrorBody(alert);
   // 사용자에게는 결론 한 줄(headline)만 간다. 세션·PID 목록 전체(text)는 원장의 경보 기록에 남는다. 복원한 경보에는 headline이 없다.
   if (alert.kind === "프로세스") return alert.headline ?? alert.text ?? "카단 세션 아래 프로세스 메모리 기준 초과";
@@ -152,6 +170,8 @@ export function formatAlertBody(alert) {
     return `세션 종료 의심 ${alert.session} (정체 후보, 판정 세션 종료 의심)`;
   }
   if (DISCONNECT_ALERT_KINDS.includes(alert.kind)) {
+    // 상대 남은 시간(`Resets in …`)이 있으면 화면을 읽은 시각 기준 대략 풀리는 시각을 붙인다. 못 읽으면 생략.
+    const reset = alert.kind === "한도" ? resetAtNote(alert.line, alert.observedAt ?? now) : null;
     // 한도 경보에는 감시기가 ocx 사용량을 새로 받은 결과 한 줄을 붙인다(ocx-refresh.mjs).
     const ocx = alert.kind === "한도" && alert.ocx ? ` · ${ocxAlertLine(alert.ocx)}` : "";
     // 실행기 교체가 필요한 종류(설정·인증)는 같은 세션을 다시 시도하지 말라고 알린다.
@@ -160,7 +180,7 @@ export function formatAlertBody(alert) {
     const fallback = alert.kind === "한도" && alert.fallbackLine ? ` · ${alert.fallbackLine}` : "";
     // 입력 한 번이면 이어가는 멈춤 줄(자동 계속 멈춤·로그인 시간 초과)에는 교대 대신 이어가기 명령 안내를 붙인다(보내는 것은 사람).
     const resume = resumeHint(alert.line, alertRole(alert));
-    return `${alert.kind} ${alert.session} (${alert.line})${ocx}${fallback}${replace}${resume ? ` · ${resume}` : ""}`;
+    return `${alert.kind} ${alert.session} (${alert.line})${reset ? ` · ${reset}` : ""}${ocx}${fallback}${replace}${resume ? ` · ${resume}` : ""}`;
   }
   if (alert.kind === "보안필터") {
     return `보안 필터로 멈춤 ${alert.role ?? alert.session}${alert.taskId ? ` / ${alert.taskId}` : ""} (${alert.session}, codex가 응답을 가리고 입력창으로 돌아옴) → 다른 실행기로 교대 필요, 같은 지시를 다시 보내도 또 걸릴 수 있음`;
@@ -182,7 +202,7 @@ export function formatAlertBody(alert) {
     const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";
     const resume = resumeHint(alert.line, alertRole(alert));
     return `대기 표시 중 오류 화면으로 멈춤 ${alert.session} / ${alert.executionKey ?? alert.taskId}`
-      + ` (${waitingStopBasis(alert)}${dispatcher} — 감독 확인 필요${resume ? `; ${resume}` : ""})`;
+      + ` (${waitingStopBasis(alert, now)}${dispatcher} — 감독 확인 필요${resume ? `; ${resume}` : ""})`;
   }
   if (alert.kind === "대기중장기정지") {
     const dispatcher = alert.dispatcher ? `, 발령 ${alert.dispatcher}` : "";
@@ -318,9 +338,9 @@ export function itemizedAlert(alert, clock, ctx = null) {
   else if (alert.kind === "일시정지중작업") basis = `카드 ${alert.cardKey ?? alert.taskId}가 일시정지인데 화면이 ${alert.streak ?? 2}순회 연속 일하는 중`;
   else if (alert.kind === "멈춤") basis = `빈 입력창 ${Math.floor((alert.idleMs ?? 0) / 60_000)}분째${backgroundNote(alert)}, 미완료 실행 있음·답 기다리는 질문 없음`;
   else if (alert.kind === "죽음") basis = "세션 없음 또는 PID 불일치";
-  else if (alert.kind === "대기중정지") basis = waitingStopBasis(alert);
+  else if (alert.kind === "대기중정지") basis = waitingStopBasis(alert, ctx?.now ?? null);
   else if (alert.kind === "대기중장기정지") basis = waitingCapBasis(alert);
-  const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert);
+  const summary = idle && alert.stage !== 2 ? buildIdleNudge(alert) : formatAlertBody(alert, ctx?.now ?? null);
   return [`[감시sh ${clock}] ${summary}`, `대상: ${alert.session ?? alert.role}`, `상태: ${alertLabel(alert.kind)}`,
     ...(basis ? [`근거: ${basis}`] : []), ...(own ? [own] : []), ...(register ? [register] : []), ...turnHint, ...proceedHints, `할 일: ${todo}`].join("\n");
 }

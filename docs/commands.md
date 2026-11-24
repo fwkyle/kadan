@@ -165,7 +165,7 @@ tmux 세션을 종료한 뒤 원장의 최신 탭 ID를 조회하고, `terminal 
 | 명령 | 하는 일 | 자세히 |
 |---|---|---|
 | `kadan runners` | 역할별 실행기·모델·폴백 순서 설정. `show`·`init`·`set`·`runner`·`model`·`block`·`preset`·`fallback`. Autopilot이 켜진 동안 역할 세션의 쓰기는 `--quote "<kyle 원문>"`이 있을 때만 통하고 원장에 원문·역할이 남는다(`export --out` 제외) | [실행 모델 설정](runner-settings.md) |
-| `kadan handover <선임> --to <후임> …` | 담당 인계. `accept`·`finish`·`status`·`abort` | [인계 안내](handover.md) |
+| `kadan handover <선임> --to <후임> …` | 담당 인계. `accept`·`finish`·`status`·`abort`. `--existing`이면 후임을 새로 띄우지 않고 이미 떠 있는 카단 세션에 넘긴다 | [인계 안내](handover.md) |
 | `kadan storage` | 원장 저장소 점검. `verify`·`pause`·`resume` (옛 JSONL 홈 변환은 태그 `jsonl-last` 버전에서) | [SQLite 저장](sqlite-storage.md) |
 
 ## 자원 아끼기

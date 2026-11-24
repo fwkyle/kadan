@@ -1036,7 +1036,7 @@ export async function runWatch({
         recordAlert(record, {...alert, held:pendingNudges.has(alert.id), route:{recipient:alert.role, basis:'본인'}}, alert.role, delivered);
         continue;
       }
-      const message = `[감시sh ${clockTime(cycleAt)}] ${formatAlertBody(alert)}`;
+      const message = `[감시sh ${clockTime(cycleAt)}] ${formatAlertBody(alert, cycleAt)}`;
       const baseRoute = explainAlertRoute(
         alert,
         routes,
@@ -1060,7 +1060,7 @@ export async function runWatch({
           continue;
         }
         try {
-          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt)),
+          sendAlert(recipient, recipient === USER_RECIPIENT ? message : itemizedAlert(alert, clockTime(cycleAt), { now: cycleAt }),
             alert.kind === "프로세스" ? processPostKey(alert) : `alert:${alert.id}:${alert.level ?? ""}`,
             workOfAlert(alert), repoOf(alert), alert.kind, alert.id, alert.holdCode, alert.level);
           delivered = true;
@@ -1085,7 +1085,7 @@ export async function runWatch({
               level: alert.level,
               sourceAlertId: alert.id,
               sourceKind: alert.kind,
-              sourceBody: formatAlertBody(alert),
+              sourceBody: formatAlertBody(alert, cycleAt),
               failedRecipient: recipient,
               deliveryError: error.message,
             };
