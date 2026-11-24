@@ -56,9 +56,14 @@ export function cmdHandover(argv, flags) {
     "[--manual | --wait-timeout 1800 --notify 수신자] | accept <id> --receipt <절대JSON> | finish <id> [--timeout 90] | status <id> | abort <id>";
   // 공용 옵션 해석기는 건드리지 않고 --manual의 위치만 여기서 처리한다.
   if (typeof flags.manual === "string") { argv = [flags.manual,...argv]; flags = {...flags,manual:true}; }
-  // --existing도 값이 없는 옵션이다. 공용 해석기가 뒤의 위치 인자를 값으로 삼켰으면 되돌린다.
-  if (typeof flags.existing === "string") { argv = [flags.existing,...argv]; flags = {...flags,existing:true}; }
-  if (flags.help || !argv.length) { console.log(usage); return; }
+  if (flags.help) { console.log(usage); return; }
+  // --existing은 값 없는 옵션이라 true 하나일 때만 받는다. 공용 해석기는 반복을 배열로, 뒤에 온 낱말을 값으로 만든다.
+  // 그대로 두면 "기존 세션 후임이 아님"으로 읽혀 새 세션 인계로 흘러 없는 후임을 띄운다(검수 exec-5a2e4b67). 아무것도 하기 전에 거절한다.
+  if (Object.hasOwn(flags, "existing") && flags.existing !== true) {
+    throw Object.assign(new Error("--existing은 값 없는 옵션이다: 한 번만 적고 뒤에 값을 붙이지 않는다" +
+      "(바로 뒤에는 다른 옵션이 오거나 맨 끝에 둔다). 사용법: " + usage), {exitCode: 2});
+  }
+  if (!argv.length) { console.log(usage); return; }
   const [first,id] = argv;
   const subcommands = {accept:["receipt"],finish:["timeout"],status:[],abort:[]};
   const allowed = new Set(Object.hasOwn(subcommands,first) ? subcommands[first] : ["to","at-boundary","source-ended","existing","hierarchy","context","cmd","cwd","manual","wait-timeout","notify"]);

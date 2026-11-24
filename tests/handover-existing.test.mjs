@@ -152,6 +152,21 @@ for (const [name, options] of Object.entries(NOT_READY)) test(`표 2: ${name}이
   rejectedCleanly(f, before);
 });
 
+test('표 1: 실행 명령 없이 시작한 후임은 거절하고 고칠 방법을 한 줄로 알린다', () => {
+  // kadan start <역할>을 --cmd 없이 친 세션: start 기록은 있지만 실행 명령이 없다.
+  const f = fixture({ toStarts: ({ cmd, ...noCommand }) => [noCommand] }), before = fs.readFileSync(f.hierarchy, 'utf8');
+  assert.throws(() => f.begin(), error => {
+    assert.match(error.message, /--existing 후임 확인 실패/);
+    assert.match(error.message, /실행 명령이 기록된 세션만 후임이 될 수 있다/);
+    assert.match(error.message, /kadan adopt 또는 kadan start --cmd로 띄운 세션/);
+    assert.equal(error.message.split('\n').length, 1);
+    return true;
+  });
+  rejectedCleanly(f, before);
+  assert.match(fs.readFileSync(new URL('../docs/handover.md', import.meta.url), 'utf8'),
+    /실행 명령이 기록된 세션\(`kadan adopt` 또는 `kadan start --cmd`로 띄운 세션\)만/);
+});
+
 // 후임 줄이 이미 있어도(상위가 사용자·다른 역할·선임 자신) 받고, 줄이 없어도 받는다.
 for (const toRow of ['@user', '비서', 'p-슈퍼감독', null]) {
   const label = toRow === null ? '줄 없음' : `상위 ${toRow}`;
@@ -364,8 +379,7 @@ test('실제 CLI(표 1·5·7·8): 떠 있는 슈퍼감독 후임으로 인계하
     assert.notEqual(refused.status, 0); assert.match(refused.stderr + refused.stdout, /--existing은 --cmd·--cwd와 함께 쓸 수 없다/);
     assert.equal(fs.readdirSync(path.join(home, 'handovers')).filter(n => n.endsWith('.json')).length, 0);
     assert.equal(fs.readFileSync(graph, 'utf8'), tableBefore); assert.ok(alive(from)); assert.equal(panePid(to), before);
-    // --existing 바로 뒤에 선임 이름이 와도(공용 해석기가 값으로 삼켜도) 선임으로 읽는다.
-    const s = JSON.parse(run(['handover', '--manual', '--existing', from, ...begin]));
+    const s = JSON.parse(run(['handover', from, '--manual', '--existing', ...begin]));
     assert.equal(s.phase, 'prepared'); assert.equal(s.existing, true); assert.equal(s.newPid, before); assert.equal(s.runner, null);
     assert.equal(readLedger(home).filter(e => e.kind === 'start' && e.role === to).length, startsBefore);
     const state = JSON.parse(fs.readFileSync(path.join(home, 'handovers', `${s.id}.json`), 'utf8'));
@@ -390,6 +404,53 @@ test('실제 CLI(표 1·5·7·8): 떠 있는 슈퍼감독 후임으로 인계하
     assert.deepEqual(readLedger(home).filter(e => e.kind === 'stop').map(e => e.role), [from]);
     const captured = tmux(['capture-pane', '-p', '-J', '-S', '-2000', '-t', `=kadan-${to}:`]);
     assert.match(captured.stdout, /인수 준비/); assert.match(captured.stdout, /인계 전환 완료/);
+  } finally {
+    for (const role of [from, to]) call(['stop', role]);
+  }
+});
+
+// 검수 exec-5a2e4b67 재현: 공용 옵션 해석기는 반복된 옵션을 배열로, 뒤에 온 낱말을 값으로 만든다.
+// --existing이 true 하나가 아니면 새 세션 인계로 흘러 없는 후임을 새로 띄웠다. 사용법 오류(종료 2)로 거절해야 한다.
+const MALFORMED = {
+  '두 번 반복': (from, to) => [from, '--to', to, '--existing', '--existing'],
+  '세 번 반복': (from, to) => [from, '--existing', '--to', to, '--existing', '--existing'],
+  '값이 붙음': (from, to) => [from, '--to', to, '--existing', 'yes'],
+  '값이 붙고 반복': (from, to) => [from, '--to', to, '--existing', 'yes', '--existing'],
+  '선임 이름 앞에 둠(이름이 값으로 읽힘)': (from, to) => ['--existing', from, '--to', to],
+};
+test('실제 CLI(표 2): --existing이 반복되거나 값이 붙으면 사용법 오류로 거절하고 없는 후임을 띄우지 않는다',
+  { skip: spawnSync('tmux', ['-V']).status !== 0, timeout: 60000 }, () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-handover-existing-flag-'));
+  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const env = { ...process.env, KADAN_HOME: home, KADAN_SOCKET: path.basename(home), KADAN_WINDOW: 'none', KADAN_FLOOR: 'tmux', KADAN_ROLE: '비서' };
+  const call = args => spawnSync(process.execPath, [cli, ...args], { env, cwd: os.tmpdir(), encoding: 'utf8' });
+  const tmux = args => spawnSync('tmux', ['-L', env.KADAN_SOCKET, ...args], { encoding: 'utf8' });
+  const alive = role => tmux(['has-session', '-t', `=kadan-${role}`]).status === 0;
+  const from = 'p-감독', to = 'p-없는-후임';
+  const graph = path.join(home, 'parents.json'), context = path.join(home, 'context.md');
+  fs.writeFileSync(graph, JSON.stringify({ [from]: '@user' })); fs.writeFileSync(context, '격리 시험 범위');
+  const rest = ['--manual', '--at-boundary', '--hierarchy', graph, '--context', context];
+  const states = () => (fs.existsSync(path.join(home, 'handovers'))
+    ? fs.readdirSync(path.join(home, 'handovers')).filter(n => n.endsWith('.json')) : []);
+  try {
+    const started = call(['start', from, '--cmd', 'cat']);
+    assert.equal(started.status, 0, started.stderr + started.stdout);
+    const table = fs.readFileSync(graph, 'utf8'), ledger = readLedger(home).length;
+    // 대조: 옵션을 한 번만 주면 없는 후임이라 거절하고(종료 1) 아무것도 만들지 않는다.
+    const control = call(['handover', from, '--to', to, '--existing', ...rest]);
+    assert.equal(control.status, 1, control.stderr + control.stdout);
+    assert.match(control.stderr, /--existing 후임 확인 실패\(세션이 살아 있지 않음\)/);
+    for (const [name, shape] of Object.entries(MALFORMED)) {
+      const result = call(['handover', ...shape(from, to), ...rest]);
+      assert.equal(result.status, 2, `${name}: ${result.stderr}${result.stdout}`);
+      assert.match(result.stderr, /--existing은 값 없는 옵션이다/, name);
+      // 후임 생성·상태 파일·전송·원장 기록이 모두 0이다.
+      assert.equal(alive(to), false, `${name}: 없는 후임을 새로 띄웠다`);
+      assert.deepEqual(states(), [], name);
+      assert.equal(readLedger(home).length, ledger, `${name}: 원장에 기록이 늘었다`);
+      assert.equal(fs.readFileSync(graph, 'utf8'), table, name);
+      assert.ok(alive(from), name);
+    }
   } finally {
     for (const role of [from, to]) call(['stop', role]);
   }

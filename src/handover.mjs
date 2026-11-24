@@ -146,7 +146,9 @@ export class Handover {
     // 마지막 수명 사건이 stop이면 원장상 꺼진 세대라, 지금 pane이 어느 세대인지 모른다.
     if (events.at(-1)?.kind === 'stop') refuse('마지막 기록이 stop');
     const start = launchStart(events);
-    if (!start) refuse('이 세대를 띄운 start 기록 없음');
+    // 명령 없이 다시 연 기록(kadan start <역할>만 친 것)으로는 그 세대의 실행 명령·폴더를 알 수 없다.
+    if (!start) refuse('이 세대를 띄운 start 기록 없음 — 실행 명령이 기록된 세션만 후임이 될 수 있다: ' +
+      'kadan adopt 또는 kadan start --cmd로 띄운 세션');
     const pid = start.panePid ?? start.rottiePid;
     if (pid == null || String(pid) !== String(this.floor.pid(name)))
       refuse('start 기록의 PID가 지금 pane PID와 다름');
