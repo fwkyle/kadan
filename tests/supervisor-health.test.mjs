@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {buildWatchScope,buildSupervisorScope} from '../src/watch-scope.mjs';
 import {parseTimeout} from '../src/watch-tool-timeout.mjs';
-import {SupervisorHealth,SUPERVISOR_CHECK_MS,SUPERVISOR_ERROR_MS,SUPERVISOR_REUSE_MS} from '../src/watch-supervisor-health.mjs';
+import {SupervisorHealth,SUPERVISOR_CHECK_MS,SUPERVISOR_ERROR_MS,SUPERVISOR_REUSE_MS,SUPERVISOR_STILL_MS} from '../src/watch-supervisor-health.mjs';
 import {WatchReports,watchResponsibility} from '../src/watch-report.mjs';
 import {changeDigest} from '../src/watch-roles.mjs';
 import {runWatch} from './helpers/watch-runner.mjs';
@@ -131,12 +131,13 @@ test('같은 실행 완료 화면은 AI 재호출을 생략하지만 다른 미�
  }
 });
 const crafting=clock=>`✢ Crafting… (${clock} · ↓ 1.2k tokens)\n\n❯ \n`;
-test('진행 중(시계 증가)인 감독은 1시간이 지나도 후보를 내지 않고 멈추면 후보가 나간다',()=>{
+test('진행 중(시계 증가)인 감독은 1시간이 지나도 후보를 내지 않고 멈추면 N분 뒤 후보가 나간다',()=>{
  const f=health();f.check(0,crafting('3m 52s'));
  assert.equal(f.check(SUPERVISOR_CHECK_MS-60_000,crafting('3m 52s')).candidate,undefined);
  assert.equal(f.check(SUPERVISOR_CHECK_MS,crafting('4m 52s')).candidate,undefined);
- // lastCheck를 건드리지 않았으니 시계가 멈추면 곧바로 도래한 확인이 나간다.
- const stopped=f.check(SUPERVISOR_CHECK_MS+60_000,crafting('4m 52s')).candidate;
+ // lastCheck를 건드리지 않았으니 시계가 N분 멈춘 것을 본 순간 도래한 확인이 나간다(표 2: 시계가 마지막으로 나아간 순회부터 N분).
+ assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS-60_000,crafting('4m 52s')).candidate,undefined);
+ const stopped=f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,crafting('4m 52s')).candidate;
  assert.equal(stopped.input.check,'hourly');
  assert.equal(stopped.input.previous,crafting('4m 52s'));
  assert.deepEqual(stopped.input.statusLine,{kind:'working',clockSec:292,previousClockSec:292});
@@ -145,10 +146,12 @@ test('처음 본 화면은 진행 근거가 아니고 PID가 바뀌면 시계 �
  const f=health();
  // 첫 순회부터 1시간 경과 상태로 만든다(lastCheck를 과거로).
  f.check(0,crafting('9m 0s'));f.h.states.get('kadan-boss').lastCheck=epoch-SUPERVISOR_CHECK_MS;
- assert.equal(f.check(60_000,crafting('9m 0s')).candidate.input.statusLine.previousClockSec,540);
+ // 첫 순회(시계 기억 없음)는 셈의 시작점이라 후보가 아니다(표 1). 시계가 그대로 N분 이어진 뒤에 후보가 나간다(표 2).
+ assert.equal(f.check(60_000,crafting('9m 0s')).candidate,undefined);
+ assert.equal(f.check(SUPERVISOR_STILL_MS,crafting('9m 0s')).candidate.input.statusLine.previousClockSec,540);
  const swapped=new Map([['kadan-boss',{role:'boss',alive:true,pid:7,expectedPid:7,screen:crafting('9m 5s'),digest:'x',startedAt:t}]]);
  f.h.states.get('kadan-boss').lastCheck=epoch-SUPERVISOR_CHECK_MS;
- const r=f.check(120_000,'',{observations:swapped});
+ const r=f.check(SUPERVISOR_STILL_MS+60_000,'',{observations:swapped});
  assert.equal(f.h.states.get('kadan-boss').workClock,545);
  assert.equal(f.h.states.get('kadan-boss').pid,7);
  assert.equal(r.candidate?.input.statusLine.previousClockSec??null,null);
@@ -279,7 +282,7 @@ test('도구 줄 timeout 안(T+1분)에는 1시간이 지나도 정기 후보를
 });
 test('도구 줄의 timeout을 못 읽으면(⎿ Running…만 있음) 지금처럼 후보를 낸다',()=>{
  const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),TOOL_NO_T);
- assert.equal(f.check(SUPERVISOR_CHECK_MS,TOOL_NO_T).candidate.input.check,'hourly');
+ assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,TOOL_NO_T).candidate.input.check,'hourly');
 });
 test('도구 줄이 있어도 오류 줄이 있으면 억제하지 않고 오류 경로가 그대로다',()=>{
  const error='Error running remote compact task: stream disconnected before completion: idle timeout waiting for SSE\nReconnecting... 1/2';
@@ -291,12 +294,13 @@ test('도구 줄이 있어도 오류 줄이 있으면 억제하지 않고 오류
  assert.equal(e.check(SUPERVISOR_ERROR_MS,screen).candidate.input.check,'persistent-error');
 });
 test('응답 본문·우편 인용 속의 도구 줄 모양은 상태 구역이 아니라서 억제하지 않는다',()=>{
- const quoted=`카드 본문 인용:\n  ⎿  Running… (7s · timeout 4m)\n✶ Processing… (55s · ↓ 3.7k tokens)\n이 줄들은 우편 인용이다.\n\n────────\n❯ \n────────\n`;
+ // 인용 속 도구 줄의 T를 10분으로 둔다: 잘못 읽으면 보호가 처음 본 뒤 11분이라, 5분 확인이 끝나는 시각에는 후보가 안 나서 시험이 실패한다.
+ const quoted=`카드 본문 인용:\n  ⎿  Running… (7s · timeout 10m)\n✶ Processing… (55s · ↓ 3.7k tokens)\n이 줄들은 우편 인용이다.\n\n────────\n❯ \n────────\n`;
  // 도구 줄이 스피너 바로 위가 아닌 경우(그 사이에 글이 있다)와 스피너 줄이 입력창 바로 위가 아닌 경우.
- const apart=`  ⎿  Running… (7s · timeout 4m)\n본문 한 줄\n✶ Processing… (55s · ↓ 3.7k tokens)\n\n❯ \n`;
+ const apart=`  ⎿  Running… (7s · timeout 10m)\n본문 한 줄\n✶ Processing… (55s · ↓ 3.7k tokens)\n\n❯ \n`;
  for(const screen of [quoted,apart]){
   const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
-  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly');
+  assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,screen).candidate.input.check,'hourly');
  }
 });
 test('도구 줄이 사라졌다가 다시 나타나거나 T가 바뀌면 처음 본 시각부터 다시 센다',()=>{
@@ -318,17 +322,17 @@ test('실제 입력창이 없거나 상태 구역이 아닌 인용·지난 출�
  const spin='✶ Processing… (55s · ↓ 3.7k tokens)';
  for(const screen of [
   // 도구·스피너 모양 아래에 인용 줄이 있고 실제 입력창이 없다.
-  `화면 인용\n  ⎿  Running… (7s · timeout 4m)\n${spin}\n> 이것은 인용의 마지막 줄입니다\n출력 끝`,
+  `화면 인용\n  ⎿  Running… (7s · timeout 10m)\n${spin}\n> 이것은 인용의 마지막 줄입니다\n출력 끝`,
   // 지난 Bash 출력 안의 들여쓴 도구·스피너 모양, 그 아래에 실제 입력창.
-  `⏺ Bash(지난 화면 예시 출력)\n  ⎿  지난 출력\n     ⎿  Running… (7s · timeout 4m)\n     ${spin}\n${BOX}`,
+  `⏺ Bash(지난 화면 예시 출력)\n  ⎿  지난 출력\n     ⎿  Running… (7s · timeout 10m)\n     ${spin}\n${BOX}`,
   // 스피너 줄이 들여쓰였다 / 도구 줄 들여쓰기가 다르다 / 도구 줄과 스피너 사이에 글이 낀다 / 입력창 위에 가로줄 없음.
-  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n\n  ${spin}\n\n${BOX}`,
-  `⏺ Bash(x)\n     ⎿  Running… (7s · timeout 4m)\n\n${spin}\n\n${BOX}`,
-  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n끼어든 글\n${spin}\n\n${BOX}`,
-  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 4m)\n\n${spin}\n\n❯ \n────────\n  ? for shortcuts`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 10m)\n\n  ${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n     ⎿  Running… (7s · timeout 10m)\n\n${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 10m)\n끼어든 글\n${spin}\n\n${BOX}`,
+  `⏺ Bash(x)\n  ⎿  Running… (7s · timeout 10m)\n\n${spin}\n\n❯ \n────────\n  ? for shortcuts`,
  ]){
   const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
-  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly',screen);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,screen).candidate.input.check,'hourly',screen);
  }
 });
 test('같은 도구의 경과 표시만 바뀌어도 처음 본 시각은 그대로라 12시간 가짜 시계에서도 후보가 돌아온다',()=>{
@@ -347,7 +351,7 @@ test('쓰는 timeout은 최대 60분이고 유한하지 않은 값은 읽기 실
  assert.equal(f.check(until,ten).candidate.input.check,'hourly');
  const huge=toolScreen(`Running… (7s · timeout ${'9'.repeat(310)}h)`),g=health();
  g.check(0,'하위 결과를 기다리는 중');g.check(first,huge);
- assert.equal(g.check(SUPERVISOR_CHECK_MS,huge).candidate.input.check,'hourly');
+ assert.equal(g.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,huge).candidate.input.check,'hourly');
  assert.equal(parseTimeout('10h'),60*60_000);assert.equal(parseTimeout(`${'9'.repeat(310)}h`),null);
  assert.deepEqual(['4m','6m 40s','30s','1h','2h 5m'].map(parseTimeout),[240_000,400_000,30_000,3_600_000,3_600_000]);
  for(const bad of ['0s','1d','2 mins','',undefined])assert.equal(parseTimeout(bad),null);
@@ -377,7 +381,7 @@ test('실측 Claude 화면(공백 U+00A0·백그라운드 안내·팁 줄 포함
   fixture.replace('     (ctrl+b','  (ctrl+b')]){
   assert.notEqual(bad,fixture);
   const f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),bad);
-  assert.equal(f.check(SUPERVISOR_CHECK_MS,bad).candidate.input.check,'hourly');
+  assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,bad).candidate.input.check,'hourly');
  }
 });
 // 4라운드: 안내 줄은 실측 글자 그대로만, 팁 줄은 접두어. 남는 위험(Tip 줄 지난 출력)은 최대 61분 유예 뒤 후보가 돌아온다.
@@ -386,7 +390,7 @@ test('백그라운드 안내 줄은 실측 글자만 건너뛰고 비슷한 일�
  for(const hint of ['     (ctrl+b ctrl+b (twice) to run in background)','     (ctrl+b to run in background)'])assertSuppressedUntil(withHint(hint),4*60_000,hint);
  for(const hint of ['     (ctrl+b should not run in background)','     (ctrl+b ctrl+b (twice) to run in background) 끝','  (ctrl+b to run in background)','     (ctrl+b to run in the background)']){
   const screen=withHint(hint),f=health();f.check(0,'하위 결과를 기다리는 중');f.check(seenAt(),screen);
-  assert.equal(f.check(SUPERVISOR_CHECK_MS,screen).candidate.input.check,'hourly',hint);
+  assert.equal(f.check(SUPERVISOR_CHECK_MS+SUPERVISOR_STILL_MS,screen).candidate.input.check,'hourly',hint);
  }
 });
 test('Tip 줄 지난 출력 + 지난 도구 줄(받아들인 위험)은 유예되지만 최대 61분 안에 후보가 돌아온다',()=>{

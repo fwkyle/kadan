@@ -53,6 +53,7 @@
 | 정체 판정 | 5분 | `commands/watch.mjs:141` | 지문 변화 없음 기준 |
 | 시작보고 유예 | 5분 | `watch-runner.mjs:101` | 발령 뒤 시작 기록을 기다림 |
 | 감독 오류 지속 | 5분 | `watch-supervisor-health.mjs:9` | 오류 화면이 이만큼 이어지면 후보 |
+| 감독 안 나아감 확인 | 5분 | `SUPERVISOR_STILL_MS` (`watch-supervisor-health.mjs`) | 일하는 표시가 있는 화면은 시계가 안 나아간 채 이만큼 이어진 것을 이 감시기가 본 뒤에만 정기 후보(오류 화면은 해당 없음) |
 | 순회 기록 주기 | 5분 | `watch-cycle.mjs:4` | 감시 순회 기록 간격 |
 | 완료 유예 | 15분 | `watch-runner.mjs:102` | 완료 후보를 확정하기 전 대기 |
 | 놀고 있음 | 15분 | `commands/watch.mjs:152` | 감독이 할 일이 있는데 멈춤 |
