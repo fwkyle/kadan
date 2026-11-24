@@ -8,6 +8,8 @@ import { parseHierarchy } from './hierarchy.mjs';
 import { openTaskIds } from './handover-state.mjs';
 import {startRoleProfile} from './role-instructions.mjs';
 import { withHierarchyLock } from './hierarchy-lock.mjs';
+import { launchStart } from './role-conversation.mjs';
+import { isSupervisorActor } from './actors.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 const session = role => `kadan-${role}`;
@@ -133,6 +135,24 @@ export class Handover {
   lastStart(role) {
     return this.entries().filter(e => e.kind === 'start' && e.role === role).at(-1);
   }
+  // --existing: 이미 떠 있는 세션을 후임으로 받는다. 그 세대를 실제로 띄운 start 기록과 지금 pane이 같은 것일 때만 받는다.
+  // 하나라도 확인되지 않으면 거절한다(추측해서 넘기지 않는다). 돌려주는 값은 그 세대를 띄운 start다.
+  existingSuccessor(to) {
+    const name = session(to);
+    const refuse = why => { throw new Error(`--existing 후임 확인 실패(${why}): ${to}; 선임·후임·관계표는 그대로`); };
+    if (!this.floor.alive(name)) refuse('세션이 살아 있지 않음');
+    const events = this.entries().filter(e => (e.kind === 'start' || e.kind === 'stop') &&
+      (e.session ? e.session === name : e.role === to));
+    // 마지막 수명 사건이 stop이면 원장상 꺼진 세대라, 지금 pane이 어느 세대인지 모른다.
+    if (events.at(-1)?.kind === 'stop') refuse('마지막 기록이 stop');
+    const start = launchStart(events);
+    if (!start) refuse('이 세대를 띄운 start 기록 없음');
+    const pid = start.panePid ?? start.rottiePid;
+    if (pid == null || String(pid) !== String(this.floor.pid(name)))
+      refuse('start 기록의 PID가 지금 pane PID와 다름');
+    if ((start.floor ?? 'tmux') !== this.floor.name) refuse('실행 바닥 불일치');
+    return start;
+  }
   graph(file) {
     const text = fs.readFileSync(file, 'utf8');
     const value = JSON.parse(text); parseHierarchy(value);
@@ -158,29 +178,51 @@ export class Handover {
       }
     }
   }
-  begin(from, { to, cmd, cwd, hierarchy, context, atBoundary = false, sourceEnded = false }) {
+  // existing: 후임을 새로 띄우지 않고 이미 떠 있는 세션을 후임으로 받는다. 그 뒤 순서(인수 준비 → accept → finish)는 같다.
+  // 그 세션은 사람이 쓰던 대화일 수 있으므로 이 인계의 어떤 실패·중단에서도 끄지 않는다(이 클래스는 선임만 끈다).
+  begin(from, { to, cmd, cwd, hierarchy, context, atBoundary = false, sourceEnded = false, existing = false }) {
     return this.locked(() => {
       if (!atBoundary) throw new Error('--at-boundary 필요: 선임의 새 발령을 멈춘 카드 경계에서만 시작');
       if (!validRole(from) || !validRole(to) || from === to) throw new Error('서로 다른 유효 역할명이 필요하다');
+      if (existing && (cmd != null || cwd != null))
+        throw new Error('--existing은 --cmd·--cwd와 함께 쓸 수 없다: 이미 떠 있는 후임의 실행 명령·폴더는 그 start 기록 값이다');
       const previous = this.lastStart(from);
       if (!previous) throw new Error('선임 start 기록 없음');
       const roleProfile = startRoleProfile({home:this.home,role:from,profile:previous.roleProfile??undefined});
       const oldPid = previous.panePid ?? previous.rottiePid;
       if (oldPid == null) throw new Error('선임 PID 기록 없음');
       this.sourceIdentity({from, oldPid, sourceEnded});
-      if (this.floor.alive(session(to)) || this.lastStart(to)) throw new Error('후임 이름이 사용 중이거나 과거 사용됨');
+      if (!existing && (this.floor.alive(session(to)) || this.lastStart(to)))
+        throw new Error('후임 이름이 사용 중이거나 과거 사용됨');
       if (previous.floor && previous.floor !== this.floor.name) throw new Error('실행 바닥 불일치');
-      const command = cmd ?? previous.cmd;
-      const directory = cwd ?? previous.cwd;
+      const successor = existing ? this.existingSuccessor(to) : null;
+      // 슈퍼감독 자리는 프로필과 이름 꼴로 판정하는 곳이 있다(결정 요청 권한 등). 둘 중 하나라도 아니면 넘기지 않는다.
+      if (successor && roleProfile === 'super' && (successor.roleProfile !== 'super' || !isSupervisorActor(to)))
+        throw new Error(`--existing 후임이 슈퍼감독 자리를 받을 수 없음(프로필 ${successor.roleProfile ?? '없음'}, 이름 ${to}): ` +
+          '후임을 kadan adopt <이름> --profile super 로 띄우고, 이름은 …슈퍼감독 또는 …슈퍼감독-숫자 꼴로 한다');
+      // 기존 세션 후임의 명령·폴더는 그 세션 자신의 start 값이다. 선임 값이나 옵션으로 덮지 않는다.
+      const command = successor ? successor.cmd : cmd ?? previous.cmd;
+      const directory = successor ? successor.cwd : cwd ?? previous.cwd;
       if (!command || typeof command !== 'string') throw new Error('--cmd 필요: 실행 명령을 추측하지 않는다');
-      if (!directory || !path.isAbsolute(directory) || !fs.statSync(directory).isDirectory())
+      if (!successor && (!directory || !path.isAbsolute(directory) || !fs.statSync(directory).isDirectory()))
         throw new Error('--cwd에 실제 절대경로가 필요하다');
       if (!hierarchy || !path.isAbsolute(hierarchy)) throw new Error('--hierarchy 절대경로 필요');
       if (!context || !path.isAbsolute(context) || !fs.statSync(context).isFile())
         throw new Error('--context에 현재 승인/작업 기준 파일 절대경로 필요');
       const graph = this.graph(hierarchy);
-      if (!Object.hasOwn(graph.value, from) || Object.hasOwn(graph.value, to))
+      if (!Object.hasOwn(graph.value, from) || (!existing && Object.hasOwn(graph.value, to)))
         throw new Error('선임 관계가 없거나 후임 관계가 이미 있음');
+      if (existing) {
+        // 후임이 이미 가진 줄은 받는다(전환 때 빼고 원복 때 toBefore로 돌려놓는다).
+        // 후임이 선임의 상위이거나 하위를 두고 있으면 거절한다.
+        const seen = new Set();
+        for (let up = parentOf(graph.value, from); up != null && !seen.has(up); up = parentOf(graph.value, up)) {
+          if (up === to) throw new Error(`--existing 후임이 선임의 상위(순환): ${to}; 선임 보존`);
+          seen.add(up);
+        }
+        const child = Object.keys(graph.value).find(role => graph.value[role] === to);
+        if (child !== undefined) throw new Error(`--existing 후임 아래에 하위 역할이 있음(${child}): 선임 보존`);
+      }
       for (const name of fs.readdirSync(this.dir).filter(n => n.endsWith('.json'))) {
         const other = JSON.parse(fs.readFileSync(path.join(this.dir, name), 'utf8'));
         if (!['complete', 'aborted'].includes(other.phase) && [other.from, other.to].some(r => [from, to].includes(r)))
@@ -188,13 +230,13 @@ export class Handover {
       }
       const id = randomUUID();
       const state = { id, sourceEnded, phase: 'preparing', from, to, oldPid: String(oldPid), command, cwd: directory,
-        ...(roleProfile?{roleProfile}:{}),
+        ...(roleProfile?{roleProfile}:{}), ...(existing ? { existing: true } : {}),
         hierarchy, originalHierarchy: graph.text, originalHash: graph.hash,
         context, contextHash: hash(fs.readFileSync(context)), taskIds: openTaskIds(this.entries(), from),
         createdAt: new Date(this.now()).toISOString() };
       this.save(state);
       const packet = path.join(this.dir, `${id}.md`);
-      fs.writeFileSync(packet, `# 인수 확인 ${id}\n\n선임: ${from}\n후임: ${to}\n작업공간: ${directory}\n` +
+      fs.writeFileSync(packet, `# 인수 확인 ${id}\n\n선임: ${from}\n후임: ${to}\n작업공간: ${directory ?? '기록 없음'}\n` +
         `원장: ${storagePath(this.home)}\n현재 승인/기준: ${context}\n` +
         `인계할 미완료 카드: ${JSON.stringify(state.taskIds)}\n관계표: ${hierarchy}\n\n` +
         '카드·결과·원장을 읽고 다음 행동을 확인하라. 이 문서는 새 구현/배포 승인이 아니다.\n' +
@@ -202,9 +244,12 @@ export class Handover {
         `KADAN_ROLE=${to} kadan handover accept ${id} --receipt <절대경로> 로 인수를 확인한 뒤 응답을 끝내라.\n` +
         '전환 완료 편지 전에는 카드 발령·구현·관계 변경·선임 종료를 하지 않는다.\n', { mode: 0o600 });
       try {
-      this.start(to, command, directory, roleProfile);
-      const successor = this.lastStart(to);
-      state.newPid = String(successor?.panePid ?? successor?.rottiePid ?? '');
+      if (successor) state.newPid = String(successor.panePid ?? successor.rottiePid);
+      else {
+        this.start(to, command, directory, roleProfile);
+        const started = this.lastStart(to);
+        state.newPid = String(started?.panePid ?? started?.rottiePid ?? '');
+      }
       this.identity(to, state.newPid);
       state.phase = 'prepared'; state.packet = packet; this.save(state);
       this.record({ kind: 'handover', phase: 'prepared', handoverId: id, from, to, taskIds: state.taskIds });
@@ -328,7 +373,8 @@ export class Handover {
       s.childNotices = [];
       const original = JSON.parse(s.originalHierarchy);
       for (const [child,parent] of Object.entries(original)) {
-        if (parent !== s.from || !this.floor.alive(session(child))) continue;
+        // 후임 자신이 선임 아래 줄이었으면(기존 세션 후임) 자기에게 "상위가 자기로 바뀜"을 보내지 않는다.
+        if (parent !== s.from || child === s.to || !this.floor.alive(session(child))) continue;
         try { this.send(child, `직속 감독 인계: ${s.from} → ${s.to}, 인계 ${id}. 앞으로 질문·완료 통지는 ${s.to}에게 보내라. 기존 카드·승인 범위 유지.`); s.childNotices.push({role:child,sent:true}); }
         catch (error) { s.childNotices.push({role:child,sent:false,error:error.message}); }
       }
@@ -362,7 +408,9 @@ export class Handover {
       });
       s.phase = 'aborted'; this.save(s);
       this.record({ kind: 'handover', phase:'aborted', handoverId:id, from:s.from,to:s.to });
-      return {...s, warning:'후임은 자동 삭제하지 않음. watch 원복 확인 뒤 선임 재개; 후임의 역할/작업 상태를 확인해 따로 정리'};
+      return {...s, warning: s.existing
+        ? '후임은 이미 떠 있던 세션이라 끄지 않고 그대로 둔다. watch 원복 확인 뒤 선임 재개'
+        : '후임은 자동 삭제하지 않음. watch 원복 확인 뒤 선임 재개; 후임의 역할/작업 상태를 확인해 따로 정리'};
     });
   }
 }

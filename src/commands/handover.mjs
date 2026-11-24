@@ -52,14 +52,16 @@ export function createHandoverRunner() {
 }
 
 export function cmdHandover(argv, flags) {
-  const usage = "kadan handover <선임> --to <후임> --at-boundary --hierarchy <절대JSON> --context <절대문서> [--source-ended] [--cmd 명령] [--cwd 절대경로] " +
+  const usage = "kadan handover <선임> --to <후임> --at-boundary --hierarchy <절대JSON> --context <절대문서> [--source-ended] [--existing | [--cmd 명령] [--cwd 절대경로]] " +
     "[--manual | --wait-timeout 1800 --notify 수신자] | accept <id> --receipt <절대JSON> | finish <id> [--timeout 90] | status <id> | abort <id>";
   // 공용 옵션 해석기는 건드리지 않고 --manual의 위치만 여기서 처리한다.
   if (typeof flags.manual === "string") { argv = [flags.manual,...argv]; flags = {...flags,manual:true}; }
+  // --existing도 값이 없는 옵션이다. 공용 해석기가 뒤의 위치 인자를 값으로 삼켰으면 되돌린다.
+  if (typeof flags.existing === "string") { argv = [flags.existing,...argv]; flags = {...flags,existing:true}; }
   if (flags.help || !argv.length) { console.log(usage); return; }
   const [first,id] = argv;
   const subcommands = {accept:["receipt"],finish:["timeout"],status:[],abort:[]};
-  const allowed = new Set(Object.hasOwn(subcommands,first) ? subcommands[first] : ["to","at-boundary","source-ended","hierarchy","context","cmd","cwd","manual","wait-timeout","notify"]);
+  const allowed = new Set(Object.hasOwn(subcommands,first) ? subcommands[first] : ["to","at-boundary","source-ended","existing","hierarchy","context","cmd","cwd","manual","wait-timeout","notify"]);
   for (const key of Object.keys(flags)) if (!allowed.has(key)) throw new Error(`handover ${first}에서 사용할 수 없는 옵션: ${key}; 자동 대기는 --wait-timeout, finish 대기는 --timeout`);
   const runner = createHandoverRunner(), operation = runner.h;
   let result;
@@ -76,7 +78,7 @@ export function cmdHandover(argv, flags) {
     if (flags["wait-timeout"] != null && typeof flags["wait-timeout"] !== "string") throw new Error("--wait-timeout 초 필요");
     const config = flags.manual ? null : runner.prepare(first,{waitTimeout:flags["wait-timeout"]==null?1800:Number(flags["wait-timeout"]), notify:flags.notify});
     const state = operation.begin(first,{to:flags.to,cmd:flags.cmd,cwd:flags.cwd,hierarchy:flags.hierarchy,
-      context:flags.context,atBoundary:flags["at-boundary"]===true,sourceEnded:flags["source-ended"]===true});
+      context:flags.context,atBoundary:flags["at-boundary"]===true,sourceEnded:flags["source-ended"]===true,existing:flags.existing===true});
     result = config ? runner.start(state.id,config) : runner.status(state.id);
   }
   console.log(JSON.stringify(result,null,2));
