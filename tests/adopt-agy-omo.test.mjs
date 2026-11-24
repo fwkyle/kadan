@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { adoptCommand, ADOPT_UNCHECKED_HARNESSES, detectConversation, runAdopt } from '../src/adopt.mjs';
+import { adoptCommand, ADOPT_UNCHECKED_HARNESSES, detectConversation, detectForAdopt, runAdopt } from '../src/adopt.mjs';
 import { findAgyConversation } from '../src/adopt-process.mjs';
 import { inspectCardSendIdentity } from '../src/ai-identity.mjs';
 
@@ -101,4 +101,61 @@ test('findAgyConversation: 상위 agy가 연 presence 잠금이 정확히 하나
   assert.equal(find(lsof([`n${path.join(root, 'presence', 'sub', `${ID}.lock`)}`])), null, '다른 폴더의 같은 이름은 쓰지 않는다');
   assert.equal(find(() => ({ status: 1, stdout: '' })), null, 'lsof 실패');
   assert.equal(find(lsof([lock(ID)]), [{ pid: '5', executable: '/bin/zsh' }]), null, '상위에 agy가 없으면 모른다');
+});
+
+// 검수 exec-b189a814 재현: 상위 agy가 감지되는 환경에서도 지정한 실행기를 따른다.
+const agyDetect = (env, harness) => detectForAdopt(env, harness, () => ({ harness: 'agy', id: ID }));
+
+test('adopt: --harness omo인데 --resume이 없으면 상위 agy 감지가 있어도 시작 전에 거절한다', () => {
+  const { calls, deps } = fakes();
+  assert.throws(() => runAdopt({ role: '감독', flags: { model: 'openai/gpt-6', harness: 'omo' }, env: {}, detect: agyDetect, ...deps }),
+    /--harness omo는 지금 대화 ID를 알 수 없다 — --resume/);
+  assert.throws(() => runAdopt({ role: '감독', flags: { model: 'm', harness: 'codex' }, env: {}, detect: agyDetect, ...deps }),
+    /--harness codex는 지금 대화 ID를 알 수 없다/);
+  assert.equal(calls.start.length, 0);
+  assert.equal(calls.send.length, 0);
+});
+
+test('adopt: 모르는 --harness는 --resume이 없어도 네 이름을 안내하며 거절한다', () => {
+  const { calls, deps } = fakes();
+  assert.throws(() => runAdopt({ role: '감독', flags: { model: 'm', harness: 'unknown' }, env: {}, detect: agyDetect, ...deps }),
+    /claude·codex·agy·omo 중 하나다/);
+  assert.throws(() => runAdopt({ role: '감독', flags: { model: 'm', harness: true }, env: {}, detect: agyDetect, ...deps }),
+    /--harness에는 값이 필요하다/);
+  assert.equal(calls.start.length, 0);
+});
+
+test('adopt: --harness agy만 주면 ID를 자동 감지하고, --harness가 없으면 Claude 환경 → agy 순서다', () => {
+  let { calls, deps } = fakes();
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-xhigh', harness: 'agy' }, env: { CLAUDE_CODE_SESSION_ID: 'abc-1' }, detect: agyDetect, ...deps });
+  assert.equal(calls.start[0].flags.cmd, `agy --conversation ${ID} --model gemini-4-neon-xhigh`, 'agy를 지정하면 Claude 환경 값을 쓰지 않는다');
+  ({ calls, deps } = fakes());
+  runAdopt({ role: '감독', flags: { model: 'opus' }, env: { CLAUDE_CODE_SESSION_ID: 'abc-1' }, detect: agyDetect,
+    findTranscript: () => ({ ok: true }), ...deps });
+  assert.match(calls.start[0].flags.cmd, /^claude --resume abc-1 /, '지정이 없으면 Claude 환경이 먼저');
+  ({ calls, deps } = fakes());
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-xhigh' }, env: {}, detect: agyDetect, ...deps });
+  assert.match(calls.start[0].flags.cmd, /^agy --conversation /, '그다음 agy');
+  assert.throws(() => runAdopt({ role: '감독', flags: { model: 'opus', harness: 'claude' }, env: {}, detect: agyDetect, ...deps }),
+    /옮길 대화를 모른다/, 'claude를 지정하고 Claude 환경이 아니면 agy로 넘어가지 않는다');
+});
+
+test('adopt: 값이 빠진 --effort는 실행기와 관계없이 거절한다', () => {
+  const { calls, deps } = fakes();
+  for (const harness of ['claude', 'codex', 'agy', 'omo']) {
+    assert.throws(() => runAdopt({ role: '감독', flags: { model: 'openai/gpt-6', resume: ID, harness, effort: true }, env: {}, findTranscript: () => ({ ok: true }), ...deps }),
+      /--effort에는 값이 필요하다/, harness);
+  }
+  assert.equal(calls.start.length, 0);
+});
+
+test('adopt 출력: agy는 같은 대화 이어 열기, 첫 안내 전송 줄에는 인수 확인 대기 표시를 넘기지 않는다', () => {
+  const { calls, deps } = fakes();
+  runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-xhigh', resume: ID, harness: 'agy' }, env: {}, ...deps });
+  assert.ok(calls.log.some((l) => l.startsWith('같은 대화 이어 열기: agy 대화')));
+  assert.ok(!calls.log.some((l) => /복제 창 생성|인수 확인 대기/.test(l)));
+  assert.equal(calls.send[0].awaitingAcceptance, false);
+  const omo = fakes();
+  runAdopt({ role: '감독', flags: { model: 'openai/gpt-6', resume: ID, harness: 'omo' }, env: {}, ...omo.deps });
+  assert.ok(omo.calls.log.some((l) => l.startsWith('복제 창 생성: omo 대화')));
 });

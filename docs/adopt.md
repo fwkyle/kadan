@@ -41,7 +41,7 @@ kadan adopt 프로젝트-감독 --model opus
 kadan adopt 프로젝트-감독 --model opus --resume <대화ID> --harness claude
 ```
 
-실행기는 `--harness claude|codex|agy|omo` 중 하나다. [agy·omo](#agyomo-대화)는 아래 표의 제한이 있다.
+실행기는 `--harness claude|codex|agy|omo` 중 하나다. `--harness`를 주면 그 실행기만 쓴다(이름이 틀리거나 `codex`·`omo`인데 `--resume`이 없으면 시작 전에 거절하고, 다른 실행기의 대화로 바꿔 열지 않는다). 주지 않으면 Claude Code 안인지 보고, 아니면 agy 안인지 본다. [agy·omo](#agyomo-대화)는 아래 표의 제한이 있다.
 
 1. 원본 대화의 현재 권한을 읽고 같은 모델·지정한 생각 강도로 복제본을 연다.
 2. 새 감독이 목표·승인 범위·다음 행동을 읽고 첫 안내의 인수 명령을 한 번 실행한다.
