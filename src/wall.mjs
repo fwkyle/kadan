@@ -473,7 +473,8 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  const decisionSecret=randomBytes(32); // 결정 전용 token용 비밀. 프로세스 안에만 둔다.
  const cache=createResponseCache();
  const runnerHistory=home?createRunnerSettingsHistory(home):null;
- let sharedSnapshot=null;
+ // 로더마다 한 칸씩 둔다: 현황(loadSnapshot)과 목록(loadListSnapshot)이 번갈아 와도 서로의 수집을 밀어내지 않는다.
+ const sharedSnapshots=new Map();
  // 두 단계 loader는 DB 입력만 확보하고 닫은 뒤 OS 조회·상태 계산을 한다.
  // 기존 함수 loader는 호출자가 DB 읽기/계산을 나누지 않은 호환 경로다.
  const load=loader=>{
@@ -481,7 +482,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
   const data=home?storageSnapshot(home,read):read();
   return typeof loader==='function'?data:loader.build(data);
  };
- const clear=()=>{cache.clear();sharedSnapshot=null;};
+ const clear=()=>{cache.clear();sharedSnapshots.clear();};
  // 키 앞의 구분(local/remote)은 서버가 판정 결과로 붙인다. URL 매개변수로는 바꿀 수 없다(2026-10-18 검수: 주소에 표시를 넣어 섞던 결함).
  const cacheKey=url=>{const query=new URLSearchParams(url.searchParams);query.delete('fresh');query.sort();return (url.cacheScope||'local')+'|'+url.pathname+'?'+query.toString();};
  const cached=url=>{
@@ -502,7 +503,12 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
  let warming=null;
  const warm=(loader=loadSnapshot)=>{
   warming=null;
-  const collect=()=>{const value=load(loader);if(value.error||value.centerError)return;if(centerHandler){value.home=home;prepareCenterWall(value);}sharedSnapshot={at:now(),value,loader};};
+  const collect=()=>{
+   const value=load(loader);
+   if(value.error||value.centerError)return;
+   if(centerHandler){value.home=home;prepareCenterWall(value);}
+   sharedSnapshots.set(loader,{at:now(),value});
+  };
   try{if(home&&typeof loader==='function')storageSnapshot(home,collect);else collect();}catch{}
  };
   const server=http.createServer(async (request, response) => {
@@ -592,8 +598,8 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     }
     const listRequest = loadListSnapshot && ['/api/dashboard/workspace', '/api/dashboard/detail'].includes(url.pathname);
     const readSnapshot = listRequest ? loadListSnapshot : loadSnapshot;
-    const snapshotMatches = () => sharedSnapshot?.loader === readSnapshot && cacheSec
-      && now() - sharedSnapshot.at < cacheSec * 1000;
+    const shared = () => sharedSnapshots.get(readSnapshot);
+    const snapshotMatches = () => cacheSec && shared() && now() - shared().at < cacheSec * 1000;
     if(request.method==='GET'&&cacheSec&&centerHandler&&!NO_SNAPSHOT_GETS.has(url.pathname)){
       clearTimeout(warming);warming=null;
       warming=setTimeout(()=>warm(readSnapshot),warmAfterMs);warming.unref?.();
@@ -618,9 +624,9 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     }
     const serve=()=>{
     const reused=snapshotMatches();
-    const snapshot=reused?sharedSnapshot.value:load(readSnapshot);
-    if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshot={
-      at:sharedSnapshot?.value===snapshot?sharedSnapshot.at:now(),value:snapshot,loader:readSnapshot};
+    const snapshot=reused?shared().value:load(readSnapshot);
+    if(cacheSec&&!snapshot.error&&!snapshot.centerError)sharedSnapshots.set(readSnapshot,{
+      at:shared()?.value===snapshot?shared().at:now(),value:snapshot});
     if(centerHandler) {
       snapshot.home=home;
       // 결정 목록은 쓰는 응답에서만 읽는다(2026-10-14: 모든 요청이 매번 읽고 있었다).
@@ -631,18 +637,22 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
     }
     if (url.pathname === '/api/cards') {
       const body=JSON.stringify({center:snapshot.center&&centerSummary(snapshot.center),error:snapshot.centerError});
-      if(!snapshot.centerError)remember(cacheUrl,body,'application/json; charset=utf-8',sharedSnapshot?.at);
+      if(!snapshot.centerError)remember(cacheUrl,body,'application/json; charset=utf-8',shared()?.at);
       response.writeHead(snapshot.centerError?503:200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});
       response.end(body); return;
     }
     if(centerHandler&&url.pathname.startsWith('/api/dashboard/')){sendDashboardData(snapshot,url,response);return;}
     if (centerHandler && url.searchParams.get('legacy')!=='1') {
       const html=renderCenterWall(snapshot,{token:remoteView?'':centerHandler.token,url});
-      remember(cacheUrl,html,'text/html; charset=utf-8',sharedSnapshot?.at);
+      remember(cacheUrl,html,'text/html; charset=utf-8',shared()?.at);
       response.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store','x-kadan-cache':'miss'});response.end(html);return;
     }
+    // 대기 출력 꼬리는 옛 화면만 쓴다. 수집이 생략한 경우(waitSnapshotsApplied가 false)에만 여기서 붙인다.
+    const legacyTree = home && snapshot.tree && snapshot.waitSnapshotsApplied === false
+      ? withWaitSnapshots(snapshot.tree, home) : snapshot.tree;
     let html = renderWallHtml({
       ...snapshot,
+      tree: legacyTree,
       all: url.searchParams.get("all") === "1",
       judge: url.searchParams.get("judge") === "1",
       refresh: ["0", "30"].includes(url.searchParams.get("refresh")) ? Number(url.searchParams.get("refresh")) : 10,
@@ -657,7 +667,7 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
       kind: url.searchParams.get("kind") ?? "",
     });
     if(url.searchParams.get("legacy")=== "1") html=html.replace("<body>",'<body><div style="padding:16px;background:#fff0d0">참고용 옛 화면: 진행률은 현재 중앙 상태와 다를 수 있습니다. <a href="/">새 화면으로 돌아가기</a></div>');
-    remember(cacheUrl,html,'text/html; charset=utf-8',sharedSnapshot?.at);
+    remember(cacheUrl,html,'text/html; charset=utf-8',shared()?.at);
     response.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
@@ -686,6 +696,21 @@ export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date
   return server;
 }
 
+// out/ 파일 이름 하나를 훑어 세션마다 사전순 마지막 대기 출력(`<세션>.wait-*.txt`)을 모은다. 파일 수 + 역할 수에 비례한다.
+// 옛 방식(역할마다 `${세션}.wait-`로 시작하는 파일을 걸러 정렬)과 같은 결과다: 이름 속 `.wait-`가 나오는 자리마다
+// 앞부분을 세션 후보로 보고, 비교는 기본 정렬과 같은 UTF-16 순서(`>`)다.
+function latestWaitFiles(names) {
+  const latest = new Map();
+  for (const name of names) {
+    if (!name.endsWith(".txt")) continue;
+    for (let at = name.indexOf(".wait-"); at !== -1; at = name.indexOf(".wait-", at + 1)) {
+      const session = name.slice(0, at);
+      if (!(latest.get(session) >= name)) latest.set(session, name);
+    }
+  }
+  return latest;
+}
+
 export function withWaitSnapshots(tree, home) {
   const outDir = path.join(home, "out");
   let names;
@@ -694,14 +719,11 @@ export function withWaitSnapshots(tree, home) {
   } catch {
     return tree;
   }
+  const latest = latestWaitFiles(names);
   return tree.map((board) => ({
     ...board,
     roles: board.roles.map((role) => {
-      const prefix = `${role.session}.wait-`;
-      const fileName = names
-        .filter((name) => name.startsWith(prefix) && name.endsWith(".txt"))
-        .sort()
-        .at(-1);
+      const fileName = latest.get(`${role.session}`);
       if (!fileName) return role;
       try {
         const lines = fs

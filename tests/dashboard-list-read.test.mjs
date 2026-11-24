@@ -50,12 +50,13 @@ test('목록 HTTP는 별도 수집을 쓰며 현황 캐시와 섞지 않는다',
     assert.equal(await get('detail?card=demo/card-1'), 200);assert.equal(lists, 1);
     assert.equal(full, 0);
     assert.equal(await get('status'), 200);assert.equal(full, 1);
-    assert.equal(await get('workspace?collection=work'), 200);assert.equal(lists, 2);
+    // 공통 수집은 로더마다 한 칸이라 현황 수집이 목록 수집을 밀어내지 않는다(2026-11-24).
+    assert.equal(await get('workspace?collection=work'), 200);assert.equal(lists, 1);
     assert.equal(full, 1);
-    assert.equal(await get('workspace?fresh=1'), 200);assert.equal(lists, 3);
+    assert.equal(await get('workspace?fresh=1'), 200);assert.equal(lists, 2);
     assert.equal(await get('workspace', {headers: {origin: 'https://untrusted.invalid'}}), 403);
-    assert.equal(lists, 3);
-    fail = true;assert.equal(await get('workspace?fresh=1'), 503);assert.equal(lists, 4);
+    assert.equal(lists, 2);
+    fail = true;assert.equal(await get('workspace?fresh=1'), 503);assert.equal(lists, 3);
   } finally {await new Promise(resolve => server.close(resolve));}
 });
 
