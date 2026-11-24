@@ -69,12 +69,13 @@ export function briefStartedRole({ role, session, roleProfile, noPrompt, cmd, re
   if (skip) return `skipped:${skip}`;
   const skill = briefSkill(roleProfile);
   const hint = skill ? `창에서 직접 /${skill}` : "발령이 오면 그대로 진행";
-  // agy는 입력 줄이 보이기 전(시작 중)에는 아직 준비 안 됨으로 본다. 끝까지 안 보이면 아래 not-ready로 끝나 감시 재안내에 맡긴다.
+  // agy는 입력 줄이 보이기 전(시작 중)에는 아직 준비 안 됨으로 본다. 끝까지 안 보이면 아래 not-ready로 끝난다.
+  // not-ready면 전송 함수를 부르지 않아 첫 안내 우편이 남지 않는다(감시기가 재안내할 것이 없다). 다음 행동은 경고 문구가 안내한다.
   // 시작 배너는 보지 않는다(떠 있어도 입력된다). 키를 보내 닫지도 않는다.
   const blocked = normalizeAiCommand(cmd)?.harness === "agy" ? text => !hasAgyInputLine(text) : undefined;
   const settled = waitForSettled({ read: () => floor.read(session), ...(blocked ? { blocked } : {}),
     ...(tries ? { tries } : {}), ...(intervalMs ? { intervalMs } : {}), ...(sleep ? { sleep } : {}) });
-  if (!settled) { warn(`첫 안내 못 보냄(화면이 아직 준비되지 않음) — ${hint}`); return "not-ready"; }
+  if (!settled) { warn(`첫 안내 못 보냄(화면이 아직 준비되지 않음) — ${hint}. 첫 안내 우편은 남지 않았다: 첫 발령 우편(지침 전문 포함)이나 kadan send로 지침을 다시 보낸다`); return "not-ready"; }
   // 화면을 기다리는 동안 이 세대가 닫히고 다른 세대로 바뀌었을 수 있다. 대기 전에 고정한 세대와 같다고 확인될 때만 보낸다.
   // 조회가 던지거나 값을 못 얻으면 건너뛴다. start는 이미 성공했으므로 확인 실패가 start를 실패시키지 않는다.
   if (isCurrent) {
