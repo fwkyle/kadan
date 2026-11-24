@@ -22,6 +22,7 @@ import {settingsPath} from '../src/runner-settings.mjs';
 const RULE = '─'.repeat(152);
 const FOOTER = '? for shortcuts                                                                                                                     Gemini 4 Neon · high';
 const QUOTA_LINE = '⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h15m59s.';
+const NO_RESET_LINE = '⚠ Individual quota reached. Please upgrade your subscription to increase your limits.';
 const ERROR_ID = 'Error ID: 00000000-0000-0000-0000-000000000000-313';
 const AGY_COMPOSER = `${RULE}\n>\n${RULE}\n${FOOTER}`;
 
@@ -108,6 +109,13 @@ test('좁은 창 줄 바꿈·Error ID 없음·NBSP·우편 안내 블록 끼임�
 
 test('한도 줄 뒤에 새 출력이 이어진 화면·일하는 중·입력 중·인용·울타리·타 실행기는 한도가 아니다', () => {
   const notice = unreadMailMessage([{role: 'qa-worker', by: 'qa-boss', mailId: 'm1', t: '2026-11-24T04:30:00Z', preview: QUOTA_LINE}], 'qa-worker');
+  const narrow55With = tail => [
+    '⚠ Individual quota reached. Please upgrade your',
+    'subscription to increase your limits. Resets in',
+    ...tail, '', '─'.repeat(55), '>', '─'.repeat(55), '? for shortcuts   Gemini 4 Neon',
+  ].join('\n');
+  assert.equal(agyQuotaLine(narrow55With(['1h15m59s.'])), QUOTA_LINE, '대조군: 뒤에 붙은 줄이 없으면 한도');
+  assert.equal(agyQuotaLine(`${NO_RESET_LINE}\n\n${AGY_COMPOSER}`), NO_RESET_LINE, '대조군: 남은 시간 없는 한도 줄');
   const negatives = {
     after_response: `${QUOTA_LINE}\n${ERROR_ID}\n\n> 계속해 줘\n\n  작업을 이어갑니다.\n\n${AGY_COMPOSER}`,
     after_tool: `${QUOTA_LINE}\n${ERROR_ID}\n\n○ Thought for 2s\n● Ran (npm test)\n\n${AGY_COMPOSER}`,
@@ -124,6 +132,14 @@ test('한도 줄 뒤에 새 출력이 이어진 화면·일하는 중·입력 �
     footer_replaced_with_tool: REAL_AGY_SCREEN.replace(FOOTER, '● Ran (npm test)'),
     bare_prompt_after_tool: `${QUOTA_LINE}\n${ERROR_ID}\n\n>\n● Ran (npm test)\n`,
     bare_prompt_after_word: `${QUOTA_LINE}\n${ERROR_ID}\n\n>\nRecovered\n`,
+    // 이어받기 확인: 한도 문장이 끝난 뒤 문장 이음 낱말(Please·Upgrade·Resets)로 시작하는 새 출력, 상태 줄 자리의 다른 글.
+    after_quota_please_output: `${NO_RESET_LINE}\nPlease wait while I continue.\n\n${AGY_COMPOSER}`,
+    after_quota_resets_output: `${NO_RESET_LINE}\nResets are not needed, continuing.\n\n${AGY_COMPOSER}`,
+    after_quota_upgrade_output: `${NO_RESET_LINE}\nUpgrade finished.\n\n${AGY_COMPOSER}`,
+    wrapped_then_please_output: narrow55With(['1h15m59s.', 'Please wait while I continue.']),
+    wrapped_then_resets_output: narrow55With(['1h15m59s.', 'Resets done.']),
+    wrapped_value_then_word: narrow55With(['1h15m59s', 'Recovered']),
+    footer_replaced_with_word: REAL_AGY_SCREEN.replace(FOOTER, 'Recovered'),
     after_quota_tight_prose: `${QUOTA_LINE}\n다시 시도해 완료했습니다.\n\n${AGY_COMPOSER}`,
     working_footer: REAL_AGY_SCREEN.replace('? for shortcuts', 'esc to cancel'),
     working_spinner: REAL_AGY_SCREEN.replace(`\n\n${AGY_COMPOSER}`, `\n\n⣟  Generating...\n${AGY_COMPOSER}`),

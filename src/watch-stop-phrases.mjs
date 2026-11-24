@@ -314,7 +314,12 @@ const AGY_ERROR_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9
 const AGY_ERROR_ID_CONT = /^[0-9a-f-]+$/u;
 const AGY_SPINNER = /^[⠀-⣿]\s+\S.*(?:\.\.\.|…)$/u;
 const AGY_BLOCK_BREAK = /^\s*(?:[●○•⏺■✕×ⓘ⚠✻⎿└│›❯>⠀-⣿]|```|~~~)/u;
-const AGY_SENTENCE_CONT = /^(?:Please|Upgrade|Resets)\b/iu;
+// 접힌 줄을 이은 한도 문장 전체의 모양: 머리 문장 + (선택) `Please upgrade …` 한 문장 + (선택) 맨 끝의 `Resets in <값>`.
+// 문장이 끝난 뒤에 붙은 새 출력(`Please wait …`·`Resets done.`·`Upgrade finished.`·값 뒤 낱말)은 이 모양이 아니라 한도로 읽지 않는다.
+// 값은 공백 없는 한 덩어리(+ 띄어 쓴 `5m 10s` 꼴)다. 형식이 이상해도(`20m:garbage.`) 받는다 — 경보는 내고 시각만 뺀다(parseResetInMs).
+const AGY_QUOTA_SHAPE = new RegExp(
+  "^⚠\\s+Individual quota reached\\.(?:\\s+Please upgrade\\b[^.]*\\.)?"
+  + "(?:\\s+Resets\\s+in\\s+\\S+(?:\\s+\\d+[dhms]\\.?)*)?$", "iu");
 const AGY_QUOTA_MAX_ROWS = 6;
 
 // `Error ID: <id>` 한 줄이거나, 좁은 창에서 접힌 같은 ID의 이어짐(0칸 들여쓰기 소문자 hex·숫자·하이픈)일 때만 true.
@@ -362,15 +367,10 @@ export function agyQuotaLine(screen) {
     composerBottom = promptAt;
   }
   if (rows[composerTop]?.inFence) return null;
-  // agy 바닥글은 입력칸 아래 상태 줄 1줄까지만(senior-agy-screen.mjs와 같은 규칙). 그 뒤 새 출력(`● Ran …` 등)이 있으면 한도 아님.
-  const framed = composerTop !== composerBottom;
+  // agy 바닥글은 입력칸 아래 상태 줄 1줄까지만이고, 빈 입력칸의 상태 줄은 `? for shortcuts`로 시작한다(senior-agy-screen.mjs와 같은 규칙).
+  // 그 뒤 새 출력(`● Ran …` 등)이 있거나 상태 줄 자리에 다른 글(일하는 중 `esc to cancel` 포함)이 있으면 한도 아님.
   const footer = lines.slice(composerBottom + 1).filter((line) => !RULE_OR_BLANK.test(line));
-  if (footer.length > 1) return null;
-  if (footer.length === 1) {
-    const status = footer[0];
-    if (AGY_BLOCK_BREAK.test(status) || /\besc to cancel\b/iu.test(status)) return null;
-    if (!framed && !/^\s*\? for shortcuts\b/iu.test(status)) return null;
-  }
+  if (footer.length > 1 || (footer.length === 1 && !/^\s*\? for shortcuts\b/iu.test(footer[0]))) return null;
   if (composerTop > 0 && AGY_SPINNER.test(lines[composerTop - 1])) return null;
   let end = composerTop - 1;
   while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
@@ -400,13 +400,9 @@ export function agyQuotaLine(screen) {
   const errLines = errIdx > 0 ? tail.slice(errIdx) : [];
   if (!validAgyErrorId(errLines)) return null;
   if (msgLines.length > 4) return null;
-  for (let i = 1; i < msgLines.length; i++) {
-    const prev = msgLines[i - 1], cur = msgLines[i].trim();
-    if (AGY_BLOCK_BREAK.test(msgLines[i])) return null;
-    if (/\bResets\s+in\b[^.]*\.\s*$/iu.test(prev)) return null;
-    if (/\.\s*$/u.test(prev) && !AGY_SENTENCE_CONT.test(cur)) return null;
-  }
-  return msgLines.map((l) => l.trim()).join(" ").trim();
+  if (msgLines.slice(1).some((line) => AGY_BLOCK_BREAK.test(line))) return null;
+  const message = msgLines.map((l) => l.trim()).join(" ").trim();
+  return AGY_QUOTA_SHAPE.test(message) ? message : null;
 }
 
 // 현재 오류 덩어리 안의 목록 낱말: Map(줄 키 → 줄). 덩어리가 아니면 빈 Map.
