@@ -24,10 +24,11 @@ const loginLines = (hms, e, who) => [`${st('1124', hms)}browser.go:145] consumer
   `${st('1124', hms)}browser.go:167] consumerOAuth: authenticated successfully as ${who}`, authLine(hms, who)];
 // 계정 who로 hms에 시작한 로그. extra 줄이 뒤에 붙는다.
 const logOf = (hms, e, who, ...extra) => [loadedLine(hms, e), authLine(hms, who), ...extra.flat()];
+const RULE = '─'.repeat(40);
 const QUOTA = ['  ⠿ 작업 중이던 화면', '⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h15m59s.',
-  '────', '>', '────', '? for shortcuts            auto · fake-agent (Fake Model · high)  /agents'].join('\n');
-const WORKING = ['⣟  Generating...', '────', '>', '────', 'esc to cancel            auto · fake-agent (Fake Model · high)  /agents'].join('\n');
-const IDLE = ['────', '>', '────', '? for shortcuts            auto · fake-agent (Fake Model · high)  /agents'].join('\n');
+  RULE, '>', RULE, '? for shortcuts            auto · fake-agent (Fake Model · high)  /agents'].join('\n');
+const WORKING = ['⣟  Generating...', RULE, '>', RULE, 'esc to cancel            auto · fake-agent (Fake Model · high)  /agents'].join('\n');
+const IDLE = [RULE, '>', RULE, '? for shortcuts            auto · fake-agent (Fake Model · high)  /agents'].join('\n');
 
 // 가짜 세계: items마다 agy 프로세스 하나(+그 로그 파일 하나). where는 role|senior|rottie|other.
 function world(items, {noLsof = [], logDirMissing = false, now = NOW, screens = {}, states = new Map(), extraLogs = []} = {}) {
@@ -132,6 +133,9 @@ test('[표 3] 계정: 이메일 전체는 어디에도 나오지 않고, --targe
 
 test('[표 4] 상태: 카단 역할 창은 화면으로 한도로 멈춤/작업 중/대기/모름, 그 밖의 창은 모름', () => {
   assert.equal(screenStatus(QUOTA), '한도로 멈춤');
+  // 오래된 스크롤 기록 속 문구(그 뒤에 새 출력이 있음)나 인용은 한도가 아니다.
+  const stale = ['⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h15m59s.', '● Ran fake command', RULE, '>', RULE, '? for shortcuts  auto'].join('\n');
+  assert.equal(screenStatus(stale), '대기');
   assert.equal(screenStatus(WORKING), '작업 중');
   assert.equal(screenStatus(IDLE), '대기');
   assert.equal(screenStatus('이상한 화면\n끝'), '모름');

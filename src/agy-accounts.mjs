@@ -3,8 +3,8 @@
 // 모든 바깥 조회(ps·lsof·tmux·로티·로그·화면)는 deps로 받는다 — 시험은 가짜 deps로 닫기·안 닫기까지 확인한다.
 // 계정은 이 모듈 안에서만 전체 글자로 다루고, 출력에는 앞 몇 글자만 낸다.
 import path from 'node:path';
+import {agyQuotaLine} from './watch-stop-phrases.mjs';
 
-export const QUOTA_SCREEN = /Individual quota reached/u;
 const WORKING_HINT = 'esc to cancel';
 const IDLE_HINT = '? for shortcuts';
 export const LOG_PATH = /antigravity-cli\/log\/(cli-\d{8}_\d{6}\.log)$/u;
@@ -16,7 +16,8 @@ const OVERDUE_MS = 10 * 60_000;
 export function screenStatus(screen) {
   if (typeof screen !== 'string' || !screen.trim()) return '모름';
   const lines = screen.split('\n').map(line => line.replace(/\s+$/u, '')).filter(Boolean).slice(-20);
-  if (lines.some(line => QUOTA_SCREEN.test(line))) return '한도로 멈춤';
+  // 한도 판정은 감시기와 같은 규칙을 쓴다(입력 상자 바로 위의 `⚠ Individual quota reached. … Resets in …` 한 줄만).
+  if (agyQuotaLine(screen)) return '한도로 멈춤';
   const footer = lines.at(-1) ?? '';
   if (footer.includes(WORKING_HINT)) return '작업 중';
   if (footer.includes(IDLE_HINT)) return '대기';
