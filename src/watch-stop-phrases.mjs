@@ -146,19 +146,20 @@ export function resumeHint(line, role) {
   return phrase?.resume ? `입력 한 번 보내면 이어감: kadan claude refresh --nudge --role ${role}` : null;
 }
 
-const RESET_IN_PHRASE = /\bResets\s+in\s+([^,;:!?()\n]+?)(?=\.(?!\d)|[,;:!?()\n]|$)/iu;
-const RESET_IN_PARTS = /^(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?$/iu;
+const RESET_IN_TAIL = /\bResets\s+in\s+([^\n]+?)\s*$/iu;
+const RESET_IN_PARTS = /^(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\.?$/iu;
 const MAX_RESET_IN_MS = 365 * 24 * 60 * 60_000;
 
-// agy 한도 줄의 `Resets in 1h15m59s` 같은 상대 남은 시간을 밀리초로 읽는다. 못 읽거나 0 이하이면 null.
+// agy 한도 줄의 `Resets in 1h15m59s.` 같은 상대 남은 시간을 밀리초로 읽는다.
+// `Resets in` 뒤 값 전체가 `\d+d`·`\d+h`·`\d+m`·`\d+s` 조합(+ 선택적 끝 마침표)일 때만 받고, 그 밖(`20m:garbage.` 등)·0 이하는 null.
 export function parseResetInMs(line) {
-  const raw = RESET_IN_PHRASE.exec(String(line ?? ""))?.[1]?.trim();
+  const raw = RESET_IN_TAIL.exec(String(line ?? ""))?.[1];
   if (!raw) return null;
   const hit = RESET_IN_PARTS.exec(raw);
   if (!hit || !hit.slice(1).some(Boolean)) return null;
   const seconds = Number(hit[1] ?? 0) * 86_400 + Number(hit[2] ?? 0) * 3_600
     + Number(hit[3] ?? 0) * 60 + Number(hit[4] ?? 0);
-  const ms = Math.round(seconds * 1_000);
+  const ms = seconds * 1_000;
   return Number.isFinite(ms) && ms > 0 && ms <= MAX_RESET_IN_MS ? ms : null;
 }
 
@@ -308,14 +309,32 @@ const AGY_RULE = /^─{10,}\s*$/u;
 const AGY_EMPTY_PROMPT = /^\s*>\s*$/u;
 const AGY_QUOTA_HEAD = /^⚠\s+Individual quota reached\b/iu;
 const AGY_ERROR_ID = /^Error ID:\s*\S+/iu;
+const AGY_ERROR_ID_SINGLE = /^Error ID:\s*[0-9a-zA-Z_-]+\s*$/u;
+const AGY_ERROR_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-\d+)?$/u;
+const AGY_ERROR_ID_CONT = /^[0-9a-f-]+$/u;
 const AGY_SPINNER = /^[⠀-⣿]\s+\S.*(?:\.\.\.|…)$/u;
 const AGY_BLOCK_BREAK = /^\s*(?:[●○•⏺■✕×ⓘ⚠✻⎿└│›❯>⠀-⣿]|```|~~~)/u;
 const AGY_SENTENCE_CONT = /^(?:Please|Upgrade|Resets)\b/iu;
 const AGY_QUOTA_MAX_ROWS = 6;
 
+// `Error ID: <id>` 한 줄이거나, 좁은 창에서 접힌 같은 ID의 이어짐(0칸 들여쓰기 소문자 hex·숫자·하이픈)일 때만 true.
+// 완성된 Error ID 뒤의 영문 한 단어(`Recovered`, `done` 등)나 새 출력 줄은 false다.
+function validAgyErrorId(errLines) {
+  if (errLines.length === 0) return true;
+  if (errLines.length === 1) return AGY_ERROR_ID_SINGLE.test(errLines[0]);
+  if (errLines.length > 3) return false;
+  const first = errLines[0].replace(/^Error ID:\s*/iu, "").trimEnd();
+  if (!first || /\s/u.test(first)) return false;
+  if (errLines.slice(1).some((line) => !AGY_ERROR_ID_CONT.test(line.replace(/\s+$/u, "")))) return false;
+  const joined = [first, ...errLines.slice(1).map((line) => line.trim())].join("");
+  if (AGY_ERROR_ID_UUID.test(joined)) return true;
+  return first.endsWith("-") && errLines.slice(1).every((line) => /\d/u.test(line));
+}
+
 // agy 한도 화면: 빈 `>` 입력칸(가로줄 두 개 사이, 또는 화면 끝 단독 `>`) 바로 위에 `⚠ Individual quota reached` 덩어리
 // (접힌 줄·선택적 `Error ID:` 줄 포함)가 있을 때만 한 줄로 이어 돌려준다.
-// 일하는 중(`esc to cancel`·회전 표시), 입력 중인 글, 뒤에 이어진 새 출력, 인용(들여쓰기·콜론 소개·코드 울타리·우편 안내 안)은 null.
+// 일하는 중(`esc to cancel`·회전 표시), 입력 중인 글, 뒤에 이어진 새 출력(바닥글 뒤 출력 포함),
+// 인용(들여쓰기·콜론 소개·코드 울타리·우편 안내 안)은 null.
 export function agyQuotaLine(screen) {
   const rows = linesWithFence(screen);
   const lines = rows.map((r) => r.line);
@@ -343,10 +362,15 @@ export function agyQuotaLine(screen) {
     composerBottom = promptAt;
   }
   if (rows[composerTop]?.inFence) return null;
+  // agy 바닥글은 입력칸 아래 상태 줄 1줄까지만(senior-agy-screen.mjs와 같은 규칙). 그 뒤 새 출력(`● Ran …` 등)이 있으면 한도 아님.
+  const framed = composerTop !== composerBottom;
   const footer = lines.slice(composerBottom + 1).filter((line) => !RULE_OR_BLANK.test(line));
-  if (footer.length > FOOTER_LINES) return null;
-  if (footer.some((line) => ANY_COMPOSER.test(line) || /^\s*>/u.test(line) || FENCE.test(line)
-    || /^\s*[•⏺]\s/u.test(line) || /\besc to cancel\b/iu.test(line))) return null;
+  if (footer.length > 1) return null;
+  if (footer.length === 1) {
+    const status = footer[0];
+    if (AGY_BLOCK_BREAK.test(status) || /\besc to cancel\b/iu.test(status)) return null;
+    if (!framed && !/^\s*\? for shortcuts\b/iu.test(status)) return null;
+  }
   if (composerTop > 0 && AGY_SPINNER.test(lines[composerTop - 1])) return null;
   let end = composerTop - 1;
   while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
@@ -374,14 +398,13 @@ export function agyQuotaLine(screen) {
   const errIdx = tail.findIndex((line, i) => i > 0 && AGY_ERROR_ID.test(line));
   const msgLines = errIdx > 0 ? tail.slice(0, errIdx) : tail;
   const errLines = errIdx > 0 ? tail.slice(errIdx) : [];
-  if (errLines.length > 3) return null;
-  if (errLines.slice(1).some((line) => AGY_BLOCK_BREAK.test(line) || !/^[0-9a-zA-Z_-]+$/u.test(line.trim()))) return null;
+  if (!validAgyErrorId(errLines)) return null;
   if (msgLines.length > 4) return null;
-  if (msgLines.length > 1 && /\bResets\s+in\b[^.]*\.\s*$/iu.test(msgLines[0])) return null;
   for (let i = 1; i < msgLines.length; i++) {
-    const cur = msgLines[i].trim();
+    const prev = msgLines[i - 1], cur = msgLines[i].trim();
     if (AGY_BLOCK_BREAK.test(msgLines[i])) return null;
-    if (/\.\s*$/u.test(msgLines[i - 1]) && !AGY_SENTENCE_CONT.test(cur)) return null;
+    if (/\bResets\s+in\b[^.]*\.\s*$/iu.test(prev)) return null;
+    if (/\.\s*$/u.test(prev) && !AGY_SENTENCE_CONT.test(cur)) return null;
   }
   return msgLines.map((l) => l.trim()).join(" ").trim();
 }
