@@ -14,13 +14,16 @@ const B = 'bob@example.invalid';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-accounts-'));
 const local = (...parts) => new Date(...parts).getTime();
 const NOW = local(2026, 10, 24, 15, 25, 0);
-const exp = text => Date.parse(`${text.replace(' ', 'T')}+09:00`);
+// 만료 글자는 현지 시간대의 오프셋으로 쓴다: 시험의 '지금'(NOW)이 현지 시각이라 오프셋을 KST로 고정하면 UTC 같은 환경에서 만료가 이미 지난 것이 된다.
+const OFFSET_MIN = -new Date(NOW).getTimezoneOffset();
+const TZ = `${OFFSET_MIN < 0 ? '-' : '+'}${String(Math.floor(Math.abs(OFFSET_MIN) / 60)).padStart(2, '0')}${String(Math.abs(OFFSET_MIN) % 60).padStart(2, '0')}`;
+const exp = text => Date.parse(`${text.replace(' ', 'T')}${TZ.slice(0, 3)}:${TZ.slice(3)}`);
 
 const st = (mmdd, hms) => `I${mmdd} ${hms}.123456 100 `;
-const loadedLine = (hms, e) => `${st('1124', hms)}keyring.go:64] keyringAuth: loaded token, expiry=${e}.8 +0900 KST expired=false`;
+const loadedLine = (hms, e) => `${st('1124', hms)}keyring.go:64] keyringAuth: loaded token, expiry=${e}.8 ${TZ} KST expired=false`;
 const authLine = (hms, who) => `${st('1124', hms)}server_oauth.go:226] OAuth: authenticated successfully as ${who}`;
-const refreshLine = (hms, e) => `${st('1124', hms)}browser.go:265] token refreshed, new expiry=${e}.3 +0900 KST m=+1.0`;
-const loginLines = (hms, e, who) => [`${st('1124', hms)}browser.go:145] consumerOAuth: token acquired, expiry=${e}.1 +0900 KST m=+1.0`,
+const refreshLine = (hms, e) => `${st('1124', hms)}browser.go:265] token refreshed, new expiry=${e}.3 ${TZ} KST m=+1.0`;
+const loginLines = (hms, e, who) => [`${st('1124', hms)}browser.go:145] consumerOAuth: token acquired, expiry=${e}.1 ${TZ} KST m=+1.0`,
   `${st('1124', hms)}browser.go:167] consumerOAuth: authenticated successfully as ${who}`, authLine(hms, who)];
 // 계정 who로 hms에 시작한 로그. extra 줄이 뒤에 붙는다.
 const logOf = (hms, e, who, ...extra) => [loadedLine(hms, e), authLine(hms, who), ...extra.flat()];
