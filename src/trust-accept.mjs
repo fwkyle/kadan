@@ -1,9 +1,11 @@
 // Why: 새 저장소에서 역할을 띄우면 Claude Code의 폴더 신뢰 화면에서 멈추고, 카단은 키를 안 보내고 KADAN_TRUST_PROMPT로 멈춘다
 // (2026-10-23 Enter가 기본 선택 "No, exit"를 눌러 작업자 3명 소실 뒤 생긴 보호). 사용자 승인(안 B)으로, `kadan start`가 이번 호출에서
 // 새로 만든 claude 세션에 한해 모든 조건이 맞을 때만 Yes를 골라 통과한다. 하나라도 어긋나면 키를 더 보내지 않고 지금처럼 멈춘다.
+// agy(Antigravity CLI)도 같은 조건으로 통과한다(2026-11-24 kyle). agy 창은 기본 선택이 이미 Yes라 화살표 없이 Enter 1회만 보내고,
+// 선택이 No이거나 모르면 키 없이 멈춘다. agy 창 판정은 이 모듈에만 있고 floor-tmux.mjs의 hasTrustPrompt(우편 보호)는 바꾸지 않는다.
 //
 // 이 모듈은 start 안에서만 부른다. 공용 sendTmux(우편·알림·발령)에는 키 절차를 넣지 않는다.
-// 판정은 floor-tmux.mjs의 hasTrustPrompt를 그대로 쓰고, 여기서는 그 창의 경로와 선택 표시만 읽는다.
+// claude 판정은 floor-tmux.mjs의 hasTrustPrompt를 그대로 쓰고, 여기서는 그 창의 경로와 선택 표시만 읽는다.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +42,38 @@ export function readTrustSelection(screen) {
   return { path: between === 1 ? rows[workspace + 1].trim() : null, pathAmbiguous: between > 1, selected };
 }
 
+// agy 신뢰 창(2026-11-24 실측 화면 꼴, 공백은 모두 걷고 비교한다):
+//   Accessing workspace: / <경로 한 줄> / Do you trust the contents of this project? / <설명 줄들> /
+//   > Yes, I trust this folder / No, exit / ↑/↓ Navigate · enter Confirm
+// 안내 줄(`↑/↓ Navigate · enter Confirm`)이 비지 않은 마지막 줄이고 그 바로 위 두 줄이 Yes·No 선택지일 때만 창이다 — 인용만 한 글은 아래에
+// 입력창·상태 줄이 이어지므로 창으로 보지 않는다. 반환: 창이 아니면 null, 맞으면 { path, pathAmbiguous, selected }(의미는 readTrustSelection과 같다).
+const AGY_QUESTION = "Doyoutrustthecontentsofthisproject?", AGY_FOOTER = "↑/↓Navigate·enterConfirm";
+const AGY_MARK = /^\s*[>❯]/u;
+export function readAgyTrustSelection(screen) {
+  const rows = String(screen).replace(CONTROL_SEQUENCES, "").split("\n").filter(line => squash(line));
+  const footer = rows.length - 1;
+  if (footer < 3 || squash(rows[footer]) !== AGY_FOOTER) return null;
+  const option = line => squash(line).replace(/^[>❯]/u, "");
+  const [first, second] = [rows[footer - 2], rows[footer - 1]].map(option);
+  const isYes = value => value === YES, isNo = value => value === NO;
+  if (!((isYes(first) && isNo(second)) || (isNo(first) && isYes(second)))) return null;
+  const yes = isYes(first) ? footer - 2 : footer - 1, no = yes === footer - 2 ? footer - 1 : footer - 2;
+  const question = rows.findLastIndex((line, i) => i < footer - 2 && squash(line) === AGY_QUESTION);
+  if (question < 0) return null;
+  const marked = rows.map((line, i) => (i > question && i < footer && AGY_MARK.test(line) ? i : -1)).filter(i => i >= 0);
+  const selected = marked.length === 1 ? (marked[0] === yes ? "yes" : marked[0] === no ? "no" : null) : null;
+  const workspace = rows.findLastIndex((line, i) => i < question && squash(line) === WORKSPACE);
+  const between = workspace < 0 ? 0 : question - workspace - 1;
+  return { path: between === 1 ? rows[workspace + 1].trim() : null, pathAmbiguous: between > 1, selected };
+}
+export const hasAgyTrustPrompt = screen => typeof screen === "string" && readAgyTrustSelection(screen) !== null;
+
+// 실행기별 창 판정. claude: 화살표로 Yes를 고른 뒤 Enter. agy: 기본이 Yes인 것을 확인한 때만 Enter.
+const KINDS = {
+  claude: { has: hasTrustPrompt, read: readTrustSelection },
+  agy: { has: hasAgyTrustPrompt, read: readAgyTrustSelection },
+};
+
 // 화면의 경로와 start의 작업 폴더가 실제 경로(realpath)로 정확히 같을 때만 true. `~` 축약은 이 계정의 홈으로만 푼다.
 export function sameWorkspace(screenPath, workdir, { realpath = fs.realpathSync, home = os.homedir() } = {}) {
   if (typeof screenPath !== "string" || !screenPath || typeof workdir !== "string" || !workdir) return false;
@@ -54,13 +88,15 @@ const sleepMs = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 // 반환: 신뢰 창을 못 봤으면 null(원장에 아무것도 남기지 않는다). 봤으면 { result: accepted|skipped|failed, reason, keys, path? }.
 // keys는 실제로 보낸 키 목록이다. deps: read(화면 문자열, 실패하면 던짐) · key(키 이름) · paneLive()(같은 세션·같은 pane PID·pane_dead=0이면 true, 조회 실패·종료면 false) — 모두 이번 세션 하나에 묶여 있다.
 export function autoAcceptTrust({ workdir, home, read, key, paneLive, sleep = sleepMs,
-  tries = 10, intervalMs = 500, enterTries = 8, realpath, homeDir } = {}) {
+  tries = 10, intervalMs = 500, enterTries = 8, realpath, homeDir, harness = "claude" } = {}) {
+  const kind = KINDS[harness];
+  if (!kind) return null;
   // 1. 창이 뜰 때까지 기다린다. 신뢰 창이 보이면 바로, 신뢰 창이 아닌 화면이 두 번 연속 같으면 신뢰 창이 없는 것으로 보고 끝낸다.
   let screen = null, last = null;
   for (let i = 0; i < tries; i++) {
     let text = null;
     try { text = read(); } catch { return null; }
-    if (typeof text === "string" && hasTrustPrompt(text)) { screen = text; break; }
+    if (typeof text === "string" && kind.has(text)) { screen = text; break; }
     if (typeof text === "string" && text.trim() && text === last) return null;
     last = text;
     sleep(intervalMs);
@@ -70,7 +106,7 @@ export function autoAcceptTrust({ workdir, home, read, key, paneLive, sleep = sl
   const keys = [];
   let shownPath = null;
   const outcome = (result, reason) => ({ result, reason, keys, ...(shownPath ? { path: shownPath } : {}) });
-  const parsed = readTrustSelection(screen);
+  const parsed = kind.read(screen);
   shownPath = parsed.path;
 
   if (fs.existsSync(path.join(home, AUTO_TRUST_OFF))) return outcome("skipped", "switch-off");
@@ -80,6 +116,8 @@ export function autoAcceptTrust({ workdir, home, read, key, paneLive, sleep = sl
     return outcome("skipped", "path-mismatch");
   }
   if (!parsed.selected) return outcome("skipped", "selection-unknown");
+  // agy는 화살표를 보내지 않는다: 이미 Yes가 선택돼 있을 때만 Enter로 간다(No면 Enter가 종료를 누른다).
+  if (harness === "agy" && parsed.selected !== "yes") return outcome("skipped", "selection-not-yes");
 
   const send = name => {
     try { key(name); keys.push(name); return null; }
@@ -92,8 +130,8 @@ export function autoAcceptTrust({ workdir, home, read, key, paneLive, sleep = sl
   const reread = () => {
     let text;
     try { text = read(); } catch { return null; }
-    if (typeof text !== "string" || !hasTrustPrompt(text)) return null;
-    const next = readTrustSelection(text);
+    if (typeof text !== "string" || !kind.has(text)) return null;
+    const next = kind.read(text);
     return next.path === parsed.path && next.selected ? next.selected : null;
   };
 
@@ -121,7 +159,7 @@ export function autoAcceptTrust({ workdir, home, read, key, paneLive, sleep = sl
     let live = false;
     try { live = paneLive() === true; } catch { live = false; }
     if (!live) return outcome("failed", "pane-dead");
-    if (typeof text === "string" && text.trim() && !hasTrustPrompt(text)) return outcome("accepted", downs > 0 ? "down-enter" : "enter");
+    if (typeof text === "string" && text.trim() && !kind.has(text)) return outcome("accepted", downs > 0 ? "down-enter" : "enter");
   }
   return outcome("failed", "prompt-remains");
 }
