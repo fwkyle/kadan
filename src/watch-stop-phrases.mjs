@@ -24,12 +24,13 @@ export const STOP_PHRASES = [
   // 입력창 바로 위 오류 줄 + 빈 입력창 구조로 자동 재개 대상인지 가른다(watch-rate-limit.mjs).
   { id: "rate-limit-terminal", kind: "한도", action: "auto-resume", scope: ["worker"],
     detect: terminal429, sample: "codex 0.163 429 방치 사고 화면" },
-  // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
+  // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용·agy 개인 한도). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
   // 줄 맨 앞(표시 기호 하나 허용)이 문구일 때만 읽는다: 문장 중간의 인용·설명은 걸리지 않는다. 읽는 자리는 아래 currentStopPhrases:
-  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄). 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
+  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄), agy는 agyQuotaLine(빈 `>` 입력칸 바로 위 `⚠ Individual quota reached` 덩어리).
+  // 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
   { id: "usage-limit", kind: "한도", action: "report", scope: ["worker"],
     pattern: USAGE_LIMIT_LINE,
-    sample: "claude `You've hit your session limit · resets 3pm (Asia/Seoul)` (tests/fixtures/claude-limit-screens.json), codex `■ You've hit your usage limit. Upgrade or try again later.` (tests/helpers/fake-codex-tui.mjs)" },
+    sample: "claude `You've hit your session limit · resets 3pm (Asia/Seoul)` (tests/fixtures/claude-limit-screens.json), codex `■ You've hit your usage limit. Upgrade or try again later.` (tests/helpers/fake-codex-tui.mjs), agy `⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h15m59s.` (tests/watch-agy-quota.test.mjs)" },
   { id: "no-api-key", kind: "설정", action: "replace-runner", scope: ["worker", "supervisor"],
     pattern: /No API key/iu, sample: "없음(사고표 E5)" },
   { id: "auth-token", kind: "인증", action: "replace-runner", scope: ["worker", "supervisor"],
@@ -143,6 +144,22 @@ function claudeLimitShape(screen, found) {
 export function resumeHint(line, role) {
   const phrase = phraseOfLine(line);
   return phrase?.resume ? `입력 한 번 보내면 이어감: kadan claude refresh --nudge --role ${role}` : null;
+}
+
+const RESET_IN_PHRASE = /\bResets\s+in\s+([^,;:!?()\n]+?)(?=\.(?!\d)|[,;:!?()\n]|$)/iu;
+const RESET_IN_PARTS = /^(?:(\d+)\s*d)?\s*(?:(\d+)\s*h)?\s*(?:(\d+)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?$/iu;
+const MAX_RESET_IN_MS = 365 * 24 * 60 * 60_000;
+
+// agy 한도 줄의 `Resets in 1h15m59s` 같은 상대 남은 시간을 밀리초로 읽는다. 못 읽거나 0 이하이면 null.
+export function parseResetInMs(line) {
+  const raw = RESET_IN_PHRASE.exec(String(line ?? ""))?.[1]?.trim();
+  if (!raw) return null;
+  const hit = RESET_IN_PARTS.exec(raw);
+  if (!hit || !hit.slice(1).some(Boolean)) return null;
+  const seconds = Number(hit[1] ?? 0) * 86_400 + Number(hit[2] ?? 0) * 3_600
+    + Number(hit[3] ?? 0) * 60 + Number(hit[4] ?? 0);
+  const ms = Math.round(seconds * 1_000);
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_RESET_IN_MS ? ms : null;
 }
 
 export const phraseKinds = () => [...new Set(WORKER_PHRASES.map(({ kind }) => kind))];
@@ -287,6 +304,88 @@ function capacityStopLine(screen) {
   return /^[■✕×]/u.test(joined) && joined.slice(1) === CAPACITY_SQUEEZED ? `${joined[0]} ${CAPACITY_SENTENCE}` : null;
 }
 
+const AGY_RULE = /^─{10,}\s*$/u;
+const AGY_EMPTY_PROMPT = /^\s*>\s*$/u;
+const AGY_QUOTA_HEAD = /^⚠\s+Individual quota reached\b/iu;
+const AGY_ERROR_ID = /^Error ID:\s*\S+/iu;
+const AGY_SPINNER = /^[⠀-⣿]\s+\S.*(?:\.\.\.|…)$/u;
+const AGY_BLOCK_BREAK = /^\s*(?:[●○•⏺■✕×ⓘ⚠✻⎿└│›❯>⠀-⣿]|```|~~~)/u;
+const AGY_SENTENCE_CONT = /^(?:Please|Upgrade|Resets)\b/iu;
+const AGY_QUOTA_MAX_ROWS = 6;
+
+// agy 한도 화면: 빈 `>` 입력칸(가로줄 두 개 사이, 또는 화면 끝 단독 `>`) 바로 위에 `⚠ Individual quota reached` 덩어리
+// (접힌 줄·선택적 `Error ID:` 줄 포함)가 있을 때만 한 줄로 이어 돌려준다.
+// 일하는 중(`esc to cancel`·회전 표시), 입력 중인 글, 뒤에 이어진 새 출력, 인용(들여쓰기·콜론 소개·코드 울타리·우편 안내 안)은 null.
+export function agyQuotaLine(screen) {
+  const rows = linesWithFence(screen);
+  const lines = rows.map((r) => r.line);
+  let composerTop = -1, composerBottom = -1;
+  const ruleEnd = lines.findLastIndex((line) => AGY_RULE.test(line));
+  if (ruleEnd >= 2) {
+    let bottomStart = ruleEnd;
+    while (bottomStart > 0 && AGY_RULE.test(lines[bottomStart - 1])) bottomStart--;
+    const topEnd = lines.findLastIndex((line, i) => i < bottomStart && AGY_RULE.test(line));
+    if (topEnd >= 0) {
+      const inner = lines.slice(topEnd + 1, bottomStart);
+      if (inner.length >= 1 && /^\s*>/u.test(inner[0])) {
+        if (inner.length !== 1 || !AGY_EMPTY_PROMPT.test(inner[0])) return null;
+        let topStart = topEnd;
+        while (topStart > 0 && AGY_RULE.test(lines[topStart - 1])) topStart--;
+        composerTop = topStart;
+        composerBottom = ruleEnd;
+      }
+    }
+  }
+  if (composerTop < 0) {
+    const promptAt = lines.findLastIndex((line) => /^\s*(?:[›❯]|>)/u.test(line));
+    if (promptAt < 0 || !AGY_EMPTY_PROMPT.test(lines[promptAt])) return null;
+    composerTop = promptAt;
+    composerBottom = promptAt;
+  }
+  if (rows[composerTop]?.inFence) return null;
+  const footer = lines.slice(composerBottom + 1).filter((line) => !RULE_OR_BLANK.test(line));
+  if (footer.length > FOOTER_LINES) return null;
+  if (footer.some((line) => ANY_COMPOSER.test(line) || /^\s*>/u.test(line) || FENCE.test(line)
+    || /^\s*[•⏺]\s/u.test(line) || /\besc to cancel\b/iu.test(line))) return null;
+  if (composerTop > 0 && AGY_SPINNER.test(lines[composerTop - 1])) return null;
+  let end = composerTop - 1;
+  while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
+  if (end < 0) return null;
+  for (let n = 0; n < MAIL_NOTICE_STACK; n++) {
+    const notice = mailNoticeStart(lines, end);
+    if (notice < 0) break;
+    end = notice - 1;
+    while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
+    if (end < 0) return null;
+  }
+  let blockStart = end;
+  while (blockStart > 0 && end - blockStart < AGY_QUOTA_MAX_ROWS - 1
+    && !RULE_OR_BLANK.test(lines[blockStart - 1])) blockStart--;
+  let head = -1;
+  for (let i = end; i >= blockStart; i--) {
+    if (AGY_QUOTA_HEAD.test(lines[i])) { head = i; break; }
+  }
+  if (head < 0) return null;
+  if (rows.slice(head, end + 1).some((r) => r.inFence)) return null;
+  let above = head - 1;
+  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+  if (above >= 0 && /[:：]\s*$/u.test(lines[above])) return null;
+  const tail = lines.slice(head, end + 1);
+  const errIdx = tail.findIndex((line, i) => i > 0 && AGY_ERROR_ID.test(line));
+  const msgLines = errIdx > 0 ? tail.slice(0, errIdx) : tail;
+  const errLines = errIdx > 0 ? tail.slice(errIdx) : [];
+  if (errLines.length > 3) return null;
+  if (errLines.slice(1).some((line) => AGY_BLOCK_BREAK.test(line) || !/^[0-9a-zA-Z_-]+$/u.test(line.trim()))) return null;
+  if (msgLines.length > 4) return null;
+  if (msgLines.length > 1 && /\bResets\s+in\b[^.]*\.\s*$/iu.test(msgLines[0])) return null;
+  for (let i = 1; i < msgLines.length; i++) {
+    const cur = msgLines[i].trim();
+    if (AGY_BLOCK_BREAK.test(msgLines[i])) return null;
+    if (/\.\s*$/u.test(msgLines[i - 1]) && !AGY_SENTENCE_CONT.test(cur)) return null;
+  }
+  return msgLines.map((l) => l.trim()).join(" ").trim();
+}
+
 // 현재 오류 덩어리 안의 목록 낱말: Map(줄 키 → 줄). 덩어리가 아니면 빈 Map.
 export function currentStopPhrases(screen) {
   const found = new Map();
@@ -313,6 +412,8 @@ export function currentStopPhrases(screen) {
   if (claude && claudeLimitShape(screen, claude) && phraseOfLine(claude.line)?.id === "usage-limit") {
     found.set(lineKey(claude.head.slice(0, 40), claude.line), claude.line);
   }
+  const agy = agyQuotaLine(screen);
+  if (agy) found.set(lineKey("individual quota reached", agy), agy);
   return found;
 }
 

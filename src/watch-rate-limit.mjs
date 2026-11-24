@@ -1,10 +1,10 @@
 import {createHash} from 'node:crypto';
 
 export const RETRY_DELAYS = [60_000, 120_000, 180_000];
-const hardLimit = /insufficient_quota|billing_hard_limit|daily.{0,30}(quota|limit)|requests per day|\bRPD\b|credit.{0,20}(exhausted|insufficient)|잔액 부족|일일.{0,10}한도/iu;
+const hardLimit = /insufficient_quota|billing_hard_limit|daily.{0,30}(quota|limit)|individual quota reached|requests per day|\bRPD\b|credit.{0,20}(exhausted|insufficient)|잔액 부족|일일.{0,10}한도/iu;
 
-// 실제 사용 한도 줄(일일·주간·세션·사용). 낱말표의 usage-limit이 이 식을 그대로 쓴다(watch-stop-phrases.mjs) — 줄 맨 앞(표시 기호 하나 허용)만 본다.
-export const USAGE_LIMIT_LINE = /^\s*(?:[■✕×⏺⎿●✗⚠]\s+)?You['’]ve hit your (?:[\w-]+ ){0,2}limit\b/iu;
+// 실제 사용 한도 줄(일일·주간·세션·사용·agy 개인 한도). 낱말표의 usage-limit이 이 식을 그대로 쓴다(watch-stop-phrases.mjs) — 줄 맨 앞(표시 기호 하나 허용)만 본다.
+export const USAGE_LIMIT_LINE = /^\s*(?:[■✕×⏺⎿●✗⚠]\s+)?(?:You['’]ve hit your (?:[\w-]+ ){0,2}limit\b|Individual quota reached\b)/iu;
 
 // Only a terminal CLI error followed by an empty prompt; tool/API output is not a resume signal.
 export function terminal429(screen, now) {
