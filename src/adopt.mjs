@@ -21,6 +21,14 @@ export const ADOPT_USAGE = 'KADAN_ADOPT_USAGE';
 const usageError = message => Object.assign(new Error(message), {code: ADOPT_USAGE});
 const shellModel = (model) => (/[[\]]/.test(model) ? `'${model}'` : model);
 
+// resume 틀의 자리는 {model}·{effort}·{conversation}만 쓴다(docs/runner-settings.md). 표의 구조 검사는 {prompt}·{cwd} 같은 다른 자리를
+// 검사용 임시 값으로 채워 통과시키므로 adopt가 먼저 거절한다 — 거절하면 runAdopt가 기본 명령 + 경고로 내려간다(PR #481 재검수).
+const RESUME_SLOTS = ['{model}', '{effort}', '{conversation}'];
+function checkResumeSlots(template) {
+  const unknown = typeof template === 'string' ? [...new Set(template.match(/\{[^{}]*\}/g) ?? [])].filter(slot => !RESUME_SLOTS.includes(slot)) : [];
+  if (unknown.length) throw new Error(`agy resume 틀에 쓸 수 없는 자리가 있다: ${unknown.join('·')} ({model}·{effort}·{conversation}만 쓴다)`);
+}
+
 // 실행기마다 "복제해서 이어 열기" 명령이 다르다. 모델은 꼭 적는다 — 모델이 안 적힌 창에는 카드 전송이 거부된다.
 export function adoptCommand({ harness, id, model, effort, permissionArgs = [], runnerSettings } = {}) {
   if (!id || !SAFE.test(id)) throw usageError('대화 ID가 비었거나 쓸 수 없는 글자가 있다');
@@ -33,7 +41,10 @@ export function adoptCommand({ harness, id, model, effort, permissionArgs = [], 
   // agy는 실행기 표(runnerSettings)가 주어지면 그 resume 틀(카단 start로 띄운 agy와 같은 권한 옵션)로 만든다(2026-11-24 [kyle]).
   // 틀 읽기·검사·자리 채우기는 restart·reopen과 같은 runner-table 함수가 맡고, 틀이 쓸 수 없으면 던진다(runAdopt가 기본 명령으로 내려간다).
   // omo의 생각 강도는 모델 문자열의 `:<thinking>`이라 따로 붙이지 않는다 — 몰래 버리지 않고 거절한다.
-  if (harness === 'agy' && runnerSettings) return resumeCommandFromTable(runnerSettings, 'agy', { model, effort, conversation: id });
+  if (harness === 'agy' && runnerSettings) {
+    checkResumeSlots(runnerSettings.runners?.agy?.resume);
+    return resumeCommandFromTable(runnerSettings, 'agy', { model, effort, conversation: id });
+  }
   if (harness === 'agy') return `agy --conversation ${id} --model ${shellModel(model)}${effort ? ` --effort ${effort}` : ''}`;
   if (harness === 'omo') {
     if (effort) throw usageError('omo는 --effort 대신 --model provider/모델:<강도>로 강도를 적는다');

@@ -274,3 +274,22 @@ test('adopt agy: 모델 자리에 따옴표가 있는 틀 + model[1m]도 인자 
   runAdopt({ role: '감독', flags: { model: 'model[1m]', resume: ID, harness: 'agy' }, env: {}, readRunnerSettings: tableOf(AGY_RESUME), ...deps });
   assert.equal(commandWords(calls.start[0].flags.cmd)[2], 'model[1m]');
 });
+
+// PR #481 재검수: 지원하지 않는 자리({prompt}·{cwd} 등)가 있는 resume 틀은 표 검사의 임시 값(P 등)이 인자로 새지 않게 기본 명령 + 경고로 돌아간다.
+test('adopt agy: resume 틀에 {prompt}·{cwd} 같은 지원 밖 자리가 있으면 기본 명령 + 경고이고 임시 값이 명령에 없다', () => {
+  const cases = [
+    ['agy --model {model} --dangerously-skip-permissions --conversation {conversation} {prompt}', SPAWN],
+    ['agy --model {model} --dangerously-skip-permissions --conversation {conversation} --add-dir {cwd}', SPAWN],
+    ['agy --model {model} --dangerously-skip-permissions --conversation {conversation} {other}', SPAWN],
+    ['agy --model {model} --dangerously-skip-permissions {prompt} --conversation {conversation}', 'agy --model {model} --dangerously-skip-permissions {prompt}'],
+  ];
+  for (const [resume, spawn] of cases) {
+    const { calls, deps } = fakes();
+    runAdopt({ role: '감독', flags: { model: 'gemini-4-neon-high', resume: ID, harness: 'agy' }, env: {},
+      readRunnerSettings: tableOf(resume, spawn), ...deps });
+    const cmd = calls.start[0].flags.cmd;
+    assert.equal(cmd, `agy --conversation ${ID} --model gemini-4-neon-high`, resume);
+    assert.deepEqual(commandWords(cmd).filter((w) => w === 'P' || w === '/'), [], '임시 값 없음');
+    assert.equal(calls.log.filter((l) => l.includes('쓸 수 없는 자리') && l.includes('기본 명령으로 연다')).length, 1, resume);
+  }
+});
