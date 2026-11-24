@@ -5,6 +5,7 @@ import { pickCompareLaunch } from "../runner-compare.mjs";
 import { launchFor, launchForFallback, launchForHard, readSettings, HARD_ROLE, PROFILE_ROLES } from "../runner-settings.mjs";
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
+import { describeCommand } from "../command-summary.mjs";
 import { floor } from "../floor.mjs";
 import { withInlineScreen } from "../inline-screen.mjs";
 import { withStopHook } from "../stop-hook-settings.mjs";
@@ -126,7 +127,7 @@ export function cmdStart(argv, flags) {
   if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withStopHook(withInlineScreen(flags.cmd.trim()), ledgerHome(), message => console.error(message));
   if (launch && typeof flags.cmd === "string" && flags.cmd.trim() && flags.cmd.trim() !== launch.cmd) {
     if (typeof flags.reason !== "string" || !flags.reason.trim())
-      die(`실행 모델 설정과 다른 명령이다 — --reason <이유>를 함께 줘라. 설정값: ${launch.cmd}`, 2);
+      die(`실행 모델 설정과 다른 명령이다 — --reason <이유>를 함께 줘라. 설정값: ${describeCommand(launch.cmd)}`, 2);
   }
   // 폴백은 사람이나 감독이 번호로 고른다. 자동 전환은 없다(2026-09-23 [kyle] 승인 3단계).
   let fallback = null;
