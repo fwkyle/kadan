@@ -265,6 +265,48 @@ test('결함 1 보강: 두 저장소에 같은 짧은 ID가 있으면 한 카드
   assert.equal(w.spawned(), 1);
 });
 
+// tick 뒤에 다른 저장소가 같은 짧은 ID 카드를 만들면, 대기열 재조회·쓰기 재시도는 최신 전체 카드 목록으로 모호함을 다시 본다.
+async function staleAddressWorld(t) {
+  const w = explainWorld();
+  t.after(() => w.ai.stop());
+  await w.run().done; // enabled 기록
+  w.clock.t = Date.now() + 1000;
+  const before = new Date(w.ai.enabledAt - 60_000).toISOString(); // 사건이 enabledAt보다 옛것이라 대기열에 안 들어간다
+  const left = w.store.create({repo: 'left', id: 'shared', repoPath: w.home, title: 'left', body: '# left'});
+  w.raw.push({kind: 'send', role: 'old-worker', taskId: 'shared', t: before}); // 정식 주소 없는 옛 발령
+  await w.run().done; // 이 tick 시점에는 'shared'가 left에만 있어 유일하다
+  const hashOf = () => {
+    const [card] = w.ai.center([left.key], w.clock.t, {identityCards: w.store.listSummaries()});
+    return briefInput(card, [], w.clock.t).hash;
+  };
+  return {w, left, uniqueHash: hashOf(), hashOf};
+}
+
+test('결함 1 보강: tick 뒤 다른 저장소에 같은 짧은 ID 카드가 생기면 freshQueuedJob이 null로 옛 입력 호출을 막는다', async t => {
+  const {w, left, uniqueHash, hashOf} = await staleAddressWorld(t);
+  const job = {key: left.key, hash: uniqueHash, ids: [], revision: left.revision};
+  assert.ok(w.ai.freshQueuedJob(job), '대조: 그사이 변화가 없으면 같은 지문이라 통과');
+  w.store.create({repo: 'right', id: 'shared', repoPath: w.home, title: 'right', body: '# right'});
+  assert.notEqual(hashOf(), uniqueHash, '모호해지면 입력 지문이 달라진다');
+  assert.equal(w.ai.freshQueuedJob(job), null, 'tick 시점 카드 목록이 아니라 최신 목록으로 다시 판정해야 한다');
+});
+
+test('결함 1 보강: 쓰기 revision 재시도도 최신 카드 목록으로 지문을 다시 비교해 모호해졌으면 stale로 버린다', async t => {
+  const {w, left, uniqueHash} = await staleAddressWorld(t);
+  const fields = {title: '제목', workstream: '묶음', stage: '구현'};
+  const note = (revision, text) => ({revision, by: 'sup', note: text, noteKind: 'progress'});
+  const edited = w.store.update(left.key, {}, note(left.revision, '메모'));
+  assert.equal(edited.revision, left.revision + 1);
+  const job = {key: left.key, hash: uniqueHash, revision: left.revision};
+  // 대조: revision만 오르고 입력이 같으면 새 revision으로 다시 쓴다.
+  assert.deepEqual(w.ai.write(job, fields), {outcome: 'written', reason: 'rewrote-at-new-revision'});
+  const again = w.store.update(left.key, {}, note(edited.revision, '메모2'));
+  w.store.create({repo: 'right', id: 'shared', repoPath: w.home, title: 'right', body: '# right'});
+  assert.deepEqual(w.ai.write({...job, revision: edited.revision}, fields),
+    {outcome: 'stale', reason: 'revision-changed'});
+  assert.equal(again.revision, edited.revision + 1);
+});
+
 function sqliteHome(prefix) {
   const dir = fs.mkdtempSync(path.join(process.env.KADAN_HOME, prefix));
   createDatabase(dir);
@@ -416,7 +458,10 @@ function lifecycleHome(tamper) {
   const home = sqliteHome('sec-integrity-');
   appendLedger({kind: 'start', role: 'fixture-secretary',
     session: LIFECYCLE_SESSION, panePid: '70', window: 'hidden'}, home);
-  if (tamper) transaction(home, db => tamper(row => appendRow(db, 'system/events.jsonl', row), row => appendRow(db, 'ledger.jsonl', row), db));
+  if (tamper) {
+    transaction(home, db => tamper(
+      row => appendRow(db, 'system/events.jsonl', row), row => appendRow(db, 'ledger.jsonl', row), db));
+  }
   return home;
 }
 function attachLifecycle(home, readEntries) {
@@ -439,7 +484,8 @@ test('결함 2: 탭을 열어야 하는 세대는 전체 읽기를 거쳐 손상
     '대상 외 행 broken': put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 2, broken: true}),
     '순번 빈틈': put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 5, session: 'kadan-other'}),
     '짝 없는 완료 우편': (put, legacy, db) => appendRow(db, 'mail/events.jsonl', {
-      t: NOW_ISO, kind: 'send', mailId: 'orphan-completion', role: 'a', systemGenerated: 'task-completion', _ledgerOrder: 2,
+      t: NOW_ISO, kind: 'send', mailId: 'orphan-completion', role: 'a',
+      systemGenerated: 'task-completion', _ledgerOrder: 2,
     }),
   };
   for (const [name, tamper] of Object.entries(corrupt)) {
@@ -476,7 +522,10 @@ test('결함 2: 손상이 없는 원장은 전체 읽기 경로로 정상 비서
   const ok = {
     '키 순서가 다른 유효 JSON': put => put({session: LIFECYCLE_SESSION, kind: 'window', t: NOW_ISO, _ledgerOrder: 2,
       panePid: '70', rottieTerminalId: 'fixture-tab'}),
-    '옛 원장 broken:false·빈 kind': (put, legacy) => { legacy({t: NOW_ISO, kind: '', broken: false}); legacy({t: NOW_ISO, kind: 'x'}); },
+    '옛 원장 broken:false·빈 kind': (put, legacy) => {
+      legacy({t: NOW_ISO, kind: '', broken: false});
+      legacy({t: NOW_ISO, kind: 'x'});
+    },
   };
   for (const [name, tamper] of Object.entries(ok)) {
     const home = lifecycleHome(tamper);

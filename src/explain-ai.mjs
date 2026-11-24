@@ -117,7 +117,7 @@ export class ExplainAI {
       this.settled.clear();
       this.settledEnabledAt = this.enabledAt;
     }
-    this.context = {readEntries, liveSessions, cards};
+    this.context = {readEntries, liveSessions};
     const grouped = decisionsByCard(decisions);
     const cardByKey = new Map();
     const keys = new Set();
@@ -173,7 +173,7 @@ export class ExplainAI {
       pendingKeys.push(key);
     }
     let queued = 0;
-    const resolved = pendingKeys.length ? this.center(pendingKeys, now) : [];
+    const resolved = pendingKeys.length ? this.center(pendingKeys, now, {identityCards: cards}) : [];
     for (const card of resolved) {
       if (this.active?.key === card.key) continue;
       const mine = grouped.get(card.key) ?? [];
@@ -209,17 +209,19 @@ export class ExplainAI {
   }
 
   // 후보 카드 키 → 본문·이력이 있는 카드로 중앙 표시 상태(displayState·runs)까지 계산한다. 후보만 읽으므로 주기 비용이 작다.
-  center(keys, now) {
+  // identityCards: 짧은 ID 충돌 판정에 쓰는 전체 카드 요약. tick은 방금 읽은 최신 목록을 넘기고, 대기열 재조회·쓰기 재시도처럼
+  // 시간이 지난 호출은 넘기지 않아 카드 목록을 새로 읽는다(그사이 다른 저장소에 같은 짧은 ID 카드가 생겼을 수 있다).
+  center(keys, now, {identityCards = null} = {}) {
     if (!keys.length) return [];
     const store = new CardStore(this.home), full = [];
     for (const key of keys) { try { full.push(store.get(key)); } catch { /* 없는 카드·손상은 건너뛴다 */ } }
     if (!full.length) return [];
-    const {readEntries, liveSessions, cards} = this.context;
+    const {readEntries, liveSessions} = this.context;
     const tree = liveSessions ? [{roles: [...liveSessions].map(s => ({role: String(s).replace(/^kadan-/, ''), life: {state: 'alive', pidState: 'match'}}))}] : [];
     try {
       // 본문은 후보만 읽지만 짧은 ID 충돌 판정은 전체 카드 요약 기준이다(후보만 넘기면 충돌을 유일하다고 오판한다).
-      const identityCards = cards ?? new CardStore(this.home).listSummaries();
-      return buildCardCenter({cards: full, identityCards, entries: readEntries(), tree,
+      const identity = identityCards ?? new CardStore(this.home).listSummaries();
+      return buildCardCenter({cards: full, identityCards: identity, entries: readEntries(), tree,
         runtimeKnown: Boolean(liveSessions), now}).cards;
     }
     catch { return []; }
