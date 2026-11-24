@@ -24,12 +24,13 @@ export const STOP_PHRASES = [
   // 입력창 바로 위 오류 줄 + 빈 입력창 구조로 자동 재개 대상인지 가른다(watch-rate-limit.mjs).
   { id: "rate-limit-terminal", kind: "한도", action: "auto-resume", scope: ["worker"],
     detect: terminal429, sample: "codex 0.163 429 방치 사고 화면" },
-  // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
+  // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용·agy 개인 한도). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
   // 줄 맨 앞(표시 기호 하나 허용)이 문구일 때만 읽는다: 문장 중간의 인용·설명은 걸리지 않는다. 읽는 자리는 아래 currentStopPhrases:
-  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄). 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
+  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄), agy는 agyQuotaLine(입력 상자 바로 위 `⚠ Individual quota reached. … Resets in <값>` 한 줄).
+  // 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
   { id: "usage-limit", kind: "한도", action: "report", scope: ["worker"],
     pattern: USAGE_LIMIT_LINE,
-    sample: "claude `You've hit your session limit · resets 3pm (Asia/Seoul)` (tests/fixtures/claude-limit-screens.json), codex `■ You've hit your usage limit. Upgrade or try again later.` (tests/helpers/fake-codex-tui.mjs)" },
+    sample: "claude `You've hit your session limit · resets 3pm (Asia/Seoul)` (tests/fixtures/claude-limit-screens.json), codex `■ You've hit your usage limit. Upgrade or try again later.` (tests/helpers/fake-codex-tui.mjs), agy `⚠ Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 1h15m59s.` (tests/watch-agy-quota.test.mjs)" },
   { id: "no-api-key", kind: "설정", action: "replace-runner", scope: ["worker", "supervisor"],
     pattern: /No API key/iu, sample: "없음(사고표 E5)" },
   { id: "auth-token", kind: "인증", action: "replace-runner", scope: ["worker", "supervisor"],
@@ -143,6 +144,22 @@ function claudeLimitShape(screen, found) {
 export function resumeHint(line, role) {
   const phrase = phraseOfLine(line);
   return phrase?.resume ? `입력 한 번 보내면 이어감: kadan claude refresh --nudge --role ${role}` : null;
+}
+
+const RESET_IN_TAIL = /\bResets\s+in\s+([^\n]+?)\s*$/iu;
+const RESET_IN_PARTS = /^(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\.?$/iu;
+const MAX_RESET_IN_MS = 365 * 24 * 60 * 60_000;
+
+// agy 한도 줄의 `Resets in 1h15m59s.` 같은 상대 남은 시간을 밀리초로 읽는다.
+// `Resets in` 뒤 값 전체가 `\d+h`·`\d+m`·`\d+s` 조합(+ 선택적 끝 마침표)일 때만 받고, 그 밖(`20m:garbage.`·`1d.` 등)·0 이하는 null.
+export function parseResetInMs(line) {
+  const raw = RESET_IN_TAIL.exec(String(line ?? ""))?.[1];
+  if (!raw) return null;
+  const hit = RESET_IN_PARTS.exec(raw);
+  if (!hit || !hit.slice(1).some(Boolean)) return null;
+  const seconds = Number(hit[1] ?? 0) * 3_600 + Number(hit[2] ?? 0) * 60 + Number(hit[3] ?? 0);
+  const ms = seconds * 1_000;
+  return Number.isFinite(ms) && ms > 0 && ms <= MAX_RESET_IN_MS ? ms : null;
 }
 
 export const phraseKinds = () => [...new Set(WORKER_PHRASES.map(({ kind }) => kind))];
@@ -287,6 +304,43 @@ function capacityStopLine(screen) {
   return /^[■✕×]/u.test(joined) && joined.slice(1) === CAPACITY_SQUEEZED ? `${joined[0]} ${CAPACITY_SENTENCE}` : null;
 }
 
+const AGY_RULE = /^─{10,}\s*$/u;
+const AGY_EMPTY_PROMPT = /^\s*>\s*$/u;
+// 한도 줄은 한 줄이다: 줄 맨 앞 `⚠ Individual quota reached.`로 시작하고 같은 줄이 `Resets in <값>`으로 끝난다.
+// 값 형식이 이상하면(`20m:garbage.`·`1d.`) 경보는 내고 시각만 뺀다(parseResetInMs). 끝이 `Resets in …`이 아니면 한도 아님.
+const AGY_QUOTA_LINE = /^⚠\s+Individual quota reached\.(?:\s.*)?\sResets\s+in\s+\S.*$/iu;
+const AGY_ERROR_ID = /^Error ID:\s*[0-9a-zA-Z-]+\s*$/u;
+const AGY_SKIPPABLE = (line) => line.trim() === "" || AGY_RULE.test(line);
+
+// agy 한도 화면(고정 규칙, 2026-11-24 실측 꼴만): 입력 상자(가로줄 / 빈 `>` / 가로줄) 위로 올라가며
+// 빈 줄·가로줄·미확인 우편 안내 블록·`Error ID: <영숫자·하이픈>` 한 줄만 건너뛰고, 처음 만난 그 밖의 줄이 한도 줄일 때만 그 줄을 돌려준다.
+// 사이에 다른 줄이 하나라도 있으면(새 출력·접힌 줄·회전 표시 등) null이고, 줄 접힘·여러 줄 합치기는 지원하지 않는다(정체 경로로 간다).
+// 입력 중인 글, 일하는 중(`esc to cancel`), 인용(들여쓰기·콜론 소개·코드 울타리·우편 안내 안)도 null.
+export function agyQuotaLine(screen) {
+  const rows = linesWithFence(screen);
+  const lines = rows.map((r) => r.line);
+  const bottom = lines.findLastIndex((line) => AGY_RULE.test(line));
+  if (bottom < 2 || !AGY_EMPTY_PROMPT.test(lines[bottom - 1]) || !AGY_RULE.test(lines[bottom - 2])) return null;
+  if (rows[bottom - 2].inFence) return null;
+  // agy 바닥글은 입력칸 아래 상태 줄 1줄까지만이고, 빈 입력칸의 상태 줄은 `? for shortcuts`로 시작한다(senior-agy-screen.mjs와 같은 규칙).
+  // 그 뒤 새 출력(`● Ran …` 등)이 있거나 상태 줄 자리에 다른 글(일하는 중 `esc to cancel` 포함)이 있으면 한도 아님.
+  const footer = lines.slice(bottom + 1).filter((line) => !RULE_OR_BLANK.test(line));
+  if (footer.length > 1 || (footer.length === 1 && !/^\s*\? for shortcuts\b/iu.test(footer[0]))) return null;
+  let at = bottom - 3;
+  for (let notices = 0, errorIds = 0; at >= 0; at--) {
+    if (AGY_SKIPPABLE(lines[at])) continue;
+    const notice = mailNoticeStart(lines, at);
+    if (notice >= 0 && notices++ < MAIL_NOTICE_STACK) { at = notice; continue; }
+    if (AGY_ERROR_ID.test(lines[at]) && errorIds++ === 0) continue;
+    break;
+  }
+  if (at < 0 || rows[at].inFence || !AGY_QUOTA_LINE.test(lines[at])) return null;
+  let above = at - 1;
+  while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
+  if (above >= 0 && /[:：]\s*$/u.test(lines[above])) return null;
+  return lines[at].trim();
+}
+
 // 현재 오류 덩어리 안의 목록 낱말: Map(줄 키 → 줄). 덩어리가 아니면 빈 Map.
 export function currentStopPhrases(screen) {
   const found = new Map();
@@ -313,6 +367,8 @@ export function currentStopPhrases(screen) {
   if (claude && claudeLimitShape(screen, claude) && phraseOfLine(claude.line)?.id === "usage-limit") {
     found.set(lineKey(claude.head.slice(0, 40), claude.line), claude.line);
   }
+  const agy = agyQuotaLine(screen);
+  if (agy) found.set(lineKey("individual quota reached", agy), agy);
   return found;
 }
 
