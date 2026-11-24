@@ -226,3 +226,20 @@ test('adopt: omo·claude·codex 명령은 표를 읽어도 그대로다', () => 
     assert.ok(!calls.log.some((l) => l.startsWith('agy 권한')), harness);
   }
 });
+
+test('adopt --parent <역할>: 네 실행기 모두 첫 안내에 상위 자기 소개 우편 한 줄(한 번만)과 역할 이름이 들어가고, @user·기본값에는 없다', () => {
+  const introduce = /상위 슈퍼-감독에게 자기 소개 우편 한 통\(목표·승인 범위·업무 키 요약\)을 kadan mail로 한 번만 보내세요/;
+  for (const [harness, model] of [['claude', 'opus'], ['codex', 'gpt-6'], ['agy', 'gemini-4-neon-xhigh'], ['omo', 'openai/gpt-6:high']]) {
+    const base = { role: `감독-${harness}`, env: {}, findTranscript: () => ({ ok: true }) };
+    const withParent = fakes();
+    runAdopt({ ...base, flags: { model, resume: ID, harness, parent: '슈퍼-감독' }, ...withParent.deps });
+    assert.match(withParent.calls.send[0].message, introduce, harness);
+    for (const parent of [{ parent: '@user' }, {}]) {
+      const none = fakes();
+      runAdopt({ ...base, flags: { model, resume: ID, harness, ...parent }, ...none.deps });
+      assert.doesNotMatch(none.calls.send[0].message, /자기 소개 우편/, `${harness} ${JSON.stringify(parent)}`);
+    }
+  }
+  assert.equal(adoptPrompt('감독', '@user').includes('자기 소개'), false);
+  assert.ok(adoptPrompt('감독', '슈퍼-감독', 'conductor').endsWith('마감·사고만 보냅니다.'));
+});
