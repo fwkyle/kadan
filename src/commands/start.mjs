@@ -317,12 +317,13 @@ export function cmdStart(argv, flags) {
     // 관계표를 찾았는데도 못 적은 경우만 알린다. 관계표가 없는 환경은 정상이다.
     console.error(`감시 등록 안 됨(${registration.reason}) — 알림 수신자를 직접 확인하라`);
   }
-  // 이번 start가 새로 만든 tmux claude 세션의 폴더 신뢰 창만, 조건이 모두 맞을 때 통과한다(조건·한계: docs/architecture.md).
-  // 재사용·restart·reopen(이 함수를 거치지 않음)·이어 연 대화·herdr·codex는 지금처럼 멈춘다. 결과는 start 기록 뒤에 별도 trust 사건으로 남긴다.
-  if (!reusing && floor.name === "tmux" && startedCmd && normalizeAiCommand(startedCmd)?.harness === "claude"
+  // 이번 start가 새로 만든 tmux claude·agy 세션의 폴더 신뢰 창만, 조건이 모두 맞을 때 통과한다(조건·한계: docs/architecture.md).
+  // 재사용·restart·reopen(이 함수를 거치지 않음)·이어 연 대화·herdr·codex·omo는 지금처럼 멈춘다. 결과는 start 기록 뒤에 별도 trust 사건으로 남긴다.
+  const trustHarness = startedCmd ? normalizeAiCommand(startedCmd)?.harness : null;
+  if (!reusing && floor.name === "tmux" && (trustHarness === "claude" || trustHarness === "agy")
     && startConversationCertainty(startedCmd) === "new" && pid != null) {
     const trust = autoAcceptTrust({
-      workdir: process.cwd(), home: ledgerHome(),
+      harness: trustHarness, workdir: process.cwd(), home: ledgerHome(),
       read: () => readTrustScreen(session),
       key: name => sendTmuxTrustKey(session, name, { expectedPid: pid }),
       paneLive: () => {
