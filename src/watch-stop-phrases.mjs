@@ -26,7 +26,7 @@ export const STOP_PHRASES = [
     detect: terminal429, sample: "codex 0.163 429 방치 사고 화면" },
   // 실제 사용 한도로 멈춘 화면(일일·주간·세션·사용·agy 개인 한도). 자동 재개 대상이 아니다(재개해도 같은 한도에 걸린다) — 보고만, 대체 후보는 경보가 안내한다.
   // 줄 맨 앞(표시 기호 하나 허용)이 문구일 때만 읽는다: 문장 중간의 인용·설명은 걸리지 않는다. 읽는 자리는 아래 currentStopPhrases:
-  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄), agy는 agyQuotaLine(빈 `>` 입력칸 바로 위 `⚠ Individual quota reached` 덩어리).
+  // codex는 현재 오류 덩어리(`■ …`), Claude는 claudeLimitLine(빈 입력창 바로 위 한도 줄), agy는 agyQuotaLine(입력 상자 바로 위 `⚠ Individual quota reached. … Resets in <값>` 한 줄).
   // 429 자동 재개 판정(terminal429)은 이 줄을 집지 않는다.
   { id: "usage-limit", kind: "한도", action: "report", scope: ["worker"],
     pattern: USAGE_LIMIT_LINE,
@@ -147,18 +147,17 @@ export function resumeHint(line, role) {
 }
 
 const RESET_IN_TAIL = /\bResets\s+in\s+([^\n]+?)\s*$/iu;
-const RESET_IN_PARTS = /^(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\.?$/iu;
+const RESET_IN_PARTS = /^(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\.?$/iu;
 const MAX_RESET_IN_MS = 365 * 24 * 60 * 60_000;
 
 // agy 한도 줄의 `Resets in 1h15m59s.` 같은 상대 남은 시간을 밀리초로 읽는다.
-// `Resets in` 뒤 값 전체가 `\d+d`·`\d+h`·`\d+m`·`\d+s` 조합(+ 선택적 끝 마침표)일 때만 받고, 그 밖(`20m:garbage.` 등)·0 이하는 null.
+// `Resets in` 뒤 값 전체가 `\d+h`·`\d+m`·`\d+s` 조합(+ 선택적 끝 마침표)일 때만 받고, 그 밖(`20m:garbage.`·`1d.` 등)·0 이하는 null.
 export function parseResetInMs(line) {
   const raw = RESET_IN_TAIL.exec(String(line ?? ""))?.[1];
   if (!raw) return null;
   const hit = RESET_IN_PARTS.exec(raw);
   if (!hit || !hit.slice(1).some(Boolean)) return null;
-  const seconds = Number(hit[1] ?? 0) * 86_400 + Number(hit[2] ?? 0) * 3_600
-    + Number(hit[3] ?? 0) * 60 + Number(hit[4] ?? 0);
+  const seconds = Number(hit[1] ?? 0) * 3_600 + Number(hit[2] ?? 0) * 60 + Number(hit[3] ?? 0);
   const ms = seconds * 1_000;
   return Number.isFinite(ms) && ms > 0 && ms <= MAX_RESET_IN_MS ? ms : null;
 }
@@ -307,102 +306,39 @@ function capacityStopLine(screen) {
 
 const AGY_RULE = /^─{10,}\s*$/u;
 const AGY_EMPTY_PROMPT = /^\s*>\s*$/u;
-const AGY_QUOTA_HEAD = /^⚠\s+Individual quota reached\b/iu;
-const AGY_ERROR_ID = /^Error ID:\s*\S+/iu;
-const AGY_ERROR_ID_SINGLE = /^Error ID:\s*[0-9a-zA-Z_-]+\s*$/u;
-const AGY_ERROR_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-\d+)?$/u;
-const AGY_ERROR_ID_CONT = /^[0-9a-f-]+$/u;
-const AGY_SPINNER = /^[⠀-⣿]\s+\S.*(?:\.\.\.|…)$/u;
-const AGY_BLOCK_BREAK = /^\s*(?:[●○•⏺■✕×ⓘ⚠✻⎿└│›❯>⠀-⣿]|```|~~~)/u;
-// 접힌 줄을 이은 한도 문장 전체의 모양: 머리 문장 + (선택) `Please upgrade …` 한 문장 + (선택) 맨 끝의 `Resets in <값>`.
-// 문장이 끝난 뒤에 붙은 새 출력(`Please wait …`·`Resets done.`·`Upgrade finished.`·값 뒤 낱말)은 이 모양이 아니라 한도로 읽지 않는다.
-// 값은 공백 없는 한 덩어리(+ 띄어 쓴 `5m 10s` 꼴)다. 형식이 이상해도(`20m:garbage.`) 받는다 — 경보는 내고 시각만 뺀다(parseResetInMs).
-const AGY_QUOTA_SHAPE = new RegExp(
-  "^⚠\\s+Individual quota reached\\.(?:\\s+Please upgrade\\b[^.]*\\.)?"
-  + "(?:\\s+Resets\\s+in\\s+\\S+(?:\\s+\\d+[dhms]\\.?)*)?$", "iu");
-const AGY_QUOTA_MAX_ROWS = 6;
+// 한도 줄은 한 줄이다: 줄 맨 앞 `⚠ Individual quota reached.`로 시작하고 같은 줄이 `Resets in <값>`으로 끝난다.
+// 값 형식이 이상하면(`20m:garbage.`·`1d.`) 경보는 내고 시각만 뺀다(parseResetInMs). 끝이 `Resets in …`이 아니면 한도 아님.
+const AGY_QUOTA_LINE = /^⚠\s+Individual quota reached\.(?:\s.*)?\sResets\s+in\s+\S.*$/iu;
+const AGY_ERROR_ID = /^Error ID:\s*[0-9a-zA-Z-]+\s*$/u;
+const AGY_SKIPPABLE = (line) => line.trim() === "" || AGY_RULE.test(line);
 
-// `Error ID: <id>` 한 줄이거나, 좁은 창에서 접힌 같은 ID의 이어짐(0칸 들여쓰기 소문자 hex·숫자·하이픈)일 때만 true.
-// 완성된 Error ID 뒤의 영문 한 단어(`Recovered`, `done` 등)나 새 출력 줄은 false다.
-function validAgyErrorId(errLines) {
-  if (errLines.length === 0) return true;
-  if (errLines.length === 1) return AGY_ERROR_ID_SINGLE.test(errLines[0]);
-  if (errLines.length > 3) return false;
-  const first = errLines[0].replace(/^Error ID:\s*/iu, "").trimEnd();
-  if (!first || /\s/u.test(first)) return false;
-  if (errLines.slice(1).some((line) => !AGY_ERROR_ID_CONT.test(line.replace(/\s+$/u, "")))) return false;
-  const joined = [first, ...errLines.slice(1).map((line) => line.trim())].join("");
-  if (AGY_ERROR_ID_UUID.test(joined)) return true;
-  return first.endsWith("-") && errLines.slice(1).every((line) => /\d/u.test(line));
-}
-
-// agy 한도 화면: 빈 `>` 입력칸(가로줄 두 개 사이, 또는 화면 끝 단독 `>`) 바로 위에 `⚠ Individual quota reached` 덩어리
-// (접힌 줄·선택적 `Error ID:` 줄 포함)가 있을 때만 한 줄로 이어 돌려준다.
-// 일하는 중(`esc to cancel`·회전 표시), 입력 중인 글, 뒤에 이어진 새 출력(바닥글 뒤 출력 포함),
-// 인용(들여쓰기·콜론 소개·코드 울타리·우편 안내 안)은 null.
+// agy 한도 화면(고정 규칙, 2026-11-24 실측 꼴만): 입력 상자(가로줄 / 빈 `>` / 가로줄) 위로 올라가며
+// 빈 줄·가로줄·미확인 우편 안내 블록·`Error ID: <영숫자·하이픈>` 한 줄만 건너뛰고, 처음 만난 그 밖의 줄이 한도 줄일 때만 그 줄을 돌려준다.
+// 사이에 다른 줄이 하나라도 있으면(새 출력·접힌 줄·회전 표시 등) null이고, 줄 접힘·여러 줄 합치기는 지원하지 않는다(정체 경로로 간다).
+// 입력 중인 글, 일하는 중(`esc to cancel`), 인용(들여쓰기·콜론 소개·코드 울타리·우편 안내 안)도 null.
 export function agyQuotaLine(screen) {
   const rows = linesWithFence(screen);
   const lines = rows.map((r) => r.line);
-  let composerTop = -1, composerBottom = -1;
-  const ruleEnd = lines.findLastIndex((line) => AGY_RULE.test(line));
-  if (ruleEnd >= 2) {
-    let bottomStart = ruleEnd;
-    while (bottomStart > 0 && AGY_RULE.test(lines[bottomStart - 1])) bottomStart--;
-    const topEnd = lines.findLastIndex((line, i) => i < bottomStart && AGY_RULE.test(line));
-    if (topEnd >= 0) {
-      const inner = lines.slice(topEnd + 1, bottomStart);
-      if (inner.length >= 1 && /^\s*>/u.test(inner[0])) {
-        if (inner.length !== 1 || !AGY_EMPTY_PROMPT.test(inner[0])) return null;
-        let topStart = topEnd;
-        while (topStart > 0 && AGY_RULE.test(lines[topStart - 1])) topStart--;
-        composerTop = topStart;
-        composerBottom = ruleEnd;
-      }
-    }
-  }
-  if (composerTop < 0) {
-    const promptAt = lines.findLastIndex((line) => /^\s*(?:[›❯]|>)/u.test(line));
-    if (promptAt < 0 || !AGY_EMPTY_PROMPT.test(lines[promptAt])) return null;
-    composerTop = promptAt;
-    composerBottom = promptAt;
-  }
-  if (rows[composerTop]?.inFence) return null;
+  const bottom = lines.findLastIndex((line) => AGY_RULE.test(line));
+  if (bottom < 2 || !AGY_EMPTY_PROMPT.test(lines[bottom - 1]) || !AGY_RULE.test(lines[bottom - 2])) return null;
+  if (rows[bottom - 2].inFence) return null;
   // agy 바닥글은 입력칸 아래 상태 줄 1줄까지만이고, 빈 입력칸의 상태 줄은 `? for shortcuts`로 시작한다(senior-agy-screen.mjs와 같은 규칙).
   // 그 뒤 새 출력(`● Ran …` 등)이 있거나 상태 줄 자리에 다른 글(일하는 중 `esc to cancel` 포함)이 있으면 한도 아님.
-  const footer = lines.slice(composerBottom + 1).filter((line) => !RULE_OR_BLANK.test(line));
+  const footer = lines.slice(bottom + 1).filter((line) => !RULE_OR_BLANK.test(line));
   if (footer.length > 1 || (footer.length === 1 && !/^\s*\? for shortcuts\b/iu.test(footer[0]))) return null;
-  if (composerTop > 0 && AGY_SPINNER.test(lines[composerTop - 1])) return null;
-  let end = composerTop - 1;
-  while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
-  if (end < 0) return null;
-  for (let n = 0; n < MAIL_NOTICE_STACK; n++) {
-    const notice = mailNoticeStart(lines, end);
-    if (notice < 0) break;
-    end = notice - 1;
-    while (end >= 0 && RULE_OR_BLANK.test(lines[end])) end--;
-    if (end < 0) return null;
+  let at = bottom - 3;
+  for (let notices = 0, errorIds = 0; at >= 0; at--) {
+    if (AGY_SKIPPABLE(lines[at])) continue;
+    const notice = mailNoticeStart(lines, at);
+    if (notice >= 0 && notices++ < MAIL_NOTICE_STACK) { at = notice; continue; }
+    if (AGY_ERROR_ID.test(lines[at]) && errorIds++ === 0) continue;
+    break;
   }
-  let blockStart = end;
-  while (blockStart > 0 && end - blockStart < AGY_QUOTA_MAX_ROWS - 1
-    && !RULE_OR_BLANK.test(lines[blockStart - 1])) blockStart--;
-  let head = -1;
-  for (let i = end; i >= blockStart; i--) {
-    if (AGY_QUOTA_HEAD.test(lines[i])) { head = i; break; }
-  }
-  if (head < 0) return null;
-  if (rows.slice(head, end + 1).some((r) => r.inFence)) return null;
-  let above = head - 1;
+  if (at < 0 || rows[at].inFence || !AGY_QUOTA_LINE.test(lines[at])) return null;
+  let above = at - 1;
   while (above >= 0 && RULE_OR_BLANK.test(lines[above])) above--;
   if (above >= 0 && /[:：]\s*$/u.test(lines[above])) return null;
-  const tail = lines.slice(head, end + 1);
-  const errIdx = tail.findIndex((line, i) => i > 0 && AGY_ERROR_ID.test(line));
-  const msgLines = errIdx > 0 ? tail.slice(0, errIdx) : tail;
-  const errLines = errIdx > 0 ? tail.slice(errIdx) : [];
-  if (!validAgyErrorId(errLines)) return null;
-  if (msgLines.length > 4) return null;
-  if (msgLines.slice(1).some((line) => AGY_BLOCK_BREAK.test(line))) return null;
-  const message = msgLines.map((l) => l.trim()).join(" ").trim();
-  return AGY_QUOTA_SHAPE.test(message) ? message : null;
+  return lines[at].trim();
 }
 
 // 현재 오류 덩어리 안의 목록 낱말: Map(줄 키 → 줄). 덩어리가 아니면 빈 Map.

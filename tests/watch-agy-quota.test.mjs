@@ -72,92 +72,133 @@ test('실측 agy 한도 화면 고정본: 한도 정지(usage-limit, report)로 
   assert.deepEqual([entries, sent], [[], []]);
 });
 
-test('좁은 창 줄 바꿈·Error ID 없음·NBSP·우편 안내 블록 끼임에서도 같은 한도 줄과 키로 잡는다', () => {
-  const narrow80 = [
-    '● Ran (cmd) (ctrl+o to expand)', '',
-    '⚠ Individual quota reached. Please upgrade your subscription to increase your',
-    'limits. Resets in 1h15m59s.',
-    ERROR_ID, '', '─'.repeat(80), '>', '─'.repeat(80), '? for shortcuts   Gemini 4 Neon · high',
-  ].join('\n');
-  const narrow55 = [
-    '● Ran (cmd) (ctrl+o to expand)', '',
-    '⚠ Individual quota reached. Please upgrade your',
-    'subscription to increase your limits. Resets in',
-    '1h15m59s.',
-    'Error ID: 00000000-0000-0000-0000-000000000000-',
-    '313', '', '─'.repeat(55), '>', '─'.repeat(55), '? for shortcuts   Gemini 4 Neon',
-  ].join('\n');
-  const noErrorId = `${QUOTA_LINE}\n\n${AGY_COMPOSER}`;
+// ---- 수정 2 카드의 기대 결과 표(고정 규칙) 줄별 시험. 음성 화면은 모두 "그 줄만 빼면 한도"인 양성 대조군 위에 만든다. ----
+const NO_ID_SCREEN = REAL_AGY_SCREEN.replace(`${ERROR_ID}\n`, '');
+const mailNotice = preview => unreadMailMessage(
+  [{role: 'qa-worker', by: 'qa-boss', mailId: 'm1', t: '2026-11-24T04:30:00Z', preview}], 'qa-worker');
+const assertNotQuota = (name, screen) => {
+  assert.equal(agyQuotaLine(screen), null, `${name}: agyQuotaLine`);
+  assert.equal(screenDisconnects(screen).size, 0, `${name}: screenDisconnects`);
+  assert.equal(waitingStopScreen(screen), null, `${name}: waitingStopScreen`);
+};
+
+test('표 1 — 실측 화면 두 꼴(1h15m59s. + Error ID, 3h9m58s + Error ID): 한도 + 대략 시각', () => {
+  const now = new Date(2026, 10, 24, 13, 30, 0).getTime();
+  const second = QUOTA_LINE.replace('1h15m59s.', '3h9m58s');
+  for (const [line, seconds] of [[QUOTA_LINE, 4_559], [second, 11_398]]) {
+    const screen = REAL_AGY_SCREEN.replace(QUOTA_LINE, line);
+    assert.equal(agyQuotaLine(screen), line);
+    const [found] = [...screenDisconnects(screen).values()];
+    assert.equal(disconnectKind(found), '한도');
+    assert.equal(parseResetInMs(found), seconds * 1_000);
+    const clock = clockTime(Math.round((now + seconds * 1_000) / 60_000) * 60_000);
+    assert.ok(formatAlertBody({kind: '한도', session: 'kadan-qa-worker', line: found}, now)
+      .includes(`풀리는 시각(대략) ${clock} `), line);
+  }
+});
+
+test('표 2 — Error ID 줄 없음(NBSP 입력창·우편 안내 끼임 포함): 한도 + 대략 시각, 같은 경보 키', () => {
   const nbspPrompt = REAL_AGY_SCREEN.replace('\n>\n', '\n>\u00a0\n');
-  const notice = unreadMailMessage([{role: 'qa-worker', by: 'qa-boss', mailId: 'm1', t: '2026-11-24T04:30:00Z', preview: '다른 안내'}], 'qa-worker');
-  const withMail = REAL_AGY_SCREEN.replace(`\n\n${AGY_COMPOSER}`, `\n\n${notice}\n\n${AGY_COMPOSER}`);
-  const barePrompt = `${QUOTA_LINE}\n${ERROR_ID}\n\n>\n`;
-  const midUuidWrap = REAL_AGY_SCREEN.replace(ERROR_ID, 'Error ID: 159c71e6-9291-4cac-a07f-ed7912\na7e8b5-313');
-  const suffixWrap = REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID.slice(0, -3)}\n${ERROR_ID.slice(-3)}`);
+  const withMail = REAL_AGY_SCREEN.replace(`\n\n${AGY_COMPOSER}`, `\n\n${mailNotice('다른 안내')}\n\n${AGY_COMPOSER}`);
   const baseKey = [...screenDisconnects(REAL_AGY_SCREEN).keys()];
-  for (const [name, screen] of [['80칸', narrow80], ['55칸', narrow55], ['Error ID 없음', noErrorId],
-    ['NBSP 입력창', nbspPrompt], ['우편 안내 끼임', withMail], ['가로줄 없는 단독 >', barePrompt],
-    ['UUID 중간 접힘', midUuidWrap], ['Error ID 끝 숫자 접힘', suffixWrap]]) {
+  for (const [name, screen] of [['Error ID 없음', NO_ID_SCREEN], ['NBSP 입력창', nbspPrompt], ['우편 안내 끼임', withMail]]) {
     const found = screenDisconnects(screen);
     assert.deepEqual([...found.values()], [QUOTA_LINE], name);
-    assert.deepEqual([...found.keys()], baseKey, `${name}: 창 너비·꾸밈이 달라도 같은 경보 키`);
+    assert.deepEqual([...found.keys()], baseKey, `${name}: 같은 경보 키`);
+    assert.equal(parseResetInMs([...found.values()][0]), 4_559_000, name);
   }
   // 남은 시간 숫자만 달라도 같은 키(중복 경보 없음).
   const later = REAL_AGY_SCREEN.replace('1h15m59s', '1h14m00s');
   assert.deepEqual([...screenDisconnects(later).keys()], baseKey);
 });
 
-test('한도 줄 뒤에 새 출력이 이어진 화면·일하는 중·입력 중·인용·울타리·타 실행기는 한도가 아니다', () => {
-  const notice = unreadMailMessage([{role: 'qa-worker', by: 'qa-boss', mailId: 'm1', t: '2026-11-24T04:30:00Z', preview: QUOTA_LINE}], 'qa-worker');
-  const narrow55With = tail => [
-    '⚠ Individual quota reached. Please upgrade your',
-    'subscription to increase your limits. Resets in',
-    ...tail, '', '─'.repeat(55), '>', '─'.repeat(55), '? for shortcuts   Gemini 4 Neon',
-  ].join('\n');
-  assert.equal(agyQuotaLine(narrow55With(['1h15m59s.'])), QUOTA_LINE, '대조군: 뒤에 붙은 줄이 없으면 한도');
-  assert.equal(agyQuotaLine(`${NO_RESET_LINE}\n\n${AGY_COMPOSER}`), NO_RESET_LINE, '대조군: 남은 시간 없는 한도 줄');
+test('표 3 — 한도 줄과 입력 상자 사이에 다른 줄이 하나라도 있으면 한도가 아니다', () => {
+  // 대조군: 끼운 줄을 빼면 둘 다 한도다.
+  assert.equal(agyQuotaLine(REAL_AGY_SCREEN), QUOTA_LINE);
+  assert.equal(agyQuotaLine(NO_ID_SCREEN), QUOTA_LINE);
+  const extras = ['10s.', 'Recovered', 'done', '● Ran (npm test)', 'Please wait while I continue.', 'Resets done.',
+    'Upgrade finished.', '완료했습니다.', '  작업을 이어갑니다.', '⣟  Generating...', '313', '  313', '42', 'cafe', '-', '—',
+    ERROR_ID, 'Error ID: 00000000-0000-0000-0000-000000000000-313 Recovered', 'Error ID: bad_id'];
+  for (const extra of extras) {
+    assertNotQuota(`Error ID 바로 뒤 [${extra}]`, REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\n${extra}`));
+    assertNotQuota(`Error ID 뒤 빈 줄 건너 [${extra}]`, REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\n\n${extra}`));
+    if (extra === ERROR_ID) continue; // Error ID 없는 화면에 Error ID 한 줄을 넣으면 실측 꼴이다
+    assertNotQuota(`한도 줄 바로 뒤 [${extra}]`, NO_ID_SCREEN.replace(QUOTA_LINE, `${QUOTA_LINE}\n${extra}`));
+    assertNotQuota(`한도 줄과 Error ID 사이 [${extra}]`, REAL_AGY_SCREEN.replace(QUOTA_LINE, `${QUOTA_LINE}\n${extra}`));
+  }
+  // 재검수 재현 그대로: Error ID 없는 화면에서 끝난 해제 문장 뒤 별도 줄 10s.
+  assertNotQuota('재검수 10s.', NO_ID_SCREEN.replace('Resets in 1h15m59s.', 'Resets in 1h15m59s.\n10s.'));
   const negatives = {
-    after_response: `${QUOTA_LINE}\n${ERROR_ID}\n\n> 계속해 줘\n\n  작업을 이어갑니다.\n\n${AGY_COMPOSER}`,
-    after_tool: `${QUOTA_LINE}\n${ERROR_ID}\n\n○ Thought for 2s\n● Ran (npm test)\n\n${AGY_COMPOSER}`,
-    after_error_id_tight_tool: `${QUOTA_LINE}\n${ERROR_ID}\n● 계속 진행했습니다.\n\n${AGY_COMPOSER}`,
-    after_error_id_tight_word: `${QUOTA_LINE}\n${ERROR_ID}\n완료했습니다.\n\n${AGY_COMPOSER}`,
-    // F1 검수 재현: 완성된 Error ID 뒤 영문 한 단어·들여쓴 숫자·hex 낱말, 바닥글 뒤 새 도구·텍스트 출력.
-    after_error_id_english_word: REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\nRecovered`),
-    after_error_id_lower_word: REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\ndone`),
-    after_error_id_hex_word: REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\ncafe`),
-    after_error_id_indented_digits: REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\n  313`),
-    after_error_id_same_line_extra: REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID} Recovered`),
+    after_response: REAL_AGY_SCREEN.replace(`\n\n${AGY_COMPOSER}`, `\n\n> 계속해 줘\n\n  작업을 이어갑니다.\n\n${AGY_COMPOSER}`),
+    after_tool: REAL_AGY_SCREEN.replace(`\n\n${AGY_COMPOSER}`, `\n\n○ Thought for 2s\n● Ran (npm test)\n\n${AGY_COMPOSER}`),
     after_footer_tool: `${REAL_AGY_SCREEN}\n● Ran (npm test)\n`,
     after_footer_prose: `${REAL_AGY_SCREEN}\n  작업을 이어갑니다.\n`,
     footer_replaced_with_tool: REAL_AGY_SCREEN.replace(FOOTER, '● Ran (npm test)'),
-    bare_prompt_after_tool: `${QUOTA_LINE}\n${ERROR_ID}\n\n>\n● Ran (npm test)\n`,
-    bare_prompt_after_word: `${QUOTA_LINE}\n${ERROR_ID}\n\n>\nRecovered\n`,
-    // 이어받기 확인: 한도 문장이 끝난 뒤 문장 이음 낱말(Please·Upgrade·Resets)로 시작하는 새 출력, 상태 줄 자리의 다른 글.
-    after_quota_please_output: `${NO_RESET_LINE}\nPlease wait while I continue.\n\n${AGY_COMPOSER}`,
-    after_quota_resets_output: `${NO_RESET_LINE}\nResets are not needed, continuing.\n\n${AGY_COMPOSER}`,
-    after_quota_upgrade_output: `${NO_RESET_LINE}\nUpgrade finished.\n\n${AGY_COMPOSER}`,
-    wrapped_then_please_output: narrow55With(['1h15m59s.', 'Please wait while I continue.']),
-    wrapped_then_resets_output: narrow55With(['1h15m59s.', 'Resets done.']),
-    wrapped_value_then_word: narrow55With(['1h15m59s', 'Recovered']),
     footer_replaced_with_word: REAL_AGY_SCREEN.replace(FOOTER, 'Recovered'),
-    after_quota_tight_prose: `${QUOTA_LINE}\n다시 시도해 완료했습니다.\n\n${AGY_COMPOSER}`,
+    footer_prompt: `${REAL_AGY_SCREEN}\n> 이어서 입력`,
     working_footer: REAL_AGY_SCREEN.replace('? for shortcuts', 'esc to cancel'),
     working_spinner: REAL_AGY_SCREEN.replace(`\n\n${AGY_COMPOSER}`, `\n\n⣟  Generating...\n${AGY_COMPOSER}`),
     typing: REAL_AGY_SCREEN.replace('\n>\n', '\n> 계속 진행해 줘\n'),
-    indented_reply: `  ${QUOTA_LINE}\n\n${AGY_COMPOSER}`,
-    blockquote: `  > ${QUOTA_LINE}\n\n${AGY_COMPOSER}`,
+    indented_reply: REAL_AGY_SCREEN.replace(QUOTA_LINE, `  ${QUOTA_LINE}`),
+    blockquote: REAL_AGY_SCREEN.replace(QUOTA_LINE, `  > ${QUOTA_LINE}`),
     intro_colon: `  화면에 아래처럼 뜹니다:\n\n${QUOTA_LINE}\n\n${AGY_COMPOSER}`,
     fenced: `  예시:\n\`\`\`text\n${QUOTA_LINE}\n\`\`\`\n\n${AGY_COMPOSER}`,
-    mail_preview: `● Ran (cmd)\n\n${notice}\n\n${AGY_COMPOSER}`,
+    mail_preview: `● Ran (cmd)\n\n${mailNotice(QUOTA_LINE)}\n\n${AGY_COMPOSER}`,
     codex_screen: `${QUOTA_LINE}\n\n${CODEX_COMPOSER}`,
     claude_screen: `${QUOTA_LINE}\n\n${'─'.repeat(40)}\n❯ \n${'─'.repeat(40)}\n  ~/Dev/demo[main]`,
-    footer_prompt: `${REAL_AGY_SCREEN}\n> 이어서 입력`,
     no_composer: `${QUOTA_LINE}\n${ERROR_ID}`,
   };
-  for (const [name, screen] of Object.entries(negatives)) {
-    assert.equal(agyQuotaLine(screen), null, `${name}: agyQuotaLine`);
-    assert.equal(screenDisconnects(screen).size, 0, `${name}: screenDisconnects`);
-    assert.equal(waitingStopScreen(screen), null, `${name}: waitingStopScreen`);
+  for (const [name, screen] of Object.entries(negatives)) assertNotQuota(name, screen);
+});
+
+test('표 4 — 한도 줄이 두 줄로 접힌 화면은 한도가 아니다(정체 경로)', () => {
+  const narrow = (rows, width) => [
+    '● Ran (cmd) (ctrl+o to expand)', '', ...rows, '',
+    '─'.repeat(width), '>', '─'.repeat(width), '? for shortcuts   Gemini 4 Neon',
+  ].join('\n');
+  // 대조군: 같은 틀에 한 줄 한도 문장이면 한도다.
+  assert.equal(agyQuotaLine(narrow([QUOTA_LINE, ERROR_ID], 80)), QUOTA_LINE);
+  const wrapped = {
+    wrap_80: narrow(['⚠ Individual quota reached. Please upgrade your subscription to increase your',
+      'limits. Resets in 1h15m59s.', ERROR_ID], 80),
+    wrap_55: narrow(['⚠ Individual quota reached. Please upgrade your',
+      'subscription to increase your limits. Resets in', '1h15m59s.', ERROR_ID], 55),
+    wrap_inside_duration: NO_ID_SCREEN.replace('Resets in 1h15m59s.', 'Resets in 1h 15m\n59s.'),
+    error_id_wrap_mid_uuid: REAL_AGY_SCREEN.replace(ERROR_ID, 'Error ID: 159c71e6-9291-4cac-a07f-ed7912\na7e8b5-313'),
+    error_id_wrap_suffix: REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID.slice(0, -3)}\n${ERROR_ID.slice(-3)}`),
+  };
+  for (const [name, screen] of Object.entries(wrapped)) assertNotQuota(name, screen);
+});
+
+test('고정 규칙 밖 꼴 — Resets in으로 끝나지 않는 줄·가로줄 없는 단독 > 는 한도가 아니다', () => {
+  const outside = {
+    no_resets_clause: REAL_AGY_SCREEN.replace(QUOTA_LINE, NO_RESET_LINE),
+    no_resets_clause_no_id: NO_ID_SCREEN.replace(QUOTA_LINE, NO_RESET_LINE),
+    resets_without_value: REAL_AGY_SCREEN.replace(' 1h15m59s.', ''),
+    bare_prompt: `${QUOTA_LINE}\n${ERROR_ID}\n\n>\n`,
+    bare_prompt_with_footer: `${QUOTA_LINE}\n${ERROR_ID}\n\n>\n${FOOTER}`,
+    rule_only_above_prompt: `${QUOTA_LINE}\n${ERROR_ID}\n\n${RULE}\n>\n${FOOTER}`,
+  };
+  for (const [name, screen] of Object.entries(outside)) assertNotQuota(name, screen);
+  // 가운데 문장은 따지지 않는다: 한 줄이고 끝이 Resets in <값>이면 한도다.
+  const other = '⚠ Individual quota reached. Your plan limit was hit. Resets in 45m.';
+  assert.equal(agyQuotaLine(REAL_AGY_SCREEN.replace(QUOTA_LINE, other)), other);
+  const short = '⚠ Individual quota reached. Resets in 45m.';
+  assert.equal(agyQuotaLine(REAL_AGY_SCREEN.replace(QUOTA_LINE, short)), short);
+});
+
+test('표 5 — Resets in 1d.·20m:garbage.: 한도로 읽되 시각은 붙이지 않는다', () => {
+  const now = new Date(2026, 10, 24, 13, 30, 0).getTime();
+  for (const value of ['1d.', '20m:garbage.']) {
+    const line = QUOTA_LINE.replace('1h15m59s.', value);
+    for (const base of [REAL_AGY_SCREEN, NO_ID_SCREEN]) {
+      const screen = base.replace(QUOTA_LINE, line);
+      assert.equal(agyQuotaLine(screen), line, value);
+      assert.deepEqual([...screenDisconnects(screen).values()], [line], value);
+    }
+    assert.equal(parseResetInMs(line), null, value);
+    assert.equal(resetAtNote(line, now), null, value);
+    assert.equal(formatAlertBody({kind: '한도', session: 'kadan-qa-worker', line}, now), `한도 kadan-qa-worker (${line})`);
   }
 });
 
@@ -165,9 +206,12 @@ test('Resets in 상대 시간 파싱과 대략 풀리는 시각 문구(읽은 �
   assert.equal(parseResetInMs(QUOTA_LINE), (1 * 3600 + 15 * 60 + 59) * 1000);
   assert.equal(parseResetInMs('⚠ Individual quota reached. Resets in 45m.'), 45 * 60_000);
   assert.equal(parseResetInMs('⚠ Individual quota reached. Resets in 2h 5m 10s.'), (2 * 3600 + 5 * 60 + 10) * 1000);
-  assert.equal(parseResetInMs('⚠ Individual quota reached. Resets in 1d2h3m4s.'), (86400 + 7200 + 180 + 4) * 1000);
+  assert.equal(parseResetInMs('⚠ Individual quota reached. Resets in 3h9m58s'), (3 * 3600 + 9 * 60 + 58) * 1000);
   assert.equal(parseResetInMs('⚠ Individual quota reached. Resets in 30s'), 30_000);
   for (const bad of [
+    // 일(d) 단위는 받지 않는다(h·m·s 조합만).
+    '⚠ Individual quota reached. Resets in 1d.',
+    '⚠ Individual quota reached. Resets in 1d2h3m4s.',
     '⚠ Individual quota reached. Please upgrade your subscription.',
     '⚠ Individual quota reached. Resets in 0s.',
     '⚠ Individual quota reached. Resets in soon.',
@@ -347,21 +391,28 @@ test('감시기: waiting 표시 중 agy 한도 화면은 대기중정지 경보 
   assert.ok(itemizedAlert(alert, '13:30', {now: epoch}).includes(`풀리는 시각(대략) ${expectedClock}`));
 });
 
-test('감시기(F1·F2 회귀): 새 출력(Recovered·바닥글 뒤 ● Ran)은 경보 0건, 20m:garbage.는 경보만 있고 시각 없음', async () => {
-  const newerWord = REAL_AGY_SCREEN.replace(ERROR_ID, `${ERROR_ID}\nRecovered`);
-  const newerAfterPrompt = `${REAL_AGY_SCREEN}\n● Ran (npm test)\n`;
-  for (const [name, screen] of [['Error ID 뒤 Recovered', newerWord], ['바닥글 뒤 ● Ran', newerAfterPrompt]]) {
+test('감시기(표 3·4): 사이에 다른 줄이 있거나 접힌 한도 화면은 한도 경보 0건, 교대 명령도 안 나간다', async () => {
+  const screens = {
+    'Error ID 뒤 Recovered': REAL_AGY_SCREEN.replace(ERROR_ID, ERROR_ID + '\nRecovered'),
+    '바닥글 뒤 ● Ran': REAL_AGY_SCREEN + '\n● Ran (npm test)\n',
+    '재검수 10s.': NO_ID_SCREEN.replace('Resets in 1h15m59s.', 'Resets in 1h15m59s.\n10s.'),
+    '두 줄로 접힌 시간': NO_ID_SCREEN.replace('Resets in 1h15m59s.', 'Resets in 1h 15m\n59s.'),
+  };
+  for (const [name, screen] of Object.entries(screens)) {
     const r = await runAgyWatch({screenAt: () => screen, stopAt: 4});
     const limitAlerts = r.records.filter(e => e.kind === 'alert' && ['한도', '대기중정지'].includes(e.alertKind));
-    assert.deepEqual(limitAlerts, [], `${name}: 한도 경보 0건`);
-    assert.equal(r.sent.some(([, , m]) => /한도|대체 후보/.test(m)), false, `${name}: 교대 명령 안 나감`);
+    assert.deepEqual(limitAlerts, [], name + ': 한도 경보 0건');
+    assert.equal(r.sent.some(([, , m]) => /한도|대체 후보/.test(m)), false, name + ': 교대 명령 안 나감');
   }
-  const malformed = REAL_AGY_SCREEN.replace('1h15m59s.', '20m:garbage.');
-  const r = await runAgyWatch({screenAt: () => malformed, stopAt: 4});
-  const msgs = r.sent.filter(([, , m]) => /한도/.test(m) && !/해소/.test(m));
-  assert.equal(msgs.length, 1, 'Resets in 형식 이상이어도 한도 경보는 1건');
-  assert.ok(msgs[0][2].includes('Resets in 20m:garbage.'), msgs[0][2]);
-  assert.ok(!msgs[0][2].includes('풀리는 시각'), `잘못된 시간으로 시각을 붙이면 안 됨: ${msgs[0][2]}`);
-  assert.match(msgs[0][2], /대체 후보 1번 있음/);
 });
 
+test('감시기(표 5): Resets in 20m:garbage.·1d.는 한도 경보 1건만 내고 풀리는 시각은 붙이지 않는다', async () => {
+  for (const value of ['20m:garbage.', '1d.']) {
+    const r = await runAgyWatch({screenAt: () => REAL_AGY_SCREEN.replace('1h15m59s.', value), stopAt: 4});
+    const msgs = r.sent.filter(([, , m]) => /한도/.test(m) && !/해소/.test(m));
+    assert.equal(msgs.length, 1, value + ': 한도 경보는 1건');
+    assert.ok(msgs[0][2].includes('Resets in ' + value), msgs[0][2]);
+    assert.ok(!msgs[0][2].includes('풀리는 시각'), value + ': 시각을 붙이면 안 됨: ' + msgs[0][2]);
+    assert.match(msgs[0][2], /대체 후보 1번 있음/);
+  }
+});
