@@ -80,7 +80,7 @@ test('결함 3: withEffectiveOwner는 이미 얹은 업무에 다시 불러도 �
   const once = withEffectiveOwner(rawWork, entries);
   assert.equal(once.ownedAt, handover.t);
   const twice = withEffectiveOwner(once, entries);
-  assert.equal(twice, once);
+  assert.deepEqual(twice, once);
   assert.equal(twice.ownedAt, handover.t);
   assert.equal(withEffectiveOwner({...rawWork}, entries).ownedAt, handover.t);
 });
@@ -100,6 +100,54 @@ test('결함 3: 대시보드 감시 개요가 인계 후 현재 책임 감독을
   const m = watchOverview({center, entries, works: [work], processes: [{pid: 42, startedAt: '2026-11-24T00:00:00Z'}],
     readFile: () => text, now});
   assert.ok(m.boards[0].roles.some(r => r.role === 'sup-new'));
+});
+
+// 라운드 2: 연속 인계(A→B→C)와 인계를 얹은 업무의 얕은 복사본.
+const chain = {worker: 'sup-a', 'sup-a': 'top', 'sup-b': 'top', 'sup-c': 'top', top: '@user'};
+const day = hhmm => `2026-11-24T${hhmm}:00Z`;
+const chainWork = {key: 'p/work', board: 'p', status: 'open', owner: 'sup-a', at: day('01:00'),
+  executions: [{key: 'p/c'}], history: [{action: 'create', at: day('01:00')}]};
+const hop = (from, to, hhmm) => ({kind: 'handover', phase: 'transferred', from, to, taskIds: [], t: day(hhmm)});
+function overviewRoles(works, extra) {
+  const text = JSON.stringify(chain);
+  const center = {runtimeKnown: true, roles: [], boards: [{name: 'p', runs: [], cards: [{id: 'c', key: 'p/c',
+    role: 'worker', status: 'assigned', workType: 'execution', displayState: 'running'}]}]};
+  const entries = [{kind: 'hierarchy-loaded', pid: 42, path: '/t/h.json', t: day('04:00'),
+    hash: createHash('sha256').update(text).digest('hex')},
+  {kind: 'send', role: 'worker', taskId: 'c', t: day('04:30')}, ...extra];
+  const m = watchOverview({center, entries, works, processes: [{pid: 42, startedAt: day('00:00')}],
+    readFile: () => text, now: Date.parse(day('12:00'))});
+  return m.boards[0].roles.map(r => r.role);
+}
+
+test('라운드 2: 얹은 업무에 인계가 더 쌓인 원장을 넘기면 새 책임(A→B→C)까지 따라간다', () => {
+  const first = [hop('sup-a', 'sup-b', '06:00')];
+  const once = withEffectiveOwner(chainWork, first);
+  assert.deepEqual([once.owner, once.ownedAt], ['sup-b', day('06:00')]);
+  // 같은 원장 재호출은 그대로, 인계가 늘면 C/08:00.
+  const same = withEffectiveOwner(once, first);
+  assert.deepEqual([same.owner, same.ownedAt], ['sup-b', day('06:00')]);
+  const longer = [...first, hop('sup-b', 'sup-c', '08:00')];
+  const next = withEffectiveOwner(once, longer);
+  assert.deepEqual([next.owner, next.ownedAt], ['sup-c', day('08:00')]);
+  // 원본은 바뀌지 않는다.
+  assert.deepEqual([chainWork.owner, chainWork.ownedAt], ['sup-a', undefined]);
+  assert.equal(overviewRoles([once], longer).includes('sup-c'), true);
+});
+
+test('라운드 2: 인계를 얹은 업무의 얕은 복사본도 ownedAt을 옛 시각으로 되돌리지 않는다', () => {
+  const first = [hop('sup-a', 'sup-b', '06:00')];
+  const copy = {...withEffectiveOwner(chainWork, first)};
+  assert.equal(copy.at, day('01:00'));
+  const again = withEffectiveOwner(copy, first);
+  assert.deepEqual([again.owner, again.ownedAt], ['sup-b', day('06:00')]);
+  const longer = [...first, hop('sup-b', 'sup-c', '08:00')];
+  const moved = withEffectiveOwner(copy, longer);
+  assert.deepEqual([moved.owner, moved.ownedAt], ['sup-c', day('08:00')]);
+  // sup-b의 새 세대(05:00)가 06:00 인계 뒤 책임이면 이전 세대가 아니라 현재 책임이라 개요에 남는다.
+  const started = [{kind: 'start', role: 'sup-b', session: 'kadan-sup-b', panePid: 7, t: day('05:00')}];
+  assert.equal(overviewRoles([copy], [...started, ...first]).includes('sup-b'), true);
+  assert.equal(overviewRoles([copy], [...started, ...longer]).includes('sup-c'), true);
 });
 
 test('결함 4: 상위 사슬이 비서로 이어져도 감독 범위에 비서가 들어가지 않는다', () => {
