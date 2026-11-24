@@ -1,6 +1,5 @@
 import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams} from './ledger-domains.mjs';
-import {assertLedgerIntegrity} from './ledger-integrity.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -138,24 +137,35 @@ export function readRecoveryLedger(home = ledgerHome()) {
   });
 }
 const LIFECYCLE_KINDS = new Set(['start', 'stop', 'window']);
-// 단일 세션의 수명 사건(start·stop·window)만 읽는다(up --auto가 매분 전체 시스템 원장을 파싱하지 않게).
-// 먼저 SQLite 안에서 readSystemLedger와 같은 원장 손상(순번·연결·종류·broken)을 검사해(assertLedgerIntegrity) 손상이면
-// 탭을 열기 전에 오류로 멈춘다. 통과한 뒤에만 대상 세션의 수명 행을 JS로 해석하고, 순서·모양은 readSystemLedger와 같다.
-// 원장이 10배면: SQL 검사·스캔은 원장 행 수에 비례하지만 JS 파싱·힙은 대상 세션 수명 건수에만 비례한다.
-export function readSessionLifecycleLedger(home = ledgerHome(), session) {
-  if (storageMode(home) === 'none') return [];
-  const target = typeof session === 'string' ? session : '';
-  return storageSnapshot(home, db => {
-    assertLedgerIntegrity(db);
-    const read = db.prepare(
-      `SELECT payload FROM events WHERE stream=? AND ${RECOVERY_KIND} IN ('start','stop','window')`
-      + ` AND json_extract(payload,'$.session')=? ORDER BY seq`
-    );
-    const rows = stream => read.all(stream, target).map(row => JSON.parse(row.payload))
-      .filter(value => LIFECYCLE_KINDS.has(value.kind) && value.session === target);
-    const project = domainProjector('system');
-    return [...project.legacy(rows('ledger.jsonl')), ...project.rows(rows(ledgerStreams.system))];
-  });
+// 한 세션의 현재 세대 수명 사건(마지막 start부터의 start·stop·window)만 최신 쪽부터 거꾸로 읽는다(up --auto의 has-tab 빠른 길).
+// 로티 탭 판정(currentRottieWindow·inheritsOnlyOldTab)은 그 세션의 마지막 start 이후 사건에만 달려 있어 결과가 전체 읽기와 같다.
+// 이 읽기는 원장 전체를 검증하지 않는다. 판단할 수 없으면(저장소 없음·start 없음·해석 실패·broken) null을 돌려
+// 호출한 쪽이 readSystemLedger 전체 검증으로 넘어가게 한다. 탭을 열거나 기록하기 전에는 반드시 그 전체 검증을 거친다.
+// 원장이 10배면: SQL 스캔은 마지막 start 이후 구간의 행 수에 비례하고,
+// JS 파싱·힙은 그 구간의 이 세션 수명 사건 수에만 비례한다.
+export function readSessionLatestLifecycle(home = ledgerHome(), session) {
+  if (storageMode(home) === 'none' || typeof session !== 'string') return null;
+  try {
+    return storageSnapshot(home, db => {
+      const read = db.prepare(`SELECT payload FROM events WHERE stream=?`
+        + ` AND ${RECOVERY_KIND} IN ('start','stop','window')`
+        + ` AND json_extract(payload,'$.session')=? ORDER BY seq DESC`);
+      const found = {system: [], legacy: []};
+      for (const [name, stream] of [['system', ledgerStreams.system], ['legacy', 'ledger.jsonl']]) {
+        for (const row of read.iterate(stream, session)) {
+          const value = JSON.parse(row.payload);
+          if (!value || typeof value !== 'object' || value.broken || value.session !== session
+            || !LIFECYCLE_KINDS.has(value.kind)) return null;
+          found[name].push(value);
+          if (value.kind === 'start') {
+            const project = domainProjector('system');
+            return [...project.legacy(found.legacy.reverse()), ...project.rows(found.system.reverse())];
+          }
+        }
+      }
+      return null;
+    });
+  } catch { return null; }
 }
 // 감시AI 호출 기록 한 건의 원본(관계표 parents·경로표 routes 포함). 일반 조회는 이 큰 필드를 뺀다.
 // requestId 글자 포함(instr)으로 먼저 걸러 해당 줄만 해석한다. 저장소가 없으면 null.

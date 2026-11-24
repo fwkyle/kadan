@@ -12,7 +12,7 @@ import {buildCardCenter} from '../src/card-center.mjs';
 import {briefInput} from '../src/human-brief.mjs';
 import {UNCONFIRMED_GRACE_MS} from '../src/explain-events.mjs';
 import {taskIdentity, taskConnectionError} from '../src/task-identity.mjs';
-import {appendLedger, readSystemLedger, readSessionLifecycleLedger} from '../src/ledger.mjs';
+import {appendLedger, readSystemLedger, readSessionLatestLifecycle} from '../src/ledger.mjs';
 import {createDatabase, writeStorageMarker, appendRow, transaction} from '../src/storage.mjs';
 import {attachHiddenSecretary, openSecretaryTab} from '../src/secretary-tab.mjs';
 import {idleWorkEntries, endedExecutionKeys, assessSupervisorIdle} from '../src/watch-supervisor.mjs';
@@ -288,102 +288,134 @@ function seedNoise(home, count = 600) {
   }
 }
 
-test('결함 2: readSessionLifecycleLedger·attachHiddenSecretary는 타 사건 600건 이상을 파싱하지 않고 readSystemLedger와 동일한 판정을 낸다', () => {
-  const SETTING = {version: 1, window: 'rottie', rottieBin: '/fixture/rottie'};
-  const sec = 'kadan-비서';
+const SETTING = {version: 1, window: 'rottie', rottieBin: '/fixture/rottie'};
+const SEC = 'kadan-비서';
+const lifecycleOf = (rows, session) =>
+  rows.filter(e => ['start', 'stop', 'window'].includes(e.kind) && e.session === session);
+const fromLastStart = rows => rows.slice(rows.findLastIndex(e => e.kind === 'start'));
+
+test('결함 2: 역순 빠른 길은 마지막 start 이후의 수명 사건만 읽고, 판정은 전체 읽기 경로와 같다', () => {
   const compare = (home, floorPid, openFn) => {
-    const narrow = attachHiddenSecretary({
-      home, floor: {pid: () => floorPid}, session: sec,
-      record: () => {}, readSetting: () => SETTING, open: openFn,
+    const fast = attachHiddenSecretary({
+      home, floor: {pid: () => floorPid}, session: SEC, record: () => {}, readSetting: () => SETTING, open: openFn,
     });
     const full = attachHiddenSecretary({
-      home, floor: {pid: () => floorPid}, session: sec,
-      readEntries: () => readSystemLedger(home),
+      home, floor: {pid: () => floorPid}, session: SEC, readEntries: () => readSystemLedger(home),
       record: () => {}, readSetting: () => SETTING, open: openFn,
     });
-    assert.deepEqual(narrow, full);
-    return narrow;
+    assert.deepEqual(fast, full);
+    return fast;
   };
   const openOk = () => ({window: 'rottie', rottieTerminalId: 'new-tab', restoredFrom: 'old-tab', oldState: 'exited'});
 
-  // (a) 숨김 시작(탭 없음) -> opened
+  // (a) 옛 원장에 start, 시스템 영역에 숨김 start: 마지막 start 이후만 돌려주고 타 사건 600건을 해석하지 않는다.
   const h1 = sqliteHome('sec-opened-');
   legacyInsert(h1, [
-    {t: '2026-01-01T00:00:00.000Z', kind: 'start', role: '비서', session: sec, panePid: '10', window: 'rottie', rottieTerminalId: 'leg-1'},
-    {kind: 'stop', role: '비서', session: sec, t: 'short'}, // 비표준 키 순서
+    {t: '2026-01-01T00:00:00.000Z', kind: 'start', role: '비서',
+      session: SEC, panePid: '10', window: 'rottie', rottieTerminalId: 'leg-1'},
+    {kind: 'stop', role: '비서', session: SEC, t: 'short'}, // 비표준 키 순서
     {t: '2026-01-01T00:00:02.000Z', kind: 'start', role: 'other', session: 'kadan-other', panePid: '11'},
   ]);
   seedNoise(h1, 600);
-  appendLedger({kind: 'start', role: '비서', session: sec, panePid: '30', window: 'hidden', cwd: '/tmp'}, h1);
-  // 원장 비교 및 JSON.parse 건수 비교(전수 파싱 금지 검증)
-  const expected = readSystemLedger(h1).filter(e => ['start', 'stop', 'window'].includes(e.kind) && e.session === sec);
-  let narrowParses = 0, fullParses = 0;
+  appendLedger({kind: 'start', role: '비서', session: SEC, panePid: '30', window: 'hidden', cwd: '/tmp'}, h1);
+  const expected = fromLastStart(lifecycleOf(readSystemLedger(h1), SEC));
+  let fastParses = 0;
   const origParse = JSON.parse;
-  JSON.parse = (...args) => { narrowParses++; return origParse(...args); };
-  let narrowRows;
-  try { narrowRows = readSessionLifecycleLedger(h1, sec); } finally { JSON.parse = origParse; }
-  JSON.parse = (...args) => { fullParses++; return origParse(...args); };
-  try { readSystemLedger(h1); } finally { JSON.parse = origParse; }
-  assert.deepEqual(narrowRows, expected);
-  assert.equal(narrowRows.length, 3);
-  assert.ok(narrowParses <= 5, `좁은 읽기는 대상 수명 행만 파싱해야 함(실제 ${narrowParses}건)`);
-  assert.ok(fullParses >= 600, `전체 읽기는 600건 이상 파싱(실제 ${fullParses}건)`);
+  JSON.parse = (...args) => { fastParses++; return origParse(...args); };
+  let tail;
+  try { tail = readSessionLatestLifecycle(h1, SEC); } finally { JSON.parse = origParse; }
+  assert.deepEqual(tail, expected);
+  assert.equal(tail.length, 1);
+  assert.ok(fastParses <= 3, `빠른 길은 마지막 start 한 행만 해석해야 함(실제 ${fastParses}건)`);
   assert.equal(compare(h1, '30', () => ({window: 'rottie', rottieTerminalId: 'T1'})).attached, true);
 
-  // (b) window 기록 후 -> has-tab
-  appendLedger({kind: 'window', role: '비서', session: sec, panePid: '30', rottieTerminalId: 'T1', by: 'autostart'}, h1);
+  // (b) 마지막 start가 옛 원장에만 있으면 옛 원장 행과 그 뒤 시스템 행을 시간순으로 합친다.
+  const hLegacy = sqliteHome('sec-legacy-start-');
+  legacyInsert(hLegacy, [{t: NOW_ISO, kind: 'start', role: '비서', session: SEC, panePid: '10', window: 'hidden'}]);
+  appendLedger({kind: 'window', role: '비서', session: SEC,
+    panePid: '10', rottieTerminalId: 'T0', by: 'autostart'}, hLegacy);
+  assert.deepEqual(readSessionLatestLifecycle(hLegacy, SEC),
+    fromLastStart(lifecycleOf(readSystemLedger(hLegacy), SEC)));
+
+  // (c) window 기록이 있으면 has-tab
+  appendLedger({kind: 'window', role: '비서', session: SEC, panePid: '30', rottieTerminalId: 'T1', by: 'autostart'}, h1);
   assert.equal(compare(h1, '30', () => { throw new Error('열면 안 됨'); }).reason, 'has-tab');
 
-  // (c) inheritsOnlyOldTab -> 교체 열기(opened) 후 다음 주기 has-tab
+  // (d) 옛 탭만 이어받은 세대는 교체 열기, 그 뒤 stop·PID 불일치는 generation-unclear
   const h2 = sqliteHome('sec-inherit-');
   seedNoise(h2, 550);
-  appendLedger({kind: 'start', role: '비서', session: sec, panePid: '40', window: 'hidden', rottieTerminalId: 'old-tab', cwd: '/tmp'}, h2);
+  appendLedger({kind: 'start', role: '비서', session: SEC,
+    panePid: '40', window: 'hidden', rottieTerminalId: 'old-tab', cwd: '/tmp'}, h2);
   const swapped = compare(h2, '40', openOk);
   assert.deepEqual([swapped.attached, swapped.rottieTerminalId, swapped.restoredFrom], [true, 'new-tab', 'old-tab']);
-
-  // (d) stop 후 및 PID 불일치 -> generation-unclear
   assert.equal(compare(h2, '99', openOk).reason, 'generation-unclear');
-  appendLedger({kind: 'stop', role: '비서', session: sec}, h2);
+  appendLedger({kind: 'stop', role: '비서', session: SEC}, h2);
   assert.equal(compare(h2, '40', openOk).reason, 'generation-unclear');
 });
 
-test('결함 2: readSessionLifecycleLedger는 storageMode none, 주입 readEntries, broken 손상 감지를 기존 계약대로 지킨다', () => {
+test('결함 2: 빠른 길이 판단하지 못하면 null이고, readEntries만 주입한 호출은 빠른 길 없이 그대로 동작한다', () => {
   const noneHome = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'sec-none-'));
-  assert.deepEqual(readSessionLifecycleLedger(noneHome, 'kadan-비서'), []);
+  assert.equal(readSessionLatestLifecycle(noneHome, SEC), null); // 저장소 없음
+  assert.equal(readSessionLatestLifecycle(sqliteHome('sec-empty-'), SEC), null); // start 없음
 
-  // 주입 readEntries는 SQLite 경로를 우회해 그대로 동작
   let injectedCalled = 0;
   const injected = attachHiddenSecretary({
-    home: noneHome, floor: {pid: () => '30'}, session: 'kadan-비서',
-    readSetting: () => ({version: 1, window: 'rottie', rottieBin: '/fixture/rottie'}),
-    readEntries: () => { injectedCalled++; return [{kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30', window: 'rottie', rottieTerminalId: 'T'}]; },
+    home: noneHome, floor: {pid: () => '30'}, session: SEC, readSetting: () => SETTING,
+    readEntries: () => {
+      injectedCalled++;
+      return [{kind: 'start', role: '비서', session: SEC, panePid: '30', window: 'rottie', rottieTerminalId: 'T'}];
+    },
     record: () => {},
   });
   assert.equal(injectedCalled, 1);
   assert.equal(injected.reason, 'has-tab');
 
-  // legacy 손상 감지
-  const brokenLegacy = sqliteHome('sec-broken-leg-');
-  legacyInsert(brokenLegacy, [{t: null, broken: 'broken'}]);
-  assert.throws(() => readSystemLedger(brokenLegacy), /과거 원장 손상/);
-  assert.throws(() => readSessionLifecycleLedger(brokenLegacy, 'kadan-비서'), /과거 원장 손상/);
+  // 대상 세션 수명 행이 broken이면 빠른 길은 null(전체 읽기로 넘김)
+  const brokenHome = sqliteHome('sec-broken-');
+  appendLedger({kind: 'start', role: '비서', session: SEC,
+    panePid: '30', window: 'rottie', rottieTerminalId: 'T'}, brokenHome);
+  transaction(brokenHome, db => appendRow(db, 'system/events.jsonl', {
+    t: NOW_ISO, kind: 'window', session: SEC, rottieTerminalId: 'T2', broken: true, _ledgerOrder: 2,
+  }));
+  assert.equal(readSessionLatestLifecycle(brokenHome, SEC), null);
+  assert.throws(() => readSystemLedger(brokenHome), /종류 손상/);
+});
 
-  // system 스트림 broken 손상 감지(타 세션·타 종류 행이어도 감지)
-  const brokenSys = sqliteHome('sec-broken-sys-');
-  appendLedger({kind: 'start', role: '비서', session: 'kadan-비서', panePid: '30'}, brokenSys);
-  transaction(brokenSys, db => {
-    appendRow(db, 'system/events.jsonl', {t: '2026-11-24T00:00:00.000Z', kind: 'alert', broken: true, _ledgerOrder: 2});
+test('결함 2: 정상 has-tab은 타 사건이 1,000건 넘어도 readSystemLedger(전체 읽기)를 호출하지 않는다', () => {
+  const home = sqliteHome('sec-fast-');
+  seedNoise(home, 1100);
+  appendLedger({kind: 'start', role: '비서', session: SEC, panePid: '30', window: 'hidden', cwd: '/tmp'}, home);
+  appendLedger({kind: 'window', role: '비서', session: SEC,
+    panePid: '30', rottieTerminalId: 'T1', by: 'autostart'}, home);
+  appendLedger({kind: 'alert', session: 'kadan-other', note: 'after'}, home);
+  let fullReads = 0, opens = 0, records = 0;
+  const attach = extra => attachHiddenSecretary({
+    home, floor: {pid: () => '30'}, session: SEC, readSetting: () => SETTING,
+    readFastEntries: () => readSessionLatestLifecycle(home, SEC),
+    readEntries: () => { fullReads++; return readSystemLedger(home); },
+    open: () => { opens++; return {window: 'rottie', rottieTerminalId: 'x'}; }, record: () => { records++; }, ...extra,
   });
-  assert.throws(() => readSystemLedger(brokenSys), /도메인 원장 종류 손상/);
-  assert.throws(() => readSessionLifecycleLedger(brokenSys, 'kadan-비서'), /도메인 원장 종류 손상/);
-  assert.equal(typeof openSecretaryTab, 'function');
+  let parses = 0;
+  const origParse = JSON.parse;
+  JSON.parse = (...args) => { parses++; return origParse(...args); };
+  let result;
+  try { result = attach(); } finally { JSON.parse = origParse; }
+  assert.deepEqual(result, {attached: false, reason: 'has-tab'});
+  assert.deepEqual([fullReads, opens, records], [0, 0, 0]);
+  assert.ok(parses <= 5, `빠른 길은 이 세대 수명 행만 해석해야 함(실제 ${parses}건)`);
+
+  // stop이 끼면 빠른 길을 쓰지 않고 전체 읽기로 기존과 같은 판정을 낸다.
+  appendLedger({kind: 'stop', role: '비서', session: SEC}, home);
+  assert.equal(attach().reason, 'has-tab'); // 전체 읽기도 has-tab(기존 판정 그대로)
+  assert.equal(fullReads, 1);
 });
 
 const LIFECYCLE_SESSION = 'kadan-fixture-secretary';
 const NOW_ISO = '2026-11-24T00:00:00.000Z';
 function lifecycleHome(tamper) {
   const home = sqliteHome('sec-integrity-');
-  appendLedger({kind: 'start', role: 'fixture-secretary', session: LIFECYCLE_SESSION, panePid: '70', window: 'hidden'}, home);
+  appendLedger({kind: 'start', role: 'fixture-secretary',
+    session: LIFECYCLE_SESSION, panePid: '70', window: 'hidden'}, home);
   if (tamper) transaction(home, db => tamper(row => appendRow(db, 'system/events.jsonl', row), row => appendRow(db, 'ledger.jsonl', row), db));
   return home;
 }
@@ -398,50 +430,58 @@ function attachLifecycle(home, readEntries) {
   return {attached: result.attached, reason: result.reason ?? null, opens, records};
 }
 
-test('결함 2 보강: 대상 외 원장 행의 손상 4가지를 좁은 읽기도 오류로 막아 탭 열기·기록을 하지 않는다', () => {
+test('결함 2: 탭을 열어야 하는 세대는 전체 읽기를 거쳐 손상(4종 + 완료 우편 의미 손상)이면 탭 열기·기록을 막는다', () => {
   const corrupt = {
-    '대상 외 행 순번 중복': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 1, session: 'kadan-other'}), /순서 손상/],
-    '시스템 영역의 잘못된 사건 종류': [put => put({t: NOW_ISO, kind: 'done', _ledgerOrder: 2, role: 'other', taskId: 'a'}), /종류 손상/],
-    '시스템 행 kind 누락': [put => put({t: NOW_ISO, _ledgerOrder: 2}), /종류 손상/],
-    '옛 원장 행 kind 누락': [(put, legacy) => legacy({t: NOW_ISO}), /과거 원장 손상/],
-    '대상 외 행 broken': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 2, broken: true}), /종류 손상/],
-    '순번 빈틈': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 5, session: 'kadan-other'}), /순번 누락/],
-    '순번 형식(문자열)': [put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: '2'}), /순번 손상/],
-    '짝 없는 완료 우편': [(put, legacy, db) => appendRow(db, 'mail/events.jsonl', {
+    '대상 외 행 순번 중복': put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 1, session: 'kadan-other'}),
+    '시스템 영역의 잘못된 사건 종류': put => put({t: NOW_ISO, kind: 'done', _ledgerOrder: 2, role: 'other', taskId: 'a'}),
+    '시스템 행 kind 누락': put => put({t: NOW_ISO, _ledgerOrder: 2}),
+    '옛 원장 행 kind 누락': (put, legacy) => legacy({t: NOW_ISO}),
+    '대상 외 행 broken': put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 2, broken: true}),
+    '순번 빈틈': put => put({t: NOW_ISO, kind: 'alert', _ledgerOrder: 5, session: 'kadan-other'}),
+    '짝 없는 완료 우편': (put, legacy, db) => appendRow(db, 'mail/events.jsonl', {
       t: NOW_ISO, kind: 'send', mailId: 'orphan-completion', role: 'a', systemGenerated: 'task-completion', _ledgerOrder: 2,
-    }), /완료 사건 없는 우편/],
+    }),
   };
-  for (const [name, [tamper, message]] of Object.entries(corrupt)) {
+  for (const [name, tamper] of Object.entries(corrupt)) {
     const home = lifecycleHome(tamper);
     assert.throws(() => readSystemLedger(home), undefined, `${name}: 전체 읽기는 오류여야 한다`);
-    assert.throws(() => readSessionLifecycleLedger(home, LIFECYCLE_SESSION), message, name);
-    const full = attachLifecycle(home, () => readSystemLedger(home));
-    const narrow = attachLifecycle(home);
-    assert.deepEqual(narrow, full, name);
-    assert.deepEqual([narrow.opens, narrow.records], [0, 0], `${name}: 탭을 열거나 기록하면 안 된다`);
+    const result = attachLifecycle(home);
+    assert.deepEqual([result.attached, result.opens, result.records], [false, 0, 0], name);
+    assert.match(result.reason, /^error: /, name);
+    assert.deepEqual(result, attachLifecycle(home, () => readSystemLedger(home)), name);
   }
+
+  // 완료 우편 의미 손상: 같은 mailId의 옛 원장 send가 요청을 바꿔치기해 완료 우편이 가리키는 요청이 달라진다.
+  const semantic = sqliteHome('sec-semantic-');
+  legacyInsert(semantic, [{t: NOW_ISO, kind: 'send', role: 'w0', by: 'lead', taskId: 'old', mailId: 'legacy-1'}]);
+  appendLedger({kind: 'start', role: '비서', session: SEC, panePid: '70', window: 'hidden'}, semantic);
+  appendLedger({kind: 'done', role: 'w0', taskId: 'old', result: 'ok'}, semantic);
+  assert.doesNotThrow(() => readSystemLedger(semantic));
+  legacyInsert(semantic, [{t: NOW_ISO, kind: 'send', mailId: 'legacy-1', by: 'q'}]);
+  assert.throws(() => readSystemLedger(semantic), /완료 우편 연결 손상/);
+  let opens = 0, records = 0;
+  const blocked = attachHiddenSecretary({
+    home: semantic, session: SEC, floor: {pid: () => '70'}, readSetting: () => SETTING,
+    open: () => { opens++; return {window: 'rottie', rottieTerminalId: 'x'}; }, record: () => { records++; },
+  });
+  assert.match(blocked.reason, /^error: .*완료 우편 연결 손상/);
+  assert.deepEqual([blocked.attached, opens, records], [false, 0, 0]);
 });
 
-test('결함 2 보강: 손상이 아닌 원장은 좁은 읽기가 전체 읽기와 같은 판정으로 통과하고 정상 비서 탭을 연다', () => {
+test('결함 2: 손상이 없는 원장은 전체 읽기 경로로 정상 비서 탭을 한 번 열고 기록한다', () => {
   const clean = lifecycleHome();
   const opened = attachLifecycle(clean);
   assert.deepEqual(opened, attachLifecycle(clean, () => readSystemLedger(clean)));
   assert.deepEqual([opened.attached, opened.opens, opened.records], [true, 1, 1]);
-
   const ok = {
     '키 순서가 다른 유효 JSON': put => put({session: LIFECYCLE_SESSION, kind: 'window', t: NOW_ISO, _ledgerOrder: 2,
       panePid: '70', rottieTerminalId: 'fixture-tab'}),
     '옛 원장 broken:false·빈 kind': (put, legacy) => { legacy({t: NOW_ISO, kind: '', broken: false}); legacy({t: NOW_ISO, kind: 'x'}); },
-    '대상 행 순서가 앞뒤로 섞인 다른 세션 사건': put => put({t: NOW_ISO, kind: 'start', _ledgerOrder: 2, session: 'kadan-other'}),
   };
   for (const [name, tamper] of Object.entries(ok)) {
     const home = lifecycleHome(tamper);
-    assert.deepEqual(readSessionLifecycleLedger(home, LIFECYCLE_SESSION),
-      readSystemLedger(home).filter(e => ['start', 'stop', 'window'].includes(e.kind) && e.session === LIFECYCLE_SESSION), name);
     assert.deepEqual(attachLifecycle(home), attachLifecycle(home, () => readSystemLedger(home)), name);
   }
-  const empty = fs.mkdtempSync(path.join(process.env.KADAN_HOME, 'sec-integrity-none-'));
-  assert.deepEqual(readSessionLifecycleLedger(empty, LIFECYCLE_SESSION), []);
 });
 
 test('결함 6a 보강: 인계받은 역할이 살아 있고 다른 카드에 담당으로 없으면 orphaned로 보지 않아 감독 할 일로 돌리지 않는다', () => {
