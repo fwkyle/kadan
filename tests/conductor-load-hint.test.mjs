@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {conductorLoadHint, formatLoadHint, printConductorLoadHint, RECENT_MAIL_FACTOR} from '../src/conductor-load-hint.mjs';
+import {conductorLoadHint, formatLoadHint, printConductorLoadHint} from '../src/conductor-load-hint.mjs';
 import {readConductorOpenWorks, setConductorOpenWorks, readResourceConfig, DEFAULT_CONFIG} from '../src/heavy-limit.mjs';
 import {guardedReason} from '../src/autopilot-guard.mjs';
 
@@ -152,16 +152,16 @@ test('시간 창 12시간 경계: 정확히 12시간 전 우편은 세고(>=), 1
   assert.match(call([11 * HOUR]), /최근 12시간 슈퍼감독이 맡긴 새 우편 2통/);
 });
 
-test('과거 --raw 전송은 새 우편 수에 세지 않는다: raw 5통 뒤 일반 우편 1통이면 1통이고 기준 문장이 없다', () => {
+test('과거 --raw 전송은 새 우편 수에 세지 않는다: raw 5통 뒤 일반 우편 1통이면 1통이다', () => {
   const raws = Array.from({length: 5}, (_, i) => [['lh-감독', `원문 ${i + 1}`], {raw: true}]);
   const r = mail(base(['open', 'open'], {before: raws}));
   assert.equal(r.status, 0, r.stderr.join('\n'));
   assert.equal(r.stderr.filter(line => HINT.test(line)).length, 1, r.stderr.join('\n'));
   assert.match(r.stderr.at(-1), /진행 중 업무 2건.*새 우편 1통\(이번 포함\)$/);
-  // 대조: 같은 자리에 일반 우편 5통이면 6통째에 문장이 붙는다(실제 전송 기록으로 센다).
+  // 대조: 같은 자리에 일반 우편 5통이면 6통째로 센다(실제 전송 기록으로 센다). 수만 늘고 기준 문장은 없다.
   const plain = Array.from({length: 5}, (_, i) => [['lh-감독', `맥락 ${i + 1}`], {}]);
   const piled = mail(base(['open', 'open'], {before: plain}));
-  assert.match(piled.stderr.at(-1), /새 우편 6통\(이번 포함\) — 기준 도달\(최근 새 우편 6통 ≥ 기준의 2배 6통\)/);
+  assert.match(piled.stderr.at(-1), /새 우편 6통\(이번 포함\)$/);
   // 섞여도 일반 우편만 센다. 질문(--expect-reply)은 센다.
   const mixed = mail(base(['open', 'open'], {before: [...raws.slice(0, 3), ...plain.slice(0, 2), [['lh-감독', '질문?'], {'expect-reply': true}]]}));
   assert.match(mixed.stderr.at(-1), /새 우편 4통\(이번 포함\)$/);
@@ -222,35 +222,33 @@ test('안내 출력 함수는 던지지 않는다', () => {
   assert.deepEqual(lines, []);
 });
 
-test('기준 문장의 두 조건: 진행 중 업무 수 ≥ 기준 또는 최근 새 우편 수 ≥ 기준의 2배, 어느 쪽인지 문장에 적힌다', () => {
+test('기준 문장은 진행 중 업무 수 ≥ 기준 개수 하나로만 붙는다: 새 우편 수는 표시일 뿐이다', () => {
   const line = (open, recentMails, threshold = 3) => formatLoadHint({recipient: 'x-감독', hold: 0, recentMails, threshold,
     open: Array.from({length: open}, (_, i) => `r/w${i + 1}`)});
-  // 진행 중 2·새 우편 12: 우편 수로 붙는다.
-  assert.match(line(2, 12), /기준 도달\(최근 새 우편 12통 ≥ 기준의 2배 6통\): 고칠 파일이/);
-  assert.doesNotMatch(line(2, 12), /진행 중 업무 2건 ≥/);
-  // 진행 중 2·새 우편 5: 없다. 6통부터 붙는다.
-  assert.doesNotMatch(line(2, 5), RULE);
-  assert.match(line(2, 6), RULE);
-  // 진행 중 3·새 우편 1: 업무 수로 붙는다.
-  assert.match(line(3, 1), /기준 도달\(진행 중 업무 3건 ≥ 기준 3개\): 고칠 파일이/);
-  // 둘 다면 둘 다 적힌다.
-  assert.match(line(4, 9), /기준 도달\(진행 중 업무 4건 ≥ 기준 3개, 최근 새 우편 9통 ≥ 기준의 2배 6통\)/);
-  // 기준 0이면 두 조건 모두 문장이 없고 수는 남는다.
+  // 진행 중 2·새 우편 12: 우편이 많아도 문장이 없다. 수는 남는다.
+  assert.doesNotMatch(line(2, 12), RULE);
+  assert.match(line(2, 12), /진행 중 업무 2건.*새 우편 12통/);
+  // 진행 중 3: 문장이 붙고 업무 수 이유만 적힌다.
+  assert.match(line(3, 0), /기준 도달\(진행 중 업무 3건 ≥ 기준 3개\): 고칠 파일이/);
+  assert.match(line(3, 99), /기준 도달\(진행 중 업무 3건 ≥ 기준 3개\): 고칠 파일이/);
+  assert.doesNotMatch(line(3, 99), /최근 새 우편 \d+통 ≥/);
+  // 기준 5면 업무 5건부터, 우편 수는 무관.
+  assert.doesNotMatch(line(4, 99, 5), RULE);
+  assert.match(line(5, 0, 5), RULE);
+  // 기준 0이면 문장이 없고 수는 남는다.
   assert.doesNotMatch(line(9, 99, 0), RULE);
   assert.match(line(9, 99, 0), /진행 중 업무 9건.*새 우편 99통/);
-  // 기준 5면 우편 10통부터.
-  assert.doesNotMatch(line(1, 9, 5), RULE);
-  assert.match(line(1, 10, 5), /최근 새 우편 10통 ≥ 기준의 2배 10통/);
-  assert.equal(RECENT_MAIL_FACTOR, 2);
 });
 
-test('실제 전송: 진행 중 업무가 기준 미만이어도 최근 12시간에 맡긴 새 우편이 기준의 2배면 문장이 붙는다', () => {
+test('실제 전송: 업무 2건·새 우편 10통이면 기준 문장이 없고, 업무 3건이면 붙는다', () => {
   const mails = n => Array.from({length: n}, (_, i) => ['lh-감독', 'lh-슈퍼', i + 1]);
-  const piled = mail(base(['open', 'open', 'hold'], {mails: mails(5)}));
-  assert.match(piled.stderr.at(-1), /진행 중 업무 2건.*새 우편 6통\(이번 포함\) — 기준 도달\(최근 새 우편 6통 ≥ 기준의 2배 6통\)/);
-  const under = mail(base(['open', 'open', 'hold'], {mails: mails(4)}));
-  assert.match(under.stderr.at(-1), /새 우편 5통\(이번 포함\)$/);
-  const off = mail(base(['open', 'open'], {mails: mails(8), limitsFile: '{"conductorOpenWorks":0}'}));
+  const piled = mail(base(['open', 'open', 'hold'], {mails: mails(9)}));
+  assert.match(piled.stderr.at(-1), /진행 중 업무 2건.*새 우편 10통\(이번 포함\)$/);
+  assert.doesNotMatch(piled.stderr.at(-1), RULE);
+  const three = mail(base(['open', 'open', 'open']));
+  assert.match(three.stderr.at(-1), /진행 중 업무 3건.*새 우편 1통\(이번 포함\) — 기준 도달\(진행 중 업무 3건 ≥ 기준 3개\)/);
+  assert.match(three.stderr.at(-1), RULE);
+  const off = mail(base(['open', 'open', 'open'], {mails: mails(8), limitsFile: '{"conductorOpenWorks":0}'}));
   assert.doesNotMatch(off.stderr.at(-1), RULE);
   assert.match(off.stderr.at(-1), /새 우편 9통/);
 });
