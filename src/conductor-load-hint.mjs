@@ -12,8 +12,6 @@ import {readConductorOpenWorks} from './heavy-limit.mjs';
 
 const RECENT_MAIL_WINDOW_MS = 12 * 60 * 60 * 1000;
 const NAMES_SHOWN = 3;
-// 업무는 우편을 받은 감독이 나중에 만들어 진행 중 업무 수가 늦게 잡힌다. 그래서 최근 맡긴 우편 수로도 기준을 본다(기준 개수의 몇 배부터인가).
-export const RECENT_MAIL_FACTOR = 2;
 
 // 새 맥락 우편: 발령(taskId)·답장·--raw·감시 알림·자동 생성 우편이 아닌 것. 이번 우편을 거르는 조건(send.mjs의 newContext)과 같아야 한다.
 // --raw 전송은 전송 기록에 남는 지침 미적용 사유(explicit-raw)와 창 전달 읽음(deliveredRead, raw 전용)으로 가린다. 원장은 고치지 않는다.
@@ -29,8 +27,9 @@ function recipientProfile({home, entries, recipient, profiles, receiptProfile}) 
   return inferDispatchProfile({home, role: recipient, entries}).profile;
 }
 
-// 한 줄 문장(순수 함수). 기준 문장은 진행 중 업무 수 ≥ 기준 개수 또는 최근 새 우편 수 ≥ 기준 개수 × RECENT_MAIL_FACTOR일 때 붙고,
-// 어느 조건으로 붙었는지 괄호에 적는다. threshold가 0이면 두 조건 모두 문장을 뺀다(수 표시는 유지).
+// 한 줄 문장(순수 함수). 기준 문장은 진행 중 업무 수 ≥ 기준 개수일 때만 붙는다. 새 우편 수는 표시일 뿐 기준에 쓰지 않는다
+// (같은 업무의 정정·보충·머지 회신까지 세어 감독이 바쁜 정도가 아니라 슈퍼감독의 우편 빈도를 재기 때문).
+// threshold가 0이면 문장을 뺀다(수 표시는 유지).
 export function formatLoadHint({recipient, open, hold, recentMails, threshold}) {
   const names = open.slice(0, NAMES_SHOWN).join(', ') + (open.length > NAMES_SHOWN ? ` 외 ${open.length - NAMES_SHOWN}건` : '');
   const parts = [
@@ -38,13 +37,9 @@ export function formatLoadHint({recipient, open, hold, recentMails, threshold}) 
     `보류 ${hold}건`,
     `최근 12시간 슈퍼감독이 맡긴 새 우편 ${recentMails}통(이번 포함)`,
   ];
-  const mailLimit = threshold * RECENT_MAIL_FACTOR;
-  const reasons = threshold > 0 ? [
-    open.length >= threshold ? `진행 중 업무 ${open.length}건 ≥ 기준 ${threshold}개` : null,
-    recentMails >= mailLimit ? `최근 새 우편 ${recentMails}통 ≥ 기준의 ${RECENT_MAIL_FACTOR}배 ${mailLimit}통` : null,
-  ].filter(Boolean) : [];
-  const rule = reasons.length
-    ? ` — 기준 도달(${reasons.join(', ')}): 고칠 파일이 겹치지 않으면 새 감독을 띄워 맡긴다(kyle 승인 불필요)`
+  const rule = threshold > 0 && open.length >= threshold
+    ? ` — 기준 도달(진행 중 업무 ${open.length}건 ≥ 기준 ${threshold}개):`
+      + ' 고칠 파일이 겹치지 않으면 새 감독을 띄워 맡긴다(kyle 승인 불필요)'
     : '';
   return parts.join(' · ') + rule;
 }
