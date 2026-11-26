@@ -36,7 +36,18 @@ const shownValue = ({ runner, model, effort }) => [runner, model, effort ?? "강
 const PHASE_CARD = { reviewer: "검수 카드(review)", worker: "작업 카드(구현·수정 등)" };
 const PROFILE_SESSION = { reviewer: "검수자(reviewer)", worker: "작업자(worker)" };
 
-export function inspectDispatchRunnerGuard({ home, role, session, profile, phaseProfile, identity, allowOldRunner, readSettingsFn = readSettings } = {}) {
+// 발령 검사와 난이도 어긋남 경고가 같은 프리셋 우선순위를 본다:
+// (1) 업무 지정 프리셋(work) → (2) 비교 모드 세션(compare) → (3) 업무 밖 단독 카드 + 지정 프리셋 세션(session) → (4) 활성 프리셋(null).
+export function resolveGuardPreset({ settings, identity, workPreset = null, hasWork = false } = {}) {
+  if (workPreset) return { preset: workPreset, pinnedKind: "work" };
+  if (identity?.launch?.compareMode) return { preset: identity.launch.settingsPreset, pinnedKind: "compare" };
+  if (!hasWork && identity?.launch?.presetSource && identity?.launch?.settingsPreset) {
+    return { preset: identity.launch.settingsPreset, pinnedKind: "session" };
+  }
+  return { preset: settings?.activePreset ?? null, pinnedKind: null };
+}
+
+export function inspectDispatchRunnerGuard({ home, role, session, profile, phaseProfile, identity, allowOldRunner, workPreset = null, hasWork = false, readSettingsFn = readSettings } = {}) {
   const exception = typeof allowOldRunner === "string" && allowOldRunner.trim() ? allowOldRunner.trim() : null;
   if (allowOldRunner !== undefined && !exception) {
     return { result: "reject", code: "blank-exception-reason", message: [
@@ -55,19 +66,26 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   const target = mismatch ? phaseProfile : profile;
   // 어려운 일 세션(시작 기록 difficulty: hard)은 어려운 일 자리와 그 대체 후보 목록하고만 대조한다. 자리가 비면 작업자 값이다.
   const hardSession = identity.launch?.difficulty === "hard" && profile === "worker" && target === "worker";
-  const command = `kadan stop ${role} 뒤 kadan start ${role} --profile ${target}${hardSession ? " --difficulty hard" : ""}로 새로 띄워 보내라`;
-  let expected, settings, slotName = `${profile} 기본값`;
+  const { preset: resolvedPreset, pinnedKind } = resolveGuardPreset({ settings: null, identity, workPreset, hasWork });
+  const pinnedPreset = pinnedKind === "work" || pinnedKind === "session";
+  const command = `kadan stop ${role} 뒤 kadan start ${role} --profile ${target}${hardSession ? " --difficulty hard" : ""}${pinnedPreset && resolvedPreset ? ` --preset ${resolvedPreset}` : ""}로 새로 띄워 보내라`;
+  let expected, settings, expectedPreset = null, slotName = `${profile} 기본값`;
   try {
     settings = readSettingsFn(home);
     if (!settings) {
-      if (identity.launch?.compareMode) throw new Error('비교 세션의 설정 파일 없음');
+      if (pinnedKind === "compare") throw new Error("비교 세션의 설정 파일 없음");
+      if (pinnedKind === "work") throw new Error(`업무 지정 프리셋 ${resolvedPreset}의 설정 파일 없음`);
+      if (pinnedKind === "session") throw new Error(`지정 프리셋 ${resolvedPreset}의 설정 파일 없음`);
       return { result: "skip", reason: "no-settings" };
     }
-    const preset = identity.launch?.compareMode ? identity.launch.settingsPreset : settings.activePreset;
-    expected = hardSession ? launchForHard(settings, preset) : null;
+    expectedPreset = pinnedKind ? resolvedPreset : settings.activePreset;
+    expected = hardSession ? launchForHard(settings, expectedPreset) : null;
     if (expected) slotName = "어려운 일 작업자 자리";
-    else expected = launchFor(settings, target, preset);
-    if (identity.launch?.compareMode && !expected) throw new Error(`비교 프리셋 ${preset}의 역할 값 없음`);
+    else expected = launchFor(settings, target, expectedPreset);
+    if (pinnedKind && !expected) {
+      if (pinnedKind === "compare") throw new Error(`비교 프리셋 ${expectedPreset}의 역할 값 없음`);
+      throw new Error(`프리셋 ${expectedPreset}의 ${target} 역할 값 없음`);
+    }
   } catch (error) {
     return stop("settings-unreadable", [
       `카드 발령 거절: 실행 모델 설정을 읽을 수 없다 — ${error.message}`,
@@ -75,8 +93,9 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
       `조치: 설정 파일을 고친 뒤 다시 발령하거나, 의도한 예외면 --allow-old-runner "<이유>"`,
     ]);
   }
+  const presetTag = pinnedPreset ? `프리셋 ${expectedPreset} ` : "";
   if (mismatch) {
-    const want = expected ? `지금 기본값 ${shownValue(expected)}` : "기본값 없음";
+    const want = expected ? `지금 ${presetTag}기본값 ${shownValue(expected)}` : "기본값 없음";
     return stop("profile-phase-mismatch", [
       `카드 발령 거절: ${PHASE_CARD[target]}를 ${PROFILE_SESSION[profile]} 프로필 세션에 보낸다 — ${PHASE_CARD[target]}는 ${target} 프로필(${want})이어야 한다`,
       `이 세션(${session}) 값 = ${have}${startInfo} — 세션 프로필 ${profile}`,
@@ -89,14 +108,14 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
   if (!want.ok) {
     return {
       result: "warn", code: "expected-unreadable",
-      warning: `경고: ${slotName} 명령에서 실행기·모델을 읽지 못해 ${session}과(와) 대조하지 못했다(${shownValue(expected)}, 읽지 못한 이유: ${want.reason}) — 명령 원문은 표시하지 않는다`,
+      warning: `경고: ${presetTag}${slotName} 명령에서 실행기·모델을 읽지 못해 ${session}과(와) 대조하지 못했다(${shownValue(expected)}, 읽지 못한 이유: ${want.reason}) — 명령 원문은 표시하지 않는다`,
       ledger: { result: "warn", code: "expected-unreadable", settingsRevision: expected.revision },
     };
   }
   if (!identity.harness || !identity.model || typeof identity.launch?.cmd !== "string") {
     return {
       result: "warn", code: "session-unknown",
-      warning: `경고: ${session}의 시작 기록·실행 모델을 몰라 ${slotName}과 대조하지 못했다`,
+      warning: `경고: ${session}의 시작 기록·실행 모델을 몰라 ${presetTag}${slotName}과 대조하지 못했다`,
       ledger: { result: "warn", code: "session-unknown", settingsRevision: expected.revision },
     };
   }
@@ -105,17 +124,17 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     // 자리가 비어 기대값이 작업자 값이면 예전처럼 폴백 대조를 하지 않는다. 보통 세션은 작업자·검수자 목록만 본다.
     const hardSlot = hardSession && slotName === "어려운 일 작업자 자리";
     const fallback = !identity.launch?.compareMode && (!hardSession || hardSlot)
-      && matchingFallback(settings, hardSlot ? HARD_ROLE : target, identity);
+      && matchingFallback(settings, hardSlot ? HARD_ROLE : target, identity, pinnedPreset ? expectedPreset : null);
     if (fallback) {
       const label = hardSlot ? "어려운 일 작업자 자리 폴백" : `${target} 폴백`;
       return {
         result: "warn", code: "fallback",
-        warning: `경고: ${session}은(는) ${label} ${fallback.fallbackIndex}번(${shownValue(fallback)})으로 떠 있다 — ${hardSlot ? "어려운 일 작업자 자리 값" : "기본값"}(${shownValue(expected)})이 아니다`,
+        warning: `경고: ${session}은(는) ${presetTag}${label} ${fallback.fallbackIndex}번(${shownValue(fallback)})으로 떠 있다 — ${hardSlot ? "어려운 일 작업자 자리 값" : "기본값"}(${shownValue(expected)})이 아니다`,
         ledger: { result: "warn", code: "fallback", fallbackIndex: fallback.fallbackIndex, settingsRevision: expected.revision },
       };
     }
     return stop("runner-or-model", [
-      `카드 발령 거절: 옛 실행기·모델 세션이다 — 지금 ${slotName} = ${shownValue(expected)} (설정 revision ${expected.revision})`,
+      `카드 발령 거절: 옛 실행기·모델 세션이다 — 지금 ${presetTag}${slotName} = ${shownValue(expected)} (설정 revision ${expected.revision})`,
       `이 세션(${session}) 값 = ${have}${startInfo}`,
       `조치: ${command} (의도한 예외면 --allow-old-runner "<이유>")`,
     ], expected.revision);
@@ -128,7 +147,7 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
     ], expected.revision);
     return {
       result: "warn", code: "effort-or-args",
-      warning: `경고: ${session}의 강도·실행 인자가 지금 ${slotName}${slotName.endsWith('자리') ? '와' : '과'} 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 다른 점: ${describeCommandDiff(identity.launch.cmd, expected.cmd)} (명령 원문은 표시하지 않는다)`,
+      warning: `경고: ${session}의 강도·실행 인자가 지금 ${presetTag}${slotName}${slotName.endsWith('자리') ? '와' : '과'} 다르다(기본값 강도 ${expected.effort ?? "없음"}) — 다른 점: ${describeCommandDiff(identity.launch.cmd, expected.cmd)} (명령 원문은 표시하지 않는다)`,
       ledger: { result: "warn", code: "effort-or-args", settingsRevision: expected.revision },
     };
   }
@@ -139,14 +158,14 @@ export function inspectDispatchRunnerGuard({ home, role, session, profile, phase
 // `kadan start --profile <p> --fallback N`으로 정식으로 띄운 세션을 옛 세션으로 거절하지 않게 한다(2026-10-02 [kyle]).
 // 읽지 못하는 폴백 항목은 건너뛴다 — 맞는 항목이 없으면 기존처럼 거절이다.
 // profile에는 작업자·검수자 프로필 또는 HARD_ROLE(어려운 일 작업자 자리의 목록)을 준다.
-function matchingFallback(settings, profile, identity) {
-  // 대체 후보는 1순위 기대값과 같은 활성 프리셋의 목록을 본다. 작업자·어려운 일 폴백은 시작 때 활성 프리셋으로 뜨고,
-  // 꺼진 뒤 남은 settings.compare.presets만으로 세션의 옛 프리셋을 고르면 활성 프리셋을 바꾼 뒤 옛 후보가 통과한다.
-  // 예외 하나: 비교 모드가 지금 켜져 있을 때 `start --for`로 뜬 검수자는 compareMode 표시 없이 그 비교 프리셋이 시작 기록에 남으므로 그 프리셋 목록을 본다.
+function matchingFallback(settings, profile, identity, explicitPreset = null) {
+  // 지정 프리셋(업무·단독 세션)이면 그 프리셋의 폴백 목록을 본다.
+  // 그 밖은 1순위 기대값과 같은 활성 프리셋의 목록을 본다.
+  // 예외 하나: 비교 모드가 지금 켜져 있을 때 `start --for`로 뜬 검수자(지정 프리셋 아님)는 compareMode 표시 없이 그 비교 프리셋이 시작 기록에 남으므로 그 프리셋 목록을 본다.
   const sessionPreset = identity.launch?.settingsPreset;
-  const compareReviewer = profile === "reviewer" && settings.compare?.enabled === true
-    && settings.compare.presets?.includes(sessionPreset);
-  const preset = compareReviewer ? sessionPreset : settings.activePreset;
+  const compareReviewer = !explicitPreset && !identity.launch?.presetSource && profile === "reviewer"
+    && settings.compare?.enabled === true && settings.compare.presets?.includes(sessionPreset);
+  const preset = explicitPreset ?? (compareReviewer ? sessionPreset : settings.activePreset);
   const count = settings.presets[preset]?.fallback?.[profile === HARD_ROLE ? HARD_ROLE : PROFILE_ROLES[profile]]?.length ?? 0;
   for (let index = 1; index <= count; index++) {
     let fallback;

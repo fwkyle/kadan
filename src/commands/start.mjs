@@ -3,6 +3,7 @@ import { startRoleProfile } from "../role-instructions.mjs";
 import { reviewerLaunch } from "../reviewer-launch.mjs";
 import { pickCompareLaunch } from "../runner-compare.mjs";
 import { launchFor, launchForFallback, launchForHard, readSettings, HARD_ROLE, PROFILE_ROLES } from "../runner-settings.mjs";
+import { WorkStore } from "../work-store.mjs";
 import { registerRoleManually, registerStartedRole, reparentStartedRole, isKadanToolCommand } from "../hierarchy-register.mjs";
 import { inspectStartCmdPolicy } from "../ai-identity.mjs";
 import { describeCommand } from "../command-summary.mjs";
@@ -54,7 +55,7 @@ function readAlternateOn(session) {
 
 export function cmdStart(argv, flags) {
   const role = argv[0];
-  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--difficulty normal|hard (hard도 --fallback N 가능: 어려운 일 작업자 자리의 대체 후보)] [--for 작업자역할] [--no-prompt]");
+  if (!role) die("사용법: kadan start <역할> [--hidden] [--cmd <명령> [--reason 이유] | --fallback N --reason 이유] [--profile secretary|super|conductor|worker|reviewer] [--preset 프리셋 | --work 업무키] [--difficulty normal|hard (hard도 --fallback N 가능: 어려운 일 작업자 자리의 대체 후보)] [--for 작업자역할] [--no-prompt]");
   const insideHome = workdirInsideHome(process.cwd(), ledgerHome());
   if (insideHome) die(workdirInsideHomeMessage(insideHome), 2);
   const windowChoice = floor.name === "tmux" ? requireWindowChoice() : null;
@@ -94,6 +95,39 @@ export function cmdStart(argv, flags) {
     if (flags.cmd !== undefined || flags.for !== undefined)
       die("--difficulty hard는 --cmd·--for와 함께 쓸 수 없다", 2);
   }
+  // --preset / --work: 업무별 프리셋 지정. 세션 생성 전에 충돌·빈 값·존재 여부를 거절한다(종료 2).
+  const hasPresetFlag = flags.preset !== undefined;
+  const hasWorkFlag = flags.work !== undefined;
+  if (hasPresetFlag && hasWorkFlag) die("--preset과 --work는 함께 쓸 수 없다", 2);
+  let explicitPreset = null, presetSource = null, presetWorkKey = null;
+  if (hasPresetFlag || hasWorkFlag) {
+    const flagName = hasPresetFlag ? "--preset" : "--work";
+    if (reusing) die(`${flagName}는 역할을 새로 띄울 때만 쓴다 — 살아 있는 세션은 바꾸지 않는다`, 2);
+    if (flags.cmd !== undefined) die(`${flagName}는 --cmd와 함께 쓸 수 없다`, 2);
+    if (!Object.hasOwn(PROFILE_ROLES, roleProfile ?? ""))
+      die(`${flagName}는 --profile worker|reviewer|conductor|super에서만 쓴다`, 2);
+    if (hasPresetFlag) {
+      if (typeof flags.preset !== "string" || !flags.preset.trim()) die("--preset에는 프리셋 이름이 필요하다", 2);
+      explicitPreset = flags.preset.trim();
+      presetSource = "preset";
+    } else {
+      if (typeof flags.work !== "string" || !flags.work.trim()) die("--work에는 업무 주소(저장소/업무ID)가 필요하다", 2);
+      let work;
+      try { work = new WorkStore(ledgerHome()).get(flags.work.trim()); }
+      catch (error) { die(`업무를 찾을 수 없다(${flags.work.trim()}): ${error.message}`, 2); }
+      if (work.preset) {
+        explicitPreset = work.preset;
+        presetSource = "work";
+        presetWorkKey = work.key;
+      }
+    }
+    if (explicitPreset) {
+      let settings;
+      try { settings = readSettings(ledgerHome()); } catch (error) { die(error.message, 2); }
+      if (!settings) die("실행 모델 설정이 없다 — kadan runners init 먼저", 2);
+      if (!Object.hasOwn(settings.presets, explicitPreset)) die(`없는 프리셋: ${explicitPreset}`, 2);
+    }
+  }
   let reviewSelection = null;
   if (flags.for !== undefined) {
     if (typeof flags.for !== "string" || !flags.for.trim()) die("--for에는 작업자 역할이 필요하다", 2);
@@ -105,23 +139,28 @@ export function cmdStart(argv, flags) {
     if (!floor.alive(workerSession)) die(`작업자가 살아 있지 않다: ${flags.for}`, 2);
     try {
       reviewSelection = reviewerLaunch({settings: readSettings(ledgerHome()), entries: readLedger(ledgerHome()),
-        workerRole: flags.for, workerSession, currentPid: floor.pid(workerSession)});
+        workerRole: flags.for, workerSession, currentPid: floor.pid(workerSession), preset: explicitPreset});
     } catch (error) { die(error.message, 2); }
   }
   // 실행 모델 설정이 있으면 --cmd 없이도 역할 기본 명령을 채운다. 다른 명령은 이유를 남긴다(2026-09-23 [kyle] 승인 1단계).
   let launch = null, hardLaunch = null;
   if (!reusing && Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) {
     try {
+      const settings = readSettings(ledgerHome());
+      const targetPreset = explicitPreset ?? settings?.activePreset;
       if (hard) {
-        hardLaunch = launchForHard(readSettings(ledgerHome()));
+        hardLaunch = launchForHard(settings, targetPreset);
         // --fallback과 함께면 자리가 비어 있을 때 보통 작업자로 내려가지 않고 아래 폴백 검사가 거절한다.
         if (!hardLaunch && flags.fallback === undefined) console.error("어려운 일 작업자 자리가 비어 있어 보통 작업자로 띄운다");
       }
-      launch = reviewSelection ?? hardLaunch ?? (roleProfile === 'worker' && flags.cmd === undefined
+      launch = reviewSelection ?? hardLaunch ?? (!explicitPreset && roleProfile === 'worker' && flags.cmd === undefined
         && flags.fallback === undefined ? pickCompareLaunch(ledgerHome(), role)
-          : launchFor(readSettings(ledgerHome()), roleProfile));
+          : launchFor(settings, roleProfile, targetPreset));
     }
     catch (error) { die(error.message, 2); }
+    if (explicitPreset && !launch && flags.fallback === undefined) {
+      die(`프리셋 ${explicitPreset}에 ${roleProfile} 역할 값이 없다`, 2);
+    }
   }
   // 사람이 직접 준 --cmd(adopt·handover 포함)도 대화형 codex면 인라인 화면 플래그를 붙인다. 설정값과의 비교도 같은 꼴로 한다.
   if (typeof flags.cmd === "string" && flags.cmd.trim()) flags.cmd = withStopHook(withInlineScreen(flags.cmd.trim()), ledgerHome(), message => console.error(message));
@@ -138,7 +177,7 @@ export function cmdStart(argv, flags) {
     if (reusing) die(`이미 살아 있음: ${session} — 폴백은 새로 띄울 때만 쓴다`, 2);
     if (!Object.hasOwn(PROFILE_ROLES, roleProfile ?? "")) die("폴백 발령에는 --profile worker|reviewer|conductor|super가 필요하다", 2);
     // 어려운 일 작업자는 그 자리의 대체 후보 목록만 읽는다. 작업자 목록으로 내려가지 않는다.
-    try { fallback = launchForFallback(readSettings(ledgerHome()), hard ? HARD_ROLE : roleProfile, flags.fallback); } catch (error) { die(error.message, 2); }
+    try { fallback = launchForFallback(readSettings(ledgerHome()), hard ? HARD_ROLE : roleProfile, flags.fallback, explicitPreset ?? undefined); } catch (error) { die(error.message, 2); }
     flags.cmd = fallback.cmd;
   }
   const useSettings = !fallback && launch && !(typeof flags.cmd === "string" && flags.cmd.trim());
@@ -159,6 +198,12 @@ export function cmdStart(argv, flags) {
       launchRecord.fallbackReason = reviewSelection.reviewFor.reason;
     }
     console.error(`검수자 선택: ${reviewSelection.model} — ${reviewSelection.reviewFor.reason}`);
+  }
+  const effectivePresetSource = presetSource ?? reviewSelection?.presetSource ?? null;
+  const effectivePresetWorkKey = presetWorkKey ?? (presetSource ? null : reviewSelection?.presetWorkKey ?? null);
+  if (effectivePresetSource && (fallback || useSettings)) {
+    launchRecord.presetSource = effectivePresetSource;
+    if (effectivePresetWorkKey) launchRecord.presetWorkKey = effectivePresetWorkKey;
   }
   if (hard && (fallback || (useSettings && hardLaunch))) launchRecord.difficulty = "hard";
   if (useSettings && launch.compareMode) {

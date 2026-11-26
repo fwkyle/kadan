@@ -185,6 +185,11 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
     ...(window.rottieBundleId ? {rottieBundleId: window.rottieBundleId, rottieConnect: window.rottieConnect, rottieConnectError: window.rottieConnectError} : {}),
     ...(start.roleProfile ? {roleProfile: start.roleProfile} : {}),
     ...(start.difficulty ? {difficulty: start.difficulty} : {}),
+    ...(start.presetSource ? {
+      presetSource: start.presetSource,
+      ...(start.settingsPreset ? {settingsPreset: start.settingsPreset} : {}),
+      ...(start.presetWorkKey ? {presetWorkKey: start.presetWorkKey} : {}),
+    } : {}),
     // 설정에서 값을 가져온 재시작: 설정 칸은 kadan start --profile과 같은 이름으로 남긴다. launchSource는 적지 않는다 —
     // 명령이 설정 틀 그대로가 아니라 옛 명령에서 모델·강도 값만 바꾼 것이기 때문이다.
     ...(swap ? {
@@ -204,7 +209,7 @@ function restartLocked({home, role, session, flags, floor, settings, deps, reaso
       previousModel: model, previousEffort: swap.oldEffort, revision: launch.revision, preset: launch.preset}} : {})};
 }
 
-// --model-from-settings가 쓸 설정값: 마지막 start의 프로필 + 지금 활성 프리셋의 모델·강도. 설정 명령(cmd)은 실행기 확인에만 쓴다.
+// --model-from-settings가 쓸 설정값: 마지막 start의 프로필 + 지정 프리셋(없으면 활성 프리셋)의 모델·강도. 설정 명령(cmd)은 실행기 확인에만 쓴다.
 // 프로필을 추측하지 않고, 대화를 이어 열 수 없는 실행기 교체와 비교 보고서 귀속이 바뀌는 비교 모드 세션은 거절한다.
 function settingsLaunch({start, settings, harness}) {
   const option = `--${MODEL_FROM_SETTINGS}`;
@@ -212,9 +217,13 @@ function settingsLaunch({start, settings, harness}) {
   if (start.compareMode) fail(`비교 모드로 띄운 역할은 ${option}로 모델을 바꾸지 않는다 — 비교 보고서의 귀속(프리셋·예약)이 중간에 바뀐다`);
   if (!profile)
     fail(`이 역할은 시작 기록에 프로필이 없어 설정에서 모델을 정할 수 없다 — ${option} 없이 다시 띄우거나 kadan start --profile로 새로 띄운다`);
+  const pinnedPreset = start.presetSource && start.settingsPreset ? start.settingsPreset : null;
+  const preset = pinnedPreset ?? settings.activePreset;
+  if (pinnedPreset && !Object.hasOwn(settings.presets ?? {}, pinnedPreset))
+    fail(`실행 모델 설정에 지정 프리셋(${pinnedPreset})이 없다 — 설정에서 모델을 정할 수 없다`);
   // 어려운 일 작업자(시작 기록 difficulty: hard)는 어려운 일 자리 값을 쓴다. 자리가 비면 작업자 값이다.
-  const launch = (start.difficulty === 'hard' && profile === 'worker' ? launchForHard(settings) : null) ?? launchFor(settings, profile);
-  if (!launch) fail(`실행 모델 설정(활성 프리셋 ${settings.activePreset})에 ${profile} 역할 값이 없다 — 설정에서 모델을 정할 수 없다`);
+  const launch = (start.difficulty === 'hard' && profile === 'worker' ? launchForHard(settings, preset) : null) ?? launchFor(settings, profile, preset);
+  if (!launch) fail(`실행 모델 설정(${pinnedPreset ? `지정 프리셋 ${preset}` : `활성 프리셋 ${preset}`})에 ${profile} 역할 값이 없다 — 설정에서 모델을 정할 수 없다`);
   const want = launchIdentityOf(launch.cmd);
   if (!want.ok) fail(`설정 명령에서 등록 실행기·모델을 읽지 못했다(${want.reason})`);
   if (want.harness !== harness)

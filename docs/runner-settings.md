@@ -185,8 +185,30 @@ POST `/runners/compare`는 다른 설정 쓰기와 같은 출처·토큰·revisi
 옛 `ledger.jsonl` 스트림(2026-09-16 이전)은 읽지 않는다. 예약 세기(돌려 고르기)는 지금처럼 최근 회차 경계(`afterRowid`)부터 읽는다.
 기존 `start`의 전체 `readLedger` 비용은 그대로 남는다. SQL 실행 계획 시험은 `tests/compare-report.test.mjs`에 있다.
 
-남은 작업: 검수자 품질 지표, failed의 환경·절차·품질 분류, 기존 start 전체 읽기 개선,
-`start --preset` 강제 지정. 토큰 추적과 옛 수동 시험군 데이터 이전은 이번 기능에 포함하지 않는다.
+남은 작업: 검수자 품질 지표, failed의 환경·절차·품질 분류, 기존 start 전체 읽기 개선.
+토큰 추적과 옛 수동 시험군 데이터 이전은 이번 기능에 포함하지 않는다.
+
+## 업무별 프리셋 지정
+
+기계 전체의 `activePreset`을 바꾸지 않고, 특정 업무(또는 단일 세션)만 다른 프리셋의 역할 값·폴백·어려운 일 작업자 자리(`worker-hard`)로 띄운다.
+
+```sh
+kadan work create 저장소/work-id ... --preset fast          # 업무에 프리셋 지정
+kadan work update 저장소/work-id --revision N --preset "" --note '기본 프리셋 복귀'  # 지정 비우기
+kadan start <감독> --profile conductor --work 저장소/work-id   # 업무 프리셋으로 띄우기
+kadan start <작업자> --profile worker --preset fast           # 프리셋 직접 지정
+kadan start <작업자> --profile worker --difficulty hard --preset fast
+kadan start <작업자> --profile worker --preset fast --fallback 1 --reason '1순위 한도'
+kadan start <검수자> --profile reviewer --for <작업자>         # 작업자의 지정 프리셋 상속
+```
+
+- **업무 저장**: `work create --preset <프리셋>`·`work update --preset <프리셋>`은 저장 직전 `runner-settings.json`에 그 프리셋이 있는지 확인한다. 설정이 없거나 프리셋이 없거나 빈 값이면 종료 코드 2로 거절한다. `work update --preset ""`은 지정을 비운다. `work list`·`work show`에 `preset`이 표시되며, `automatic-review`의 `workStamp`에도 포함되어 블록 도중 프리셋을 바꾸면 경계가 감지한다.
+- **세션 시작**: `start --preset <프리셋>`·`start --work <업무키>`는 세션 생성 전에 충돌·오류를 종료 코드 2로 거절한다(둘 동시 지정, 빈 값, 살아 있는 세션 재사용, `--cmd` 병용, `worker|reviewer|conductor|super` 밖 프로필, 없는 업무, 없는 설정·프리셋, 해당 역할 값 없음). `--work`가 가리키는 업무에 `preset`이 비어 있으면 기존 동작(활성 프리셋·비교 모드)을 따른다.
+- **검수자(`--for`)**: 작업자가 지정 프리셋으로 떴으면 `--for`는 그 프리셋에서 다른 계열 검수자를 고른다(명시 `--preset`/`--work`가 작업자 프리셋과 다르면 거절).
+- **원장**: 새 `launchSource` 값은 만들지 않는다(`settings`·`fallback`·`review-for` 유지). 지정 프리셋으로 띄운 `start`에 `settingsPreset`·`runnerChoice`와 함께 `presetSource`(`work`|`preset`|`review-for`)·(`--work`이거나 그 작업자를 상속한 경우 `presetWorkKey`)를 남긴다. 카드 발령 `send` 원장은 기존처럼 `settingsPreset`·`runnerChoice`·`launchSource`를 보존한다.
+- **발령 검사(`runnerGuard`)와 실패 닫힘**: 기대 프리셋 우선순위는 **(1) 연결된 업무의 `preset` → (2) 비교 모드 세션의 `settingsPreset` → (3) 업무 밖 단독 카드이면서 지정 프리셋 세션의 `settingsPreset` → (4) 활성 프리셋(`activePreset`)**이다. 프리셋이 비어 있는 업무는 (4) 활성 프리셋 기준이므로 다른 프리셋 세션을 섞어 보내면 거절한다. (1)~(3)처럼 고정 프리셋이 있을 때 설정 파일 없음·삭제된 프리셋·역할 값 없음은 모두 `settings-unreadable`로 실패 닫힘 거절한다. 업무·단독 세션 고정일 때는 그 프리셋의 `fallback` 목록과 `worker-hard` 자리를 대조하며, 거절·경고 문구에 `프리셋 <이름>`·`--preset <이름>`을 표시한다.
+- **비교 모드와 겹칠 때**: 비교 모드가 켜져 있어도 명시 프리셋(`--preset` 또는 `work.preset`이 있는 `--work`)이 우선하며 `compare-pick` 예약을 만들지 않는다(`compareMode`·`pickId` 없음). 프리셋 미지정 업무는 기존 비교 모드를 그대로 따른다. 성과 보고서(`kadan runners report`)는 기존처럼 `send.runnerChoice`로 정상 집계한다.
+- **이어가기·한도 안내**: `restart`·`reopen`은 `presetSource`가 있는 세션의 `presetSource`·`settingsPreset`·`presetWorkKey`를 새 `start`에 이어 적는다. `restart --model-from-settings`는 지정 프리셋에서 역할 값을 읽고(삭제·누락 시 끄기 전 거절), 한도 경보의 대체 후보 안내(`watch-limit-fallback`)는 지정 프리셋의 폴백 목록을 보고 `--preset <이름>`을 붙인다.
 
 ## 기본 프리셋
 
