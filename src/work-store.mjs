@@ -9,6 +9,7 @@ import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
 import {readWatchWorkSummaries} from './work-watch-summary.mjs';
 import {parseWaitUntil,WAIT_UNTIL_FORMAT} from './wait-until.mjs';
+import {planCardClose,closeWorkCards} from './work-card-close.mjs';
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 끝이 아니다(status-labels.mjs·docs/card-center.md).
@@ -58,7 +59,13 @@ export class WorkStore {
    appendStream(this.home,stream,record);return this.get(key);
   });
  }
- change(key,action,fields,opts={}){return this.locked(()=>this.#change(this.get(key),action,fields,opts));}
+ // 마감(complete·cancel)은 업무 기록이 저장된 뒤, 잠금 밖에서 그 업무의 열린 실행 카드를 닫고 결과를 cardClose로 더한다.
+ // CLI와 대시보드 마감이 같은 길이다. 카드 닫기가 실패해도 마감은 되돌리지 않는다(cardClose.failed).
+ change(key,action,fields,opts={}){
+  let plan=null;
+  const saved=this.locked(()=>this.#change(this.get(key),action,fields,{...opts,onClosePlan:p=>{plan=p;}}));
+  return plan?{...saved,cardClose:closeWorkCards(this.home,plan,{workKey:key,action,by:opts.by??'사람'})}:saved;
+ }
  // 우편 차례 반환 전용: 잠금 안에서 읽은 최신 업무로 decide가 {turnOwner,by,note}를 정하면 그 revision을 명시해 turnOwner만 쓴다.
  // 던지면 쓰지 않는다. revision 검사를 건너뛰는 길이 아니라, 잠금 안에서 읽은 값으로 검사하는 꼴이다(공개 change를 잠금 안에 다시 부르면 이중 잠금).
  changeTurnOwner(key,decide){
@@ -67,7 +74,7 @@ export class WorkStore {
    return this.#change(current,'update',{turnOwner},{revision:current.revision,by,note});
   });
  }
- #change(current,action,fields,{revision,by='사람',note}={}){
+ #change(current,action,fields,{revision,by='사람',note,onClosePlan}={}){
   {
    const {history,...old}=current,key=current.key;
    if(Number(revision)!==current.revision)throw new Error('업무가 변경됨: 새로 읽고 다시 저장');
@@ -132,6 +139,7 @@ export class WorkStore {
      const unresolved=old.executions.filter(x=>{const card=center.cards.find(c=>c.key===x.key);return !card||card.ambiguous||!closableExecution(card);});
      if(unresolved.length)throw new Error(`끝나지 않은 실행 ${unresolved.length}건: ${unresolved.slice(0,3).map(x=>remainingText(x,center.cards.find(c=>c.key===x.key))).join(', ')}${unresolved.length>3?` 외 ${unresolved.length-3}건`:''}. 실행을 마치거나 취소하고, 담당을 바꿨다면 명시 인계 또는 완료 확정(kadan done)을 한 뒤 업무 결과를 확인하세요`);
      next.result=required(fields.result,'최종 결과와 확인 근거');next.status=action==='complete'?'done':'cancelled';next.turnOwner='';delete next.waitUntil;delete next.waitUntilSetAt;
+     onClosePlan?.(planCardClose(old.executions,center.cards));
     }
    }else throw new Error('알 수 없는 업무 변경');
    appendStream(this.home,keyStream(key),next);return this.get(key);
