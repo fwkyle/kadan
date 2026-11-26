@@ -15,6 +15,7 @@ import { mailboxLetters } from "../mailbox.mjs";
 import { mailStatus, listPageSize } from "../dashboard-inbox.mjs";
 import { buildCardWorktimes, modelUnknownLabel } from "../card-worktime.mjs";
 import { listFactsClockHigh } from "../card-list-facts.mjs";
+import { workRoundNow } from "./work-round.mjs";
 
 const modelCache = new WeakMap();
 const executionModelCache = new WeakMap();
@@ -170,7 +171,11 @@ export function model(snapshot, includeWorks = true) {
       (works || []).flatMap((w) => w.executions.map((e) => [e.key, includeWorks ? w.key : "work:" + w.key])),
     );
     const list = [
-      ...(includeWorks ? works || [] : []).map((w) => pick(w, rowFields)),
+      // roundNow(업무 줄의 라운드 한 줄)는 값이 있는 업무 행에만 붙인다.
+      ...(includeWorks ? works || [] : []).map((w) => {
+        const roundNow = workRoundNow(w, reviewByCard);
+        return { ...pick(w, rowFields), ...(roundNow && { roundNow }) };
+      }),
       ...base.map((r) =>
         pick(
           {
