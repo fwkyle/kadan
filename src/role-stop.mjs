@@ -38,7 +38,11 @@ function ownedOpenWorks(role, entries, readWorks) {
 // 겹친 호출·그 사이의 재시작(검수 exec-61aef215 발견 4): 관측(원장 읽기 → 세션 목록)과 쓰기 사이에 다른 stop이나 새 start가 끼어들 수 있다.
 // 쓰기는 원장 쓰기 잠금(storageTransaction) 안에서 하고, 그 안에서 이 세션의 마지막 수명 사건이 관측 때와 같은지 다시 본다.
 // 다른 호출이 이미 꺼짐을 적었으면 중복 없이 안내만 하고, 새 start가 들어왔으면 기록하지 않는다(새 세대를 정상 종료로 적지 않는다).
-// 비용: 잠금 밖 원장 읽기 1번. 잠금 안에서는 원장 버전이 관측 때와 같으면 다시 읽지 않고, 달라졌을 때만 한 번 더 읽는다.
+// 쓰기 잠금 안에서는 원장을 읽지 않는다 — 원장 버전(마지막 사건 번호)만 관측 때와 비교한다. 같으면 그 사이 붙은 사건이 없으니 그대로 쓰고,
+// 다르면 빈손으로 잠금을 놓고 잠금 밖에서 다시 읽어 이 세션의 수명 사건을 비교한 뒤 다시 들어간다(최대 RECHECKS번).
+// 이유: 쓰기 잠금을 쥔 채 원장 전체를 읽으면 다른 쓰기(감시 포함)가 그동안 기다린다(storage.mjs prepareOutsideLock의 2026-09-24 실측).
+// 비용: 잠금 밖 원장 읽기 1번 + 그 사이 다른 사건이 붙은 횟수만큼(최대 RECHECKS - 1번) 더. 원장이 10배면 읽기 한 번이 10배다.
+const RECHECKS = 3;
 const lifecycleOf = (entries, session) => entries.filter(e => isLifecycle(e) && e.session === session);
 function recordGoneStop({ role, session, home, floor, log, announce }) {
   const refuse = (message) => ({ ok: false, code: 1, message });
@@ -47,7 +51,7 @@ function recordGoneStop({ role, session, home, floor, log, announce }) {
     return { ok: true, session, windowIncomplete: false, alreadyRecorded: true };
   };
   // 버전을 원장 읽기보다 먼저 적는다: 그 뒤에 붙은 사건은 무엇이든 버전을 올린다.
-  const version = storageVersion(home);
+  let version = storageVersion(home);
   const entries = readLedger(home);
   try { sessionOwner(entries, session, role); } catch (error) { return refuse(error.message); }
   // 시작 기록이 없는 이름은 예전과 똑같이 거절한다(출력·종료 코드 불변).
@@ -62,19 +66,26 @@ function recordGoneStop({ role, session, home, floor, log, announce }) {
   const owned = announce(entries);
   const entry = { ...buildStopLedgerEntry({ role, session }), sessionGone: true, conversationMissing: "session-gone",
     ...(owned.length > 0 ? { ownedOpenWorks: owned.slice(0, OWNED_WORKS_MAX) } : {}) };
-  return storageTransaction(home, () => {
-    if (version === null || storageVersion(home) !== version) {
-      const now = lifecycleOf(readLedger(home), session), lastNow = now.at(-1);
-      if (isIntendedStop(lastNow)) return already(lastNow);
-      // 수명 사건 수와 마지막 사건이 모두 같아야 같은 세대다(시각만 비교하지 않는다 — 같은 밀리초의 사건이 있을 수 있다).
-      if (now.length !== seen.length || JSON.stringify(lastNow) !== JSON.stringify(last)) {
-        return refuse(`확인하는 사이 ${session}의 시작·종료 기록이 바뀌었습니다 — 꺼짐으로 기록하지 않았습니다. 상태를 확인한 뒤 다시 치세요`);
-      }
+  for (let attempt = 0; attempt < RECHECKS; attempt++) {
+    const written = storageTransaction(home, () => {
+      if (storageVersion(home) !== version) return false;
+      appendLedger(entry, home);
+      return true;
+    });
+    if (written) {
+      log(`꺼짐으로 기록함: ${session} — 세션은 이미 없었습니다`);
+      return { ok: true, session, windowIncomplete: false, entry, recordOnly: true };
     }
-    appendLedger(entry, home);
-    log(`꺼짐으로 기록함: ${session} — 세션은 이미 없었습니다`);
-    return { ok: true, session, windowIncomplete: false, entry, recordOnly: true };
-  });
+    // 그 사이 원장에 무언가 붙었다. 잠금 밖에서 다시 읽어 이 세션의 수명 사건이 그대로인지 본다.
+    version = storageVersion(home);
+    const now = lifecycleOf(readLedger(home), session), lastNow = now.at(-1);
+    if (isIntendedStop(lastNow)) return already(lastNow);
+    // 수명 사건 수와 마지막 사건이 모두 같아야 같은 세대다(시각만 비교하지 않는다 — 같은 밀리초의 사건이 있을 수 있다).
+    if (now.length !== seen.length || JSON.stringify(lastNow) !== JSON.stringify(last)) {
+      return refuse(`확인하는 사이 ${session}의 시작·종료 기록이 바뀌었습니다 — 꺼짐으로 기록하지 않았습니다. 상태를 확인한 뒤 다시 치세요`);
+    }
+  }
+  return refuse(`원장에 다른 기록이 계속 붙어 확인을 마치지 못했습니다: ${session} — 꺼짐으로 기록하지 않았습니다. 잠시 뒤 다시 치세요`);
 }
 
 // 반환: {ok: false, message, code} — 끄지 않았다. {ok: true, session, windowIncomplete, entry} — 껐고 기록했다.
