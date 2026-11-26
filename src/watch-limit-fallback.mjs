@@ -35,7 +35,8 @@ export function limitFallbackLine({ alert, entries, settings, ocx }) {
   if (!mine) return null;
   const hard = profile === "worker" && start.difficulty === "hard";
   const slot = hard ? HARD_ROLE : PROFILE_ROLES[profile];
-  const preset = settings.activePreset;
+  const pinnedPreset = start.presetSource && start.settingsPreset ? start.settingsPreset : null;
+  const preset = pinnedPreset ?? settings.activePreset;
   const count = settings.presets?.[preset]?.fallback?.[slot]?.length ?? 0;
   const first = Number.isInteger(start.fallbackIndex) && start.fallbackIndex >= 1 ? start.fallbackIndex + 1 : 1;
   const reviewFor = profile === "reviewer" && start.reviewFor?.family ? start.reviewFor : null;
@@ -61,6 +62,7 @@ export function limitFallbackLine({ alert, entries, settings, ocx }) {
   }
   if (!found) return null;
   const command = `cd <선임 작업 폴더> && kadan start <새 이름> --profile ${profile}${hard ? " --difficulty hard" : ""}`
+    + `${pinnedPreset ? ` --preset ${pinnedPreset}` : ""}`
     + ` --fallback ${found.n} --reason "한도: ${safeReason(alert.line)}"`;
   const note = profile !== "reviewer" ? ""
     : reviewFor

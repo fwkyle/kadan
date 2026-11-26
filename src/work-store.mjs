@@ -10,6 +10,18 @@ import {effectiveWorkOwner} from './handover-state.mjs';
 import {readWatchWorkSummaries} from './work-watch-summary.mjs';
 import {parseWaitUntil,WAIT_UNTIL_FORMAT} from './wait-until.mjs';
 import {planCardClose,closeWorkCards} from './work-card-close.mjs';
+import {readSettings} from './runner-settings.mjs';
+
+function validatePreset(home,value){
+ if(typeof value!=='string'||!value.trim())throw Object.assign(new Error('프리셋 이름을 적어주세요'),{exitCode:2});
+ const name=value.trim();
+ let settings;
+ try{settings=readSettings(home);}
+ catch(error){throw Object.assign(new Error(`실행 모델 설정을 읽을 수 없다: ${error.message}`),{exitCode:2});}
+ if(!settings)throw Object.assign(new Error('실행 모델 설정이 없다 — kadan runners init 먼저'),{exitCode:2});
+ if(!Object.hasOwn(settings.presets,name))throw Object.assign(new Error(`없는 프리셋: ${name}`),{exitCode:2});
+ return name;
+}
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 끝이 아니다(status-labels.mjs·docs/card-center.md).
@@ -51,11 +63,12 @@ export class WorkStore {
  locked(fn){
   assertWritable(this.home);return transaction(this.home,fn);
  }
- create({key,title,goal,scope,acceptance,owner,repoPath,board='',by='사람'}){
+ create({key,title,goal,scope,acceptance,owner,repoPath,board='',preset,by='사람'}){
   return this.locked(()=>{
    const stream=keyStream(key);if(readStream(this.home,stream,{optional:true}).length)throw new Error('이미 있는 업무 ID');
    if(typeof repoPath!=='string'||!path.isAbsolute(repoPath)||!fs.statSync(repoPath).isDirectory())throw new Error('저장소 절대경로 필요');
-   const record={key,repo:key.split('/')[0],id:key.split('/')[1],repoPath,title:required(title,'업무 제목',200),goal:required(goal,'약속한 결과'),scope:required(scope,'전체 대상 범위'),acceptance:required(acceptance,'완료 조건'),owner:required(owner,'책임 감독',160),board:String(board),status:'open',executions:[],mailRefs:[],progress:'',nextAction:'',turnOwner:'',result:'',revision:1,at:new Date().toISOString(),by,note:'업무 등록',action:'create'};
+   const validatedPreset=preset===undefined?undefined:validatePreset(this.home,preset);
+   const record={key,repo:key.split('/')[0],id:key.split('/')[1],repoPath,title:required(title,'업무 제목',200),goal:required(goal,'약속한 결과'),scope:required(scope,'전체 대상 범위'),acceptance:required(acceptance,'완료 조건'),owner:required(owner,'책임 감독',160),board:String(board),...(validatedPreset?{preset:validatedPreset}:{}),status:'open',executions:[],mailRefs:[],progress:'',nextAction:'',turnOwner:'',result:'',revision:1,at:new Date().toISOString(),by,note:'업무 등록',action:'create'};
    appendStream(this.home,stream,record);return this.get(key);
   });
  }
@@ -86,10 +99,15 @@ export class WorkStore {
    if(['done','cancelled'].includes(old.status)&&action!=='reopen')throw new Error('종료한 업무입니다. 이유를 남기고 다시 열어주세요');
    let closePlan=null;
    if(action==='update'){
-    const {waitUntil,...plain}=fields;
+    const {waitUntil,preset,...plain}=fields;
     for(const [field,value] of Object.entries(plain)){
      if(!['title','goal','scope','acceptance','owner','board','progress','nextAction','turnOwner','status'].includes(field)||typeof value!=='string'||value.length>12000)throw new Error('잘못된 업무 수정 항목');
      next[field]=value.trim();
+    }
+    if(preset!==undefined){
+     if(typeof preset!=='string')throw Object.assign(new Error('--preset에는 프리셋 이름(비우려면 "")이 필요합니다'),{exitCode:2});
+     if(preset==='')delete next.preset;
+     else next.preset=validatePreset(this.home,preset);
     }
     if(Object.hasOwn(fields,'turnOwner')){next.turnAt=next.at;next.turnBy=by;}
     // 대기 시각(보류와 별개의 칸): 열린 업무 하나가 그 시각까지 감독의 할 일이 아니게 한다. 틀리는 방향은 조용함이라 쓸 때도 엄격하다.

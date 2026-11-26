@@ -19,10 +19,10 @@ const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 // --help는 모든 동작이 받는다. 자동 왕복(auto-*)도 같은 표를 쓴다. 표에 없는 동작은 기존 오류('알 수 없는 업무 변경')를 그대로 낸다.
 const REVISION_NOTE=['revision','note'];
 export const WORK_FLAGS={
- create:['title','goal','scope','acceptance','owner','repo-path','board'],
+ create:['title','goal','scope','acceptance','owner','repo-path','board','preset'],
  list:['repo','status','open'],
  show:[],
- update:[...REVISION_NOTE,'title','goal','scope','acceptance','owner','board','progress','next-action','turn-owner','status','wait-until'],
+ update:[...REVISION_NOTE,'title','goal','scope','acceptance','owner','board','preset','progress','next-action','turn-owner','status','wait-until'],
  execute:[...REVISION_NOTE,'phase','round','title','body-file','difficulty','assign','dispatch'],
  // unlink는 --phase·--round를 읽지 않지만 문서가 link와 묶어 적었다(docs 쪽 정리는 감독 판단) — 거절하지 않는다.
  link:[...REVISION_NOTE,'execution','phase','round'],
@@ -150,16 +150,16 @@ function workCommandInner(args,flags,context){
  const [action='list',key]=args,store=new WorkStore(home);
  if(flags.help&&action.startsWith('auto-'))return 'kadan work auto-configure <업무키> --revision N --implementation 원본카드키 --review 검수원본키 --worker 작업자 --reviewer 검수자 [--notify 감독 --deadline 기존시한 --next-block] | auto-show <업무키> | auto-report <업무키> --execution 현재실행키 --outcome implemented|pass|changes|exception [--result-file 기존절대경로] | auto-step <업무키> | auto-run <업무키> [--interval 초]. 상세: docs/automatic-review.md';
  if(action.startsWith('auto-'))return automaticReviewCommand(args,flags,context);
- if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] | list [--repo 저장소] [--status open|hold|done|cancelled | --open (끝나지 않은 업무 = open·hold, --status와 함께 쓰지 않음)] | show <키> | update <키> --revision N --note 이유 [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
- if(action==='list'){const works=listWorks(store,flags),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions})=>({key,title,owner,status,revision,executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
+ if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] [--preset 프리셋] | list [--repo 저장소] [--status open|hold|done|cancelled | --open (끝나지 않은 업무 = open·hold, --status와 함께 쓰지 않음)] | show <키> | update <키> --revision N --note 이유 [--preset 프리셋|""] [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
+ if(action==='list'){const works=listWorks(store,flags),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions,preset})=>({key,title,owner,status,revision,...(preset?{preset}:{}),executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
  if(action==='show'){const work=store.get(key);return {...work,...operationsFlowSummaries(home,[work]).get(key),latestPassReviewSha:latestPassReview(home,work)};}
  if(action==='create'){
-  const work=store.create({key,title:flags.title,goal:flags.goal,scope:flags.scope,acceptance:flags.acceptance,owner:flags.owner,repoPath:flags['repo-path'],board:flags.board,by});
+  const work=store.create({key,title:flags.title,goal:flags.goal,scope:flags.scope,acceptance:flags.acceptance,owner:flags.owner,repoPath:flags['repo-path'],board:flags.board,preset:flags.preset,by});
   // 책임 감독에게 쌓인 열린 업무 수(방금 만든 업무 포함). 새 업무를 이 감독에게 줄지 고를 때 본다. JSON은 필드만 더한다.
   return {...work,ownerOpenWorks:store.list().filter(w=>w.status==='open'&&w.owner===work.owner).length};
  }
  const fields={};
- for(const [flag,field] of [['title','title'],['goal','goal'],['scope','scope'],['acceptance','acceptance'],['owner','owner'],['board','board'],['progress','progress'],['next-action','nextAction'],['turn-owner','turnOwner'],['status','status'],['wait-until','waitUntil'],['execution','execution'],['phase','phase'],['round','round'],['mail','mail'],['result','result'],['difficulty','difficulty']])if(flags[flag]!==undefined)fields[field]=flags[flag];
+ for(const [flag,field] of [['title','title'],['goal','goal'],['scope','scope'],['acceptance','acceptance'],['owner','owner'],['board','board'],['preset','preset'],['progress','progress'],['next-action','nextAction'],['turn-owner','turnOwner'],['status','status'],['wait-until','waitUntil'],['execution','execution'],['phase','phase'],['round','round'],['mail','mail'],['result','result'],['difficulty','difficulty']])if(flags[flag]!==undefined)fields[field]=flags[flag];
  if(flags['body-file'])fields.body=fs.readFileSync(flags['body-file'],'utf8');
  if(action==='execute'&&(flags.assign!=null||flags.dispatch!=null)){
   if(flags.assign==null)throw new Error('--dispatch는 --assign <역할>과 함께 쓴다');
