@@ -84,7 +84,8 @@ test("현황 응답의 stopped는 감시와 같은 판정이고, held는 관계�
     assert.equal(data.stopped.includes(role), intendedStop(snapshot.entries, `kadan-${role}`), role);
   }
   assert.deepEqual(data.held, { "꺼짐-업무": "미완료 업무", "꺼짐-차례": "미완료 업무", "꺼짐-발령": "미완료 카드", "꺼짐-옛발령": "미완료 발령", "살아있음": "미완료 업무" });
-  // 관계표 정리가 같은 원장으로 내는 판정과 대조한다(같은 함수 heldRoles).
+  // 관계표 정리가 같은 원장으로 내는 판정과 대조한다(같은 함수 heldRoles). 현황의 held에는 정리에 없는 이유 "열린 경보"가
+  // 더 있을 수 있다(tests/dashboard-review-fixes.test.mjs) — 이 자료에는 경보가 없어 두 쪽이 그대로 같다.
   const plan = planHierarchyPrune({ table, entries: snapshot.entries, cards: f.cards.listSummaries(), works: f.works.list(), now,
     sessions: ALIVE.map((role) => ({ session: `kadan-${role}`, alive: true, pid: pidOf(role) })) });
   const kept = new Map(plan.retain.map((r) => [r.role, r.reason]));

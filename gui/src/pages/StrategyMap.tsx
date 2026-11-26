@@ -7,7 +7,7 @@ import type { LastRun } from "../strategy-map";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
 import { RestartRole } from "./RestartRole";
-import { buildMap, KIND_LABEL, lifeLabel, restartGeneration, runLabel, systemSessions, STATE_LABEL, visibleUnits } from "../strategy-map";
+import { askTarget, buildMap, KIND_LABEL, lifeLabel, restartGeneration, runLabel, systemSessions, STATE_LABEL, visibleUnits } from "../strategy-map";
 import { buildForest } from "../strategy-tree";
 import StrategyTree, { TreeLegend } from "./StrategyTree";
 
@@ -16,7 +16,7 @@ import StrategyTree, { TreeLegend } from "./StrategyTree";
 type StatusData = Stamp & {
   rows: Row[]; live: LiveSession[] | null; alerts: OpenAlerts | null; hierarchy: Record<string, string> | null;
   activity?: Record<string, number[]>; lastRuns?: Record<string, LastRun>;
-  stopped?: string[] | null; held?: Record<string, string> | null;
+  stopped?: string[] | null; held?: Record<string, string> | null; askTo?: Record<string, string> | null;
 };
 const DEPOT = "\u0000창고"; // 선택 상태에서 창고를 역할 이름과 구분하는 키
 // 묶음 이름은 서버 bucketGroups와 같다(2026-10-05 [kyle]).
@@ -102,7 +102,7 @@ export default function StrategyMap({ url }: { url: URL }) {
               <span className={"sm-dot sm-c-" + row.bucket} /><CardLink row={row} />
               <small><Pulse at={row.signalAt} />{row.healthLabel}{row.signalAt ? ` · 마지막 신호 ${time(row.signalAt)}` : ""}</small></li>)}</ul>
               : <p className="st-empty">진행 중인 카드가 없습니다.</p>}
-            {unitBase && <AskSuper key={"ask:" + unit.role} unit={unit} base={unitBase} live={data.live} />}
+            {unitBase && <AskSuper key={"ask:" + unit.role} unit={unit} base={unitBase} to={askTarget(data.askTo, unit.role)} live={data.live} />}
           </>}
         </aside>
       </div>

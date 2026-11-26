@@ -317,3 +317,32 @@ test('꺼짐 기록을 막는 경우: 시작 기록 없음·기반 프로세스�
   assert.deepEqual(off.run(), {ok: false, code: 1, message: `세션 없음: ${off.session}`});
   assert.equal(off.stops().length, 0);
 });
+
+// 검수 exec-61aef215 발견 4: 관측(원장 읽기·세션 목록)과 쓰기 사이에 끼어든 사건을 쓰기 직전에 다시 확인한다.
+// 끼어드는 순간은 세션 목록 조회(floor.list) 안에서 만든다 — 관측 뒤, 쓰기 앞이다.
+test('겹친 꺼짐 기록: 두 호출이 겹쳐도 stop은 1건이고, 관측과 쓰기 사이에 새 start가 들어오면 기록하지 않는다', () => {
+  const home = ledgerHome(), lines = [];
+  const gone = {name: 'tmux', alive: () => false, list: () => [], pid: () => null, stop: () => assert.fail('끄지 않는다')};
+  const run = (role, floor = gone) => stopRole({role, session: `kadan-${role}`, home, floor, recordGone: true,
+    log: line => lines.push(line), warn: line => lines.push(line), readWorks: () => []});
+  const begin = (role, panePid) => appendLedger({kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'x', panePid, by: '사람'}, home);
+  const life = role => readLedger(home).filter(e => e.session === `kadan-${role}` && ['start', 'stop'].includes(e.kind))
+    .map(e => [e.kind, e.panePid ?? null, e.sessionGone ?? false]);
+  // (1) 첫 호출이 원장을 읽은 뒤, 두 번째 호출이 먼저 끝까지 기록한다.
+  begin('겹침-둘', '100');
+  const first = run('겹침-둘', {...gone, list: () => { assert.equal(run('겹침-둘').recordOnly, true); return []; }});
+  assert.deepEqual([first.ok, first.alreadyRecorded, first.recordOnly], [true, true, undefined], '늦은 쪽은 중복 없이 안내만 한다');
+  assert.deepEqual(life('겹침-둘'), [['start', '100', false], ['stop', null, true]], 'stop은 1건');
+  // (2) 관측과 쓰기 사이에 같은 이름의 새 세대가 시작된다.
+  begin('겹침-재시작', '100');
+  const late = run('겹침-재시작', {...gone, list: () => { begin('겹침-재시작', '101'); return []; }});
+  assert.deepEqual([late.ok, late.code], [false, 1]);
+  assert.match(late.message, /시작·종료 기록이 바뀌었습니다 — 꺼짐으로 기록하지 않았습니다/);
+  assert.deepEqual(life('겹침-재시작'), [['start', '100', false], ['start', '101', false]], '새 세대에 꺼짐 기록을 붙이지 않는다');
+  assert.equal(intendedStop(readLedger(home), 'kadan-겹침-재시작'), false, '새 세대를 정상 종료로 읽지 않는다');
+  // (3) 무관한 사건만 끼어들면(다른 역할의 기록) 그대로 기록한다.
+  begin('겹침-무관', '100');
+  const fine = run('겹침-무관', {...gone, list: () => { begin('겹침-다른역할', '200'); return []; }});
+  assert.equal(fine.recordOnly, true);
+  assert.deepEqual(life('겹침-무관'), [['start', '100', false], ['stop', null, true]]);
+});

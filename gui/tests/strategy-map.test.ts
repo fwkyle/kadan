@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { askRecipient, buildMap, lifeLabel, recipientGone, restartGeneration, runLabel, STATE_LABEL, systemSessions, visibleUnits } from "../src/strategy-map.ts";
+import { askTarget, buildMap, lifeLabel, recipientGone, restartGeneration, runLabel, STATE_LABEL, systemSessions, visibleUnits } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -187,15 +187,18 @@ test("꺼진 역할: 다시 살아나면 예전 표시, 재료를 모르면 숨�
   assert.equal(state(withAlert, "꺼짐-빈손"), "stopped", "열린 경보도 든 일이다");
 });
 
-test("질문 칸: 받는 사람의 세션이 없다고 확인된 때만 막는다(고른 유닛이 아니라 받는 사람 기준)", () => {
-  const map = buildMap({ ...goneInput, rows: [row("y/1", "꺼짐-하위-작업자", "running")] });
-  const base = map.bases.find((b) => b.id === "꺼짐-하위")!, worker = base.units.find((u) => u.role === "꺼짐-하위-작업자")!;
-  assert.equal(worker.alive, true);
-  assert.equal(askRecipient(worker, base), "꺼짐-하위", "살아 있는 작업자를 골라도 받는 사람은 꺼진 슈퍼감독이다");
-  assert.equal(recipientGone("꺼짐-하위", goneInput.live), true);
-  assert.equal(recipientGone("살아있음", goneInput.live), false);
-  assert.equal(recipientGone("꺼짐-하위", null), false, "세션 상태를 모르면 막지 않는다");
-  const outside = { id: "관계표 밖", label: "관계표 밖", super: null, units: [] };
-  assert.equal(askRecipient({ role: "떠돌이", kind: "worker" }, outside), "비서");
-  assert.equal(recipientGone("비서", goneInput.live), true, "비서가 받는 사람일 때도 같은 기준");
+test("질문 칸: 받는 사람은 서버가 준 값(askTo)이고, 그 세션이 없다고 확인된 때만 막는다", () => {
+  // 서버(/ask와 같은 계산)가 준 유닛 → 받는 사람. 화면은 관계표 위치로 다시 계산하지 않는다.
+  const askTo = { "꺼짐-하위-작업자": "꺼짐-하위", "살아있음": "살아있음", "떠돌이": "비서", "중첩-작업자": "살아있음" };
+  assert.equal(askTarget(askTo, "꺼짐-하위-작업자"), "꺼짐-하위", "살아 있는 작업자를 골라도 받는 사람은 꺼진 슈퍼감독이다");
+  assert.equal(recipientGone(askTarget(askTo, "꺼짐-하위-작업자"), goneInput.live), true);
+  assert.equal(recipientGone(askTarget(askTo, "살아있음"), goneInput.live), false);
+  // 지도의 판(최상위)이 꺼져 있어도 서버가 정한 받는 사람(판 아래의 살아 있는 슈퍼감독)이 살아 있으면 막지 않는다.
+  assert.equal(recipientGone(askTarget(askTo, "중첩-작업자"), goneInput.live), false);
+  assert.equal(recipientGone(askTarget(askTo, "꺼짐-하위-작업자"), null), false, "세션 상태를 모르면 막지 않는다");
+  assert.equal(recipientGone(askTarget(askTo, "떠돌이"), goneInput.live), true, "비서가 받는 사람일 때도 같은 기준");
+  // 서버가 받는 사람을 주지 않았으면(관계표 모름·없는 이름) 모르는 것이라 막지 않는다.
+  assert.equal(askTarget(null, "살아있음"), null);
+  assert.equal(askTarget(askTo, "없는-이름"), null);
+  assert.equal(recipientGone(null, goneInput.live), false);
 });

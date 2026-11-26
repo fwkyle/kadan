@@ -15,7 +15,8 @@ import { ledgerHome, ledgerPath, readLedger, readMailBody } from "../ledger.mjs"
 import { buildWallSnapshot, createWallServer, withWaitSnapshots } from "../wall.mjs";
 import { collectResources } from "../watch-resource.mjs";
 import { collectProcesses, createProcessCache, exceededSignals, processThresholds } from "../process-watch.mjs";
-import { currentSocket } from "../floor-tmux.mjs";
+import { currentSocket, tmux } from "../floor-tmux.mjs";
+import { serverState } from "../server-restore.mjs";
 import { readSettings } from "../runner-settings.mjs";
 import { recentSends, die } from "../cli-basics.mjs";
 import { buildTree, renderTree } from "../cli-tree.mjs";
@@ -121,6 +122,14 @@ function processSnapshot() {
   return result.ok ? { ...result, thresholds, exceeded: exceededSignals(result, thresholds) } : result;
 }
 
+// 세션 목록 조회가 실패했을 때만 부른다(추가 tmux 호출 1번). 판정은 up --auto의 서버 손실 판정과 같은 함수(serverState)다:
+// "no server running"·소켓 파일 없음만 '없음'이고, 그 밖의 실패·시간 초과는 모름이다. tmux가 아닌 바닥은 판정하지 않는다.
+function tmuxServerMissing() {
+  if (floor.name !== "tmux") return false;
+  try { return serverState(tmux(["list-sessions", "-F", "#{session_name}"], undefined, { timeout: 5000 })) === "missing"; }
+  catch { return false; }
+}
+
 function buildWallData(data) {
   const {runtime,listOnly,summaryBodies,includeWaitSnapshots,collectedAt,home,versions,version,file,entries,
     ledgerLines,ledgerState,cards,cardError,registeredWorks,workError,briefInputs,operationsInputs,
@@ -129,9 +138,13 @@ function buildWallData(data) {
   const resourceSnapshot = listOnly ? {} : buildWallSnapshot({ collect: () => collectResources(spawnSync) });
   let sessions = [];
   try {
-    sessions = floor.list();
+    // 엄격 모드: 목록 조회 실패를 빈 목록(= 모두 죽음)으로 읽지 않고 모름으로 넘긴다. 실패하면 아래 runtimeKnown이 거짓이 되어
+    // 현황 응답의 live·stopped가 모름(null)이 되고, 지도·질문 칸은 아무도 숨기지 않고 막지 않는다(검수 exec-61aef215 발견 2:
+    // 세션은 살아 있는데 list-sessions만 실패하자 살아 있는 역할이 "세션 사라짐"으로 보이고 질문이 막혔다).
+    sessions = floor.list({ strict: true });
   } catch (error) {
-    errors.push(`생존 못 읽음(죽음이 아니라 모름): ${error.message}`);
+    // tmux 서버가 아예 없으면(빈 홈·처음 켠 기계) 세션이 없다고 확인된 것이라 빈 목록 그대로 둔다. 그 밖의 실패만 모름이다.
+    if (!tmuxServerMissing()) errors.push(`생존 못 읽음(죽음이 아니라 모름): ${error.message}`);
   }
   const aliveBySession = Object.fromEntries(
     sessions

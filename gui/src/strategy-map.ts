@@ -177,13 +177,14 @@ export function runLabel(unit: Pick<Unit, "alive" | "session" | "lastRun" | "sta
   // 기록이 없으면 세션이 왜 없는지만 지도와 같은 말로 적는다.
   return unit.alive === false ? STATE_LABEL[unit.state === "stopped" ? "stopped" : "dead"] : "모름";
 }
-// '슈퍼감독에게 묻기'의 받는 사람(미리 보기): 유닛이 최상위면 자신, 아니면 그 판의 슈퍼감독, 사슬 밖이면 비서. 실제로는 서버가 다시 정한다.
-export function askRecipient(unit: Pick<Unit, "role" | "kind">, base: Pick<Base, "super">) {
-  return unit.kind === "super" ? unit.role : base.super ?? "비서";
+// '슈퍼감독에게 묻기'의 받는 사람은 서버가 정해 현황 응답의 askTo로 준다(/ask와 같은 계산). 화면은 다시 계산하지 않는다.
+// 값이 없으면(관계표를 모르거나 서버가 싣지 않은 이름) null — 그때는 받는 사람을 모르는 것이라 막지 않는다.
+export function askTarget(askTo: Record<string, string> | null | undefined, role: string): string | null {
+  return askTo?.[role] ?? null;
 }
-// 받는 사람의 세션이 없다고 확인됐는가. 세션 상태를 모르면(live 없음) 아니다 — 모를 때는 질문을 막지 않는다.
-export function recipientGone(to: string, live: LiveSession[] | null) {
-  return live !== null && !live.some((s) => s.role === to);
+// 받는 사람의 세션이 없다고 확인됐는가. 받는 사람이나 세션 상태를 모르면 아니다 — 모를 때는 질문을 막지 않는다.
+export function recipientGone(to: string | null, live: LiveSession[] | null) {
+  return to !== null && live !== null && !live.some((s) => s.role === to);
 }
 // 감시기·대시보드처럼 지도 유닛이 아닌 카단 자체 세션. 전략 맵의 '기반 세션' 묶음에 따로 보인다.
 export function systemSessions(live: LiveSession[] | null) {

@@ -2,11 +2,11 @@ import { useContext, useState } from "react";
 import { save, useResource } from "./resource";
 import type { Row } from "./types";
 import { AppContext, time } from "./ui";
-import { askRecipient, recipientGone, STATE_LABEL, type Base, type Unit } from "./strategy-map";
+import { recipientGone, STATE_LABEL, type Base, type Unit } from "./strategy-map";
 import type { LiveSession } from "./status-band";
 
 // 전략 맵 옆 칸의 '슈퍼감독에게 묻기'(2026-10-07 [kyle]). 받는 사람은 서버가 관계표로 정하고(슈퍼감독, 사슬이 없으면 비서),
-// 화면은 미리 보여 주기만 한다. 답은 사람 우편함으로 오고 OS 알림이 뜬다. 편지는 유닛과 묶이지 않으므로
+// 화면은 서버가 현황 응답(askTo)으로 준 값을 그대로 보여 주기만 한다(to — 다시 계산하지 않는다. 모르면 null). 답은 사람 우편함으로 오고 OS 알림이 뜬다. 편지는 유닛과 묶이지 않으므로
 // "이 받는 사람에게 보낸 내 질문"을 상태와 함께 보여 준다.
 // 받는 사람의 세션이 없다고 확인되면 보내기를 막는다(2026-11-26 [kyle]): 꺼진 역할의 우편함에 쌓이기만 하고 답이 오지 않는다.
 // 기준은 고른 유닛이 아니라 실제 받는 사람이다. 세션 상태를 모르면 막지 않는다. 서버(/ask)도 같은 경우 거절한다.
@@ -24,24 +24,23 @@ export function unitContext(unit: Unit) {
 }
 
 // 원격 보기(읽기 전용)에서는 질문 보내기를 그리지 않는다.
-type AskProps = { unit: Unit; base: Base; live: LiveSession[] | null };
+type AskProps = { unit: Unit; base: Base; to: string | null; live: LiveSession[] | null };
 export default function AskSuper(props: AskProps) {
   return useContext(AppContext).readOnly ? null : <AskSuperInner {...props} />;
 }
-function AskSuperInner({ unit, base, live }: AskProps) {
+function AskSuperInner({ unit, base, to, live }: AskProps) {
   const { token, notice } = useContext(AppContext);
   const [text, setText] = useState(""),
     [withContext, setWithContext] = useState(true),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  // 미리 보기용 받는 사람. 실제로는 서버가 같은 규칙(관계표 사슬 끝, 없으면 비서)으로 다시 정한다.
-  const to = askRecipient(unit, base), gone = recipientGone(to, live);
+  const gone = recipientGone(to, live);
   const mail = useResource<{ items: MailItem[] }>("mail?mailRole=" + encodeURIComponent("사람") + "&mailView=sent");
   const asked = (mail.data?.items ?? []).filter((m) => (m.currentRecipient || m.role) === to && m.replyStatus !== "not-requested").slice(0, 3);
   return (
     <section className="sm-ask" aria-label="슈퍼감독에게 묻기">
       <h3>{to === "비서" ? "비서에게 묻기" : "슈퍼감독에게 묻기"}</h3>
-      <p className="sm-ask-to">받는 사람: <b>{to}</b>{to === "비서" && !base.super ? " (이 유닛은 슈퍼감독 사슬 밖이라 비서에게 갑니다)" : ""}{gone && <> · <span role="status">꺼져 있음 — 받을 세션 없음</span></>}</p>
+      <p className="sm-ask-to">받는 사람: <b>{to ?? "모름"}</b>{to === "비서" && !base.super ? " (이 유닛은 슈퍼감독 사슬 밖이라 비서에게 갑니다)" : ""}{gone && <> · <span role="status">꺼져 있음 — 받을 세션 없음</span></>}</p>
       <form onSubmit={async (e) => {
         e.preventDefault();
         if (!text.trim() || busy || gone) return;
@@ -49,7 +48,7 @@ function AskSuperInner({ unit, base, live }: AskProps) {
         setError("");
         try {
           const result = await save("/ask", { unit: unit.role, text: text.trim(), context: withContext ? unitContext(unit) : "" }, token);
-          notice(`${result.result.to ?? to}에게 질문을 보냈습니다. 답이 오면 알림이 뜨고 우편함에서 볼 수 있습니다.`);
+          notice(`${result.result.to ?? to ?? "받는 사람"}에게 질문을 보냈습니다. 답이 오면 알림이 뜨고 우편함에서 볼 수 있습니다.`);
           setText("");
         } catch (err) {
           setError((err as Error).message);
