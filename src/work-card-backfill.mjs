@@ -12,10 +12,10 @@ import {readLedger} from './ledger.mjs';
 import {storageSnapshot,storageVersion} from './storage.mjs';
 import {isEnded} from './status-labels.mjs';
 import {planCardClose,stillClosedAndLinked,cardCloseLines,cardCloseReasonCode} from './work-card-close.mjs';
+import {CLOSE_WORDS,closeNoteHead} from './work-close-note.mjs';
 
-// 끝난 업무 상태와 메모에 적는 낱말. 여기 없는 상태(open·hold·모르는 값)는 끝나지 않은 업무로 본다.
-const CLOSED_WORK={done:'완료',cancelled:'취소'};
-const isClosedWork=work=>Object.hasOwn(CLOSED_WORK,work.status);
+// 끝난 업무는 메모 낱말이 있는 상태(done·cancelled)다. 그 밖(open·hold·모르는 값)은 끝나지 않은 업무로 본다.
+const isClosedWork=work=>Object.hasOwn(CLOSE_WORDS,work.status);
 export const BACKFILL_SKIP_LABELS={
   'open-work':'끝나지 않은 업무에도 연결됨',
   missing:'카드 없음',
@@ -93,8 +93,8 @@ function summarize({counts,plan,skipped,assigned}){
 
 // 원래 마감의 자동 닫기와 카드 이력에서 구분되도록 '소급'을 적는다.
 function noteFor({works,result,runs}){
-  const [first,...rest]=works.map(w=>`업무 ${w.key} ${CLOSED_WORK[w.status]}`);
-  return `${first} 마감 소급 정리로 닫음 · 원장 결과 ${result} (${runs.join(' · ')})`
+  const [first,...others]=works,rest=others.map(w=>`업무 ${w.key} ${CLOSE_WORDS[w.status]}`);
+  return `${closeNoteHead('backfill',first.key,first.status)}${result} (${runs.join(' · ')})`
     +(rest.length?` · 함께 연결된 끝난 업무: ${rest.join(', ')}`:'');
 }
 

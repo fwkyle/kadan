@@ -8,9 +8,10 @@
 import {CardStore} from './card-store.mjs';
 import {streamHeads} from './storage.mjs';
 import {isEnded} from './status-labels.mjs';
+import {closeNoteHead} from './work-close-note.mjs';
 
 const LIST_MAX=10;
-const ACTION_LABEL={complete:'완료',cancel:'취소'};
+const ACTION_STATUS={complete:'done',cancel:'cancelled'};
 
 // executions: 업무에 연결된 실행. cards: 마감 관문을 통과한 카드 센터의 카드(연결 실행이 모두 있고 끝나 있다).
 // 저장 상태가 끝 묶음(done·cancelled·superseded)인 카드는 이미 정리된 것이라 뺀다. 그 밖(draft·ready·assigned·hold·archived)은
@@ -57,7 +58,7 @@ export function cardCloseQuery(failed=[]){
 // 이미 닫힌 카드는 기록 없이 넘어간다.
 export function closeWorkCards(home,plan,{workKey,action,by,version}){
   const items=plan.map(({key,revision,role,result,runs})=>({key,revision,role,
-    note:`업무 ${workKey} ${ACTION_LABEL[action]} 마감으로 자동 닫음 · 원장 결과 ${result} (${runs.join(' · ')})`}));
+    note:`${closeNoteHead('auto',workKey,ACTION_STATUS[action])}${result} (${runs.join(' · ')})`}));
   const {closed,failed}=new CardStore(home).closeDone(items,{version,by,guard:stillClosedAndLinked(home,workKey)});
   const written=new Set(closed);
   return {closed:plan.filter(p=>written.has(p.key)).map(({key,from,result})=>({key,from,result})),failed};

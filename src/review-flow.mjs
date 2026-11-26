@@ -8,11 +8,6 @@ const outcomes={implemented:'구현 결과 등록',pass:'통과',changes:'수정
 const ended=new Set(['cancelled','superseded']);
 const date=value=>Date.parse(value)||0;
 
-// 업무 마감은 실패한 실행 카드도 저장 상태 done으로 닫아 카드 목록에서는 '완료'로 보인다(work-card-close.mjs, 의도).
-// 단계 표는 그 실행이 어떻게 끝났는지를 보여야 하므로, 완료로 보이는 카드에 원장의 실패가 있으면 실패로 읽는다.
-// 닫기 전 표시 규칙(card-center.mjs: 실패한 실행이 하나라도 있으면 failed)과 같아 이미 닫힌 카드에도 그대로 적용된다.
-const stageState=card=>card.displayState==='done'&&(card.runs||[]).some(r=>r.state==='failed')?'failed':card.displayState;
-
 // 결과 판정과 실행 종료는 별개다. 새 발령 뒤에는 이전 결과를 현재 검수로 세지 않는다.
 export function stage(card){
  const result=card.result,latestSend=Math.max(0,...(card.runs||[]).map(r=>date(r.sentAt)));
@@ -21,9 +16,8 @@ export function stage(card){
  const reopened=facts.reopenMax!==null&&facts.reopenMax>date(result?.at);
  const stale=!!result&&(!date(result.at)||latestSend>date(result.at)||changed||reopened);
  const current=!!result&&!stale&&!ended.has(card.displayState);
- const state=stageState(card);
  return {key:card.key,title:card.title,role:card.role,step:card.rallyStep,
-  state,stateLabel:state?statusLabel(state):'상태 모름',
+  state:card.displayState,stateLabel:card.displayState?statusLabel(card.displayState):'상태 모름',
   recordedOutcome:result?.outcome||null,
   outcome:current?result.outcome:null,outcomeLabel:current?(outcomes[result.outcome]||'판정 모름'):result?'이전 판정 · '+(outcomes[result.outcome]||'모름'):'결과 미등록',
   resultAt:result?.at||null,resultBy:result?.by||null,hasResult:!!result,stale};

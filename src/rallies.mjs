@@ -1,6 +1,7 @@
 import {progressGroup,progressGroups} from './board-progress.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {listFactsOf} from './card-list-facts.mjs';
+import {rallyCard} from './work-close-note.mjs';
 const end=c=>['done','cancelled','superseded','archived'].includes(c.displayState);
 const e=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const steps={implementation:'구현',fix:'수정',review:'검수',research:'관련 조사'};
@@ -8,7 +9,7 @@ const steps={implementation:'구현',fix:'수정',review:'검수',research:'관�
 const stateName={...Object.fromEntries(progressGroups.map(([key,label])=>[key,label])),waiting:statusLabel('waiting')};
 export function buildRallies(cards){
  const map=new Map();
- for(const c of cards){if(!c.rallyId||c.workType==='coordination')continue;const key=JSON.stringify([c.repo,c.board,c.rallyId]);if(!map.has(key))map.set(key,{key,id:c.rallyId,title:c.rallyTitle,cards:[]});map.get(key).cards.push(c);}
+ for(const c of cards){if(!c.rallyId||c.workType==='coordination')continue;const key=JSON.stringify([c.repo,c.board,c.rallyId]);if(!map.has(key))map.set(key,{key,id:c.rallyId,title:c.rallyTitle,cards:[]});map.get(key).cards.push(rallyCard(c));}
  return [...map.values()].map(g=>{
   const rounds=[...new Set(g.cards.filter(c=>c.rallyStep!=='research').map(c=>Number(c.rallyRound)))].sort((a,b)=>a-b),round=rounds.at(-1)||0;
   const current=g.cards.filter(c=>Number(c.rallyRound)===round&&c.rallyStep!=='research');
