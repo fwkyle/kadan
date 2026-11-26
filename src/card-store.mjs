@@ -256,7 +256,8 @@ export class CardStore {
   // (새 발령·완료·인계 등) 닫지 않는다. 넓게 잡으므로 틀리면 카드가 열린 채 남는 쪽이다. version이 없으면 아무것도 닫지 않는다.
   // 쓰기 잠금 안에서는 원장 버전만 비교한다. 다르면 아무것도 쓰지 않고 잠금을 놓은 뒤 새 줄만 읽고 다시 들어간다(7b7865de와 같은 방식).
   // 카드마다 따로 저장해 한 장의 실패가 다른 장을 되돌리지 않는다. 저장하는 기록은 update와 같은 코드가 만든다. 던지지 않는다.
-  closeDone(items,{version,by='사람'}={}) {
+  // guard(key)는 카드마다 쓰기 직전, 같은 쓰기 잠금 안에서 부른다. 던지면 그 이유로 닫지 않는다. 원장처럼 큰 것은 읽지 않는다.
+  closeDone(items,{version,by='사람',guard}={}) {
     const out={closed:[],failed:[]},ids=items.map(item=>shortId(item.key)),mentioned=new Set();
     let seen=version;
     for(const {key,revision,role,note} of items) {
@@ -268,6 +269,7 @@ export class CardStore {
             if(storageVersion(this.home)!==seen)return null;
             const current=this.get(key,{body:false});
             if(isEnded(current.status))return {closed:false,version:seen};
+            guard?.(key);
             // 손으로 고친 카드는 update의 revision 거절이 먼저다.
             if(current.revision===revision&&mentioned.has(shortId(key)))
               throw new Error('마감 판정 뒤 이 카드의 새 원장 기록(발령·완료·인계·우편 등)이 생겨 닫지 않음');

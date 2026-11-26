@@ -16,6 +16,8 @@ import {recentExecutionEvents} from '../src/dashboard-status.mjs';
 import {dashboardData} from '../src/dashboard-api.mjs';
 import {buildTree} from '../src/cli-tree.mjs';
 import {createRequire} from 'node:module';
+import {Readable} from 'node:stream';
+import {createCenterHandler} from '../src/center-wall.mjs';
 
 const {DatabaseSync} = createRequire(import.meta.url)('node:sqlite');
 
@@ -220,11 +222,15 @@ test('카드 하나를 닫지 못해도 업무 마감은 남고 실패한 카드
   assert.deepEqual(work.cardClose.failed, [{key: broken, reason: '주입한 저장 실패'}]);
 });
 
-test('판정 뒤 카드가 바뀌면 덮어쓰지 않고, 같은 계획을 다시 적용해도 이력이 늘지 않는다', async () => {
+test('판정 뒤 카드가 바뀌면 덮어쓰지 않고, 같은 계획을 다시 적용해도 이력이 늘지 않는다', async t => {
   const {planCardClose, closeWorkCards} = await import('../src/work-card-close.mjs');
   const f = fixture(), moved = f.execution(), still = f.execution();
   const center = buildCardCenter({cards: f.cards.list(), entries: readLedger(f.home), tree: [], runtimeKnown: false});
-  const plan = planCardClose(f.store.get('repo/w').executions, center.cards), version = storageVersion(f.home);
+  const plan = planCardClose(f.store.get('repo/w').executions, center.cards);
+  const held = t.mock.method(CardStore.prototype, 'closeDone', () => ({closed: [], failed: []}));
+  complete(f);
+  held.mock.restore();
+  const version = storageVersion(f.home);
   f.patch(moved, {}, '판정 뒤 감독 메모');
   const first = closeWorkCards(f.home, plan, {workKey: 'repo/w', action: 'complete', by: BOSS, version});
   assert.deepEqual(first.closed.map(c => c.key), [still]);
@@ -458,4 +464,116 @@ test('일괄 닫기가 쓰는 카드 기록은 card update로 닫은 기록과 �
   });
   assert.equal(batch.f.cards.get(batch.keys[0]).role, 'B');
   assert.equal(batch.f.cards.get(batch.keys[1]).board, null);
+});
+
+// 검수 재현(exec-ea47f41a, relinked-after-plan): 마감 저장과 닫기 사이에 카드가 이 업무를 떠나면 닫지 않는다.
+// 업무 기록만 바뀌므로 카드 revision과 원장은 그대로다.
+const reopen = (f, key = 'repo/w') => f.change('reopen', {}, key);
+const MOVES = {
+  '다시 열고 다른 열린 업무로 옮긴': {reason: /다시 열려/, move: (f, key) => {
+    reopen(f);
+    f.change('unlink', {execution: key});
+    f.change('link', {execution: key, phase: 'implementation', round: '1'}, 'repo/other');
+  }},
+  '업무를 다시 연': {reason: /다시 열려/, move: f => reopen(f)},
+  '옮긴 뒤 원래 업무를 다시 마감한': {reason: /연결이 빠/, move: (f, key) => {
+    reopen(f);
+    f.change('unlink', {execution: key});
+    f.change('link', {execution: key, phase: 'implementation', round: '1'}, 'repo/other');
+    complete(f);
+  }},
+};
+for (const [name, {reason, move}] of Object.entries(MOVES)) {
+  test(`경합: 마감 저장 뒤 ${name} 카드는 이전 업무의 마감으로 닫지 않는다`, t => {
+    const f = fixture();
+    f.makeWork('repo/other');
+    const moved = f.execution();
+    const revision = f.cards.get(moved).revision, ledger = readLedger(f.home);
+    const original = CardStore.prototype.closeDone;
+    let injected = false;
+    t.mock.method(CardStore.prototype, 'closeDone', function (...args) {
+      if (!injected) { injected = true; move(f, moved); }
+      return original.apply(this, args);
+    });
+    const work = complete(f);
+    assert.deepEqual(readLedger(f.home), ledger);
+    assert.deepEqual(work.cardClose.closed, []);
+    assert.deepEqual(work.cardClose.failed.map(c => c.key), [moved]);
+    assert.match(work.cardClose.failed[0].reason, reason);
+    assert.equal(f.cards.get(moved).status, 'assigned');
+    assert.equal(f.cards.get(moved).revision, revision);
+  });
+}
+
+test('경합: 카드를 닫는 도중에 업무가 다시 열리면 남은 카드는 닫지 않는다(카드마다 쓰기 직전에 확인)', t => {
+  const f = fixture(), keys = [f.execution(), f.execution(), f.execution()];
+  const original = CardStore.prototype.locked;
+  let closing = false, locks = 0;
+  const closeDone = CardStore.prototype.closeDone;
+  t.mock.method(CardStore.prototype, 'closeDone', function (...args) { closing = true; return closeDone.apply(this, args); });
+  t.mock.method(CardStore.prototype, 'locked', function (fn) {
+    // 첫 카드의 잠금(그 안의 update 잠금 포함)이 끝난 뒤, 둘째 카드의 잠금에 들어가기 직전에 업무를 다시 연다.
+    if (closing && ++locks === 3) { closing = false; reopen(f); }
+    return original.call(this, fn);
+  });
+  const work = complete(f);
+  assert.deepEqual(work.cardClose.closed.map(c => c.key), [keys[0]]);
+  assert.deepEqual(work.cardClose.failed.map(c => c.key), [keys[1], keys[2]]);
+  assert.deepEqual(keys.map(key => f.cards.get(key).status), ['done', 'assigned', 'assigned']);
+});
+
+// 검수 재현(exec-ea47f41a, dashboard-partial): 대시보드의 실제 POST 처리 함수에 마감 요청을 넣는다.
+async function post(f, action, {json, key = 'repo/w'} = {}) {
+  const handler = createCenterHandler(f.home);
+  const request = Readable.from([Buffer.from(new URLSearchParams({token: handler.token, key: `work:${key}`,
+    revision: String(f.store.get(key).revision), note: '마감',
+    ...(action === 'update' ? {progress: '보고'} : {result: '확인'})}).toString())]);
+  request.method = 'POST';
+  request.headers = {...(json ? {accept: 'application/json'} : {}), 'content-type': 'application/x-www-form-urlencoded'};
+  const out = {};
+  const response = {writeHead(status, headers) { out.status = status; out.headers = headers; },
+    end(body) { try { out.body = JSON.parse(body); } catch { out.body = body; } }};
+  assert.equal(await handler.handle(request, response, new URL(`http://127.0.0.1/works/${action}`)), true);
+  return out;
+}
+// 닫기 직전에 한 카드에 새 발령을 넣어 부분 실패를 만든다.
+function partialFailure(t) {
+  const f = fixture(), raced = f.execution(), fine = f.execution({runs: [['A', 'failed']]});
+  beforeClose(t, () => RACES['새 발령'](f, raced));
+  return {f, raced, fine};
+}
+const failedParam = location => new URL(location, 'http://127.0.0.1').searchParams.get('closeFailed');
+
+for (const action of ['complete', 'cancel']) {
+  test(`대시보드 ${action} JSON 응답: 업무는 마감된 채 닫은 수와 닫지 못한 카드 키·이유를 싣는다`, async t => {
+    const {f, raced, fine} = partialFailure(t);
+    const out = await post(f, action, {json: true});
+    assert.equal(out.status, 200);
+    assert.equal(out.body.result.key, 'work:repo/w');
+    assert.equal(out.body.result.cardClose.closed, 1);
+    assert.deepEqual(out.body.result.cardClose.failed.map(c => c.key), [raced]);
+    assert.match(out.body.result.cardClose.failed[0].reason, /새 원장 기록/);
+    assert.equal(f.store.get('repo/w').status, action === 'complete' ? 'done' : 'cancelled');
+    assert.equal(f.cards.get(raced).status, 'assigned');
+    assert.equal(f.cards.get(fine).status, 'done');
+  });
+
+  test(`대시보드 ${action} 폼 응답: 이동 주소에 닫지 못한 카드 키와 이유 구분을 싣는다`, async t => {
+    const {f, raced} = partialFailure(t);
+    const out = await post(f, action);
+    assert.equal(out.status, 303);
+    assert.equal(failedParam(out.headers.location), `${raced}:record`);
+    assert.match(out.headers.location, /^\/\?collection=work&card=work%3Arepo%2Fw&detail=1&/);
+    assert.match(out.headers.location, /#detail$/);
+  });
+}
+
+test('대시보드: 닫기 실패가 없으면 실패 목록은 비고 이동 주소는 예전과 같다. 마감이 아닌 저장 응답은 그대로다', async () => {
+  const f = fixture();
+  f.execution();
+  const updated = await post(f, 'update', {json: true});
+  assert.deepEqual(Object.keys(updated.body.result).sort(), ['key', 'revision']);
+  const done = await post(f, 'complete', {json: true});
+  assert.deepEqual(done.body.result.cardClose, {closed: 1, failed: []});
+  assert.equal(done.body.location, '/?collection=work&card=work%3Arepo%2Fw&detail=1#detail');
 });

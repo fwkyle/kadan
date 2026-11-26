@@ -15,6 +15,7 @@ import {readActiveHierarchy} from './hierarchy-register.mjs';
 import {nearestSuper,superProfiles} from './super-role.mjs';
 import {dashboardWorkspaceStyle,dashboardMobileStyle} from './dashboard-workspace-style.mjs';
 import {dashboardWorkspaceScript} from './dashboard-workspace-client.mjs';
+import {cardCloseQuery} from './work-card-close.mjs';
 import {dashboardStyle} from './dashboard-home.mjs';
 import {renderDashboardStatus,dashboardStatusStyle} from './dashboard-status.mjs';
 import {statusPaletteCss} from './board-progress.mjs';
@@ -418,7 +419,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
      if(action==='update'&&fields.owner===works.get(f.key.slice(5)).owner)delete fields.owner;
      work=works.change(f.key.slice(5),action,fields,{revision:f.revision,by:'사람',note:f.note});
     }
-    saved(`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1#detail`,{key:'work:'+work.key,revision:work.revision});return true;
+    // 마감·취소는 닫지 못한 실행 카드가 있어도 업무가 저장된 성공(200·303)이다. 응답에 닫은 수와 남은 카드·이유를 함께 싣는다.
+    const close=work.cardClose;
+    saved(`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1${cardCloseQuery(close?.failed)}#detail`,
+     {key:'work:'+work.key,revision:work.revision,...(close?{cardClose:{closed:close.closed.length,failed:close.failed}}:{})});return true;
    }
    const card=url.pathname.endsWith('create')?store.create({...f,by:'사람'}):store.update(f.key,{...(f.turnOwner?.trim()?{turnOwner:f.turnOwner.trim()}:{}),...(f.status==='superseded'&&f.replacedBy?{replacedBy:f.replacedBy}:{}),...(f.status==='superseded'&&f.replacedByText?{replacedByText:f.replacedByText}:{}),...(f.rallyId!==undefined?{rallyId:f.rallyId,rallyTitle:f.rallyTitle,rallyRound:f.rallyRound,rallyStep:f.rallyStep}:{}),title:f.title,status:f.status,scope:f.scope,...(f.statusReason?{statusReason:f.statusReason}:{}),...(f.resolutionOwner!==undefined?{resolutionOwner:f.resolutionOwner||null}:{}),...(f.nextAction!==undefined?{nextAction:f.nextAction||null}:{}),...(f.workType?{workType:f.workType}:{}),board:f.board||null,role:f.role||null},{revision:f.revision,by:'사람',noteKind:f.noteKind,note:f.note});
    saved(`/?card=${encodeURIComponent(card.key)}#detail`,{key:card.key,revision:card.revision});
