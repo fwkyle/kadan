@@ -1,5 +1,7 @@
 import {taskIdentity} from './task-identity.mjs';
-import {assertWritable,storageMode,transaction,readStream,appendStream,listStreams,prepareOutsideLock} from './storage.mjs';
+import {assertWritable,storageMode,storageVersion,transaction,readStream,appendStream,listStreams,prepareOutsideLock} from './storage.mjs';
+import {ledgerStreams} from './ledger-domains.mjs';
+import {isEnded} from './status-labels.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -18,6 +20,13 @@ export function checkDifficulty(value){
   throw new Error(`난이도는 normal 또는 hard: ${String(value).slice(0,40)}`);
 }
 const slug = value => typeof value === 'string' && /^[\p{L}\p{N}_-]+$/u.test(value);
+// closeDone만 쓰는 update의 안쪽 칸: 담당을 이미 계산한 호출이 원장을 다시 읽지 않게 한다. 이 파일 밖에서는 줄 수 없다.
+const KNOWN_ROLE=Symbol('known-role');
+// closeDone이 원장 버전이 어긋날 때 새 줄을 읽고 다시 들어가는 횟수(카드 한 장 기준).
+const CLOSE_RECHECKS=20;
+// 'ledger.jsonl'은 옛 원장 사건 영역이다(ledger-domains.mjs). 카드·업무 이력 영역은 원장이 아니라 뺀다.
+const LEDGER_STREAMS=['ledger.jsonl',...Object.values(ledgerStreams)];
+const shortId=key=>String(key).split('/').at(-1);
 // 카드 본문 '읽고 시작할 것'에 적힌 절대경로. 양식의 예시 문구(<>·…)는 세지 않는다.
 export function readFirstPaths(body) {
   const lines=String(body??'').split('\n');
@@ -161,8 +170,8 @@ export class CardStore {
     if(seen&&this.#dispatchFingerprint(seen)===this.#dispatchFingerprint(current))return;
     throw new Error(seen?'카드가 변경됨: 범위·담당·상태·묶음이 바뀌었다. 새로 읽고 다시 저장':'카드가 변경됨: 새로 읽고 다시 저장');
   }
-  update(key,patch,{revision,by='사람',noteKind='decision',note,manual=false}={}) {
-    const role=this.#roleOf(key);
+  update(key,patch,{revision,by='사람',noteKind='decision',note,manual=false,[KNOWN_ROLE]:knownRole}={}) {
+    const role=knownRole??this.#roleOf(key);
     return this.locked(()=>{
       const current=this.get(key);
       current.role=role();
@@ -229,6 +238,55 @@ export class CardStore {
       appendStream(this.home,`cards/${key}/events.jsonl`,next);
       return this.get(key);
     });
+  }
+  // version 뒤에 원장 영역에 붙은 줄만 읽어, ids 가운데 어느 줄에든 글자로 들어 있는 것을 돌려준다. 원장 전체는 읽지 않아
+  // 비용은 새 줄 수에 비례한다. 돌려주는 version은 같은 읽기 스냅샷의 마지막 사건 번호라 다음 확인은 거기서 잇는다.
+  mentionedAfter(version,ids) {
+    return transaction(this.home,db=>{
+      const last=db.prepare('SELECT max(rowid) AS v FROM events').get().v??0,found=new Set();
+      // NOT INDEXED: 영역 색인을 타면 원장 영역 전체를 훑는다. rowid 범위로만 새 줄을 찾는다.
+      const rows=db.prepare(`SELECT payload FROM events NOT INDEXED WHERE rowid>? AND stream IN (${LEDGER_STREAMS.map(()=>'?').join(',')})`);
+      for(const {payload} of rows.iterate(version,...LEDGER_STREAMS))for(const id of ids)if(payload.includes(id))found.add(id);
+      return {version:last,ids:found};
+    },{readOnly:true});
+  }
+  // 업무 마감 전용: 여러 장을 done으로 닫는다. update를 장마다 부르면 담당 확인용 원장 전체 읽기가 장수만큼 든다.
+  // items [{key,revision,role,note}]의 role은 호출자가 닫을 카드를 정할 때 읽은 원장으로 계산한 담당(인계 반영)이고,
+  // version은 그 판정을 저장한 트랜잭션 안에서 적은 storageVersion이다. 그 뒤에 붙은 원장 줄에 카드의 짧은 ID가 있으면
+  // (새 발령·완료·인계 등) 닫지 않는다. 넓게 잡으므로 틀리면 카드가 열린 채 남는 쪽이다. version이 없으면 아무것도 닫지 않는다.
+  // 쓰기 잠금 안에서는 원장 버전만 비교한다. 다르면 아무것도 쓰지 않고 잠금을 놓은 뒤 새 줄만 읽고 다시 들어간다(7b7865de와 같은 방식).
+  // 카드마다 따로 저장해 한 장의 실패가 다른 장을 되돌리지 않는다. 저장하는 기록은 update와 같은 코드가 만든다. 던지지 않는다.
+  // guard(key)는 카드마다 쓰기 직전, 같은 쓰기 잠금 안에서 부른다. 던지면 그 이유로 닫지 않는다. 원장처럼 큰 것은 읽지 않는다.
+  closeDone(items,{version,by='사람',guard}={}) {
+    const out={closed:[],failed:[]},ids=items.map(item=>shortId(item.key)),mentioned=new Set();
+    let seen=version;
+    for(const {key,revision,role,note} of items) {
+      try {
+        if(!Number.isInteger(seen))throw new Error('마감 판정 시점의 원장 버전이 없어 닫지 않음');
+        let written=null;
+        for(let attempt=0;!written;attempt++) {
+          written=this.locked(()=>{
+            if(storageVersion(this.home)!==seen)return null;
+            const current=this.get(key,{body:false});
+            if(isEnded(current.status))return {closed:false,version:seen};
+            guard?.(key);
+            // 손으로 고친 카드는 update의 revision 거절이 먼저다.
+            if(current.revision===revision&&mentioned.has(shortId(key)))
+              throw new Error('마감 판정 뒤 이 카드의 새 원장 기록(발령·완료·인계·우편 등)이 생겨 닫지 않음');
+            this.update(key,{status:'done'},{revision,by,note,[KNOWN_ROLE]:()=>role});
+            return {closed:true,version:storageVersion(this.home)};
+          });
+          if(written)break;
+          if(attempt>=CLOSE_RECHECKS)throw new Error('원장에 새 기록이 계속 붙어 확인을 마치지 못해 닫지 않음');
+          const later=this.mentionedAfter(seen,ids);
+          seen=later.version;
+          for(const id of later.ids)mentioned.add(id);
+        }
+        seen=written.version;
+        if(written.closed)out.closed.push(key);
+      } catch(error) { out.failed.push({key,reason:error.message}); }
+    }
+    return out;
   }
   link(key) {
     return this.locked(()=>{

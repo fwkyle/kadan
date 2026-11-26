@@ -31,7 +31,9 @@ export function buildWorkStatus(home, workKey, {summary = ''} = {}) {
     const all = work.executions.map(x => ({x, card: center.cards.find(c => c.key === x.key)}));
     const isOpen = ({card}) => !card || card.ambiguous || !closableExecution(card);
     const open = all.filter(isOpen);
-    failed = all.filter(x => !isOpen(x) && x.card.displayState === 'failed').length;
+    // 실패 수는 실행 기록(runs) 기준이다: 업무 마감이 실패한 실행 카드를 done으로 닫아도 남는다. 취소·대체로 정리한 카드는 세지 않는다.
+    failed = all.filter(x => !isOpen(x) && ['done', 'failed'].includes(x.card.displayState)
+      && x.card.runs.some(r => r.state === 'failed')).length;
     hidden = Math.max(0, open.length - MAX_LISTED);
     running = open.slice(0, MAX_LISTED).map(({x, card}) =>
       `- ${workPhases[x.phase] ?? x.phase} ${x.round}라운드 · ${cut(card?.role || '역할 미정', 60)} · ${stateText(card)}`);

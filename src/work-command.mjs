@@ -10,6 +10,7 @@ import {DecisionStore} from './decisions.mjs';
 import {isUserActor} from './actors.mjs';
 import {latestPassReview} from './merge-check.mjs';
 import {closeWorkRoles} from './work-role-cleanup.mjs';
+import {cardCloseLines} from './work-card-close.mjs';
 
 const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 
@@ -83,6 +84,7 @@ export function workCommand(args,flags,context){
  finally{if(STATUS_ACTIONS.has(args[0])&&args[1]&&!flags.help)refreshWorkStatus(context.home,args[1]);}
  chatDecisionsAfter(args,flags,context,revisionBefore,failure);
  if(failure)throw failure;
+ for(const line of cardCloseLines(result?.cardClose))process.stderr.write(`${line}\n`);
  return closeRolesAfterComplete(args,flags,context,result);
 }
 
