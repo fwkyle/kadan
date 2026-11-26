@@ -26,6 +26,7 @@ import { readTheme, saveTheme, THEME_LABEL, THEME_ORDER } from "./theme";
 import Comms from "./Comms";
 import RepoSidebar from "./RepoSidebar";
 import { carryRepo, repoHref } from "./repo-nav";
+import { keepsNotice } from "./save-notice";
 const Status = lazy(() => import("./pages/Status")),
   Workspace = lazy(() => import("./pages/Workspace")),
   Decisions = lazy(() => import("./pages/Decisions")),
@@ -117,7 +118,7 @@ export default function App() {
       (links.find(([key]) => key === view)?.[1] || "작업") + " · 카단";
   }, [view]);
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || keepsNotice(notice)) return;
     const timer = setTimeout(() => setNotice(""), 7000);
     return () => clearTimeout(timer);
   }, [notice]);

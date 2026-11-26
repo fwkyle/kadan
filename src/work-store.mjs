@@ -2,13 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {isUserActor} from './actors.mjs';
 import {randomUUID} from 'node:crypto';
-import {assertWritable,storageMode,storageSnapshot,transaction,readStream,appendStream,listStreams} from './storage.mjs';
+import {assertWritable,storageMode,storageSnapshot,storageVersion,transaction,readStream,appendStream,listStreams} from './storage.mjs';
 import {CardStore, checkDifficulty} from './card-store.mjs';
 import {buildCardCenter} from './card-center.mjs';
 import {readLedger} from './ledger.mjs';
 import {effectiveWorkOwner} from './handover-state.mjs';
 import {readWatchWorkSummaries} from './work-watch-summary.mjs';
 import {parseWaitUntil,WAIT_UNTIL_FORMAT} from './wait-until.mjs';
+import {planCardClose,closeWorkCards} from './work-card-close.mjs';
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 끝이 아니다(status-labels.mjs·docs/card-center.md).
@@ -58,7 +59,16 @@ export class WorkStore {
    appendStream(this.home,stream,record);return this.get(key);
   });
  }
- change(key,action,fields,opts={}){return this.locked(()=>this.#change(this.get(key),action,fields,opts));}
+ // 마감(complete·cancel)은 업무 기록이 저장된 뒤, 잠금 밖에서 그 업무의 열린 실행 카드를 닫고 결과를 cardClose로 더한다.
+ // CLI와 대시보드 마감이 같은 길이다. 카드 닫기가 실패해도 마감은 되돌리지 않는다(cardClose.failed).
+ change(key,action,fields,opts={}){
+  let close=null;
+  const onClosePlan=(plan,version)=>{close={plan,version};};
+  const saved=this.locked(()=>this.#change(this.get(key),action,fields,{...opts,onClosePlan}));
+  if(!close)return saved;
+  const cardClose=closeWorkCards(this.home,close.plan,{workKey:key,action,by:opts.by??'사람',version:close.version});
+  return {...saved,cardClose};
+ }
  // 우편 차례 반환 전용: 잠금 안에서 읽은 최신 업무로 decide가 {turnOwner,by,note}를 정하면 그 revision을 명시해 turnOwner만 쓴다.
  // 던지면 쓰지 않는다. revision 검사를 건너뛰는 길이 아니라, 잠금 안에서 읽은 값으로 검사하는 꼴이다(공개 change를 잠금 안에 다시 부르면 이중 잠금).
  changeTurnOwner(key,decide){
@@ -67,13 +77,14 @@ export class WorkStore {
    return this.#change(current,'update',{turnOwner},{revision:current.revision,by,note});
   });
  }
- #change(current,action,fields,{revision,by='사람',note}={}){
+ #change(current,action,fields,{revision,by='사람',note,onClosePlan}={}){
   {
    const {history,...old}=current,key=current.key;
    if(Number(revision)!==current.revision)throw new Error('업무가 변경됨: 새로 읽고 다시 저장');
    note=required(note,'변경 이유');
    const next={...old,executions:old.executions.map(x=>({...x})),mailRefs:[...old.mailRefs],revision:old.revision+1,at:new Date().toISOString(),by,note,action};
    if(['done','cancelled'].includes(old.status)&&action!=='reopen')throw new Error('종료한 업무입니다. 이유를 남기고 다시 열어주세요');
+   let closePlan=null;
    if(action==='update'){
     const {waitUntil,...plain}=fields;
     for(const [field,value] of Object.entries(plain)){
@@ -122,19 +133,25 @@ export class WorkStore {
     if(matches.length!==1)throw new Error('고유한 우편 ID 필요: 우편 없음 또는 같은 본문으로 여러 번 보냄');
     if(!next.mailRefs.includes(fields.mail))next.mailRefs.push(fields.mail);
    }else if(action==='complete'||action==='cancel'||action==='reopen'){
-    if(!(isUserActor(by)||by===effectiveWorkOwner(current,readLedger(this.home))))throw new Error('책임 감독 또는 사용자가 업무의 최종 결과를 확인해야 합니다');
+    // 담당 확인과 마감 관문이 같은 원장을 쓴다(마감 한 번에 원장 전체 읽기 한 번).
+    let ledger=null;const ledgerOnce=()=>ledger??=readLedger(this.home);
+    if(!(isUserActor(by)||by===effectiveWorkOwner(current,ledgerOnce())))throw new Error('책임 감독 또는 사용자가 업무의 최종 결과를 확인해야 합니다');
     if(action==='reopen'){
      if(!['done','cancelled'].includes(old.status))throw new Error('종료한 업무만 다시 열 수 있습니다');
      next.status='open';next.result='';next.turnOwner=old.owner;delete next.waitUntil;delete next.waitUntilSetAt;next.turnAt=next.at;next.turnBy=by;
     }else{
-     const cards=new CardStore(this.home).list(),entries=readLedger(this.home);
+     const cards=new CardStore(this.home).list(),entries=ledgerOnce();
      const center=buildCardCenter({cards,entries,tree:[],runtimeKnown:false});
      const unresolved=old.executions.filter(x=>{const card=center.cards.find(c=>c.key===x.key);return !card||card.ambiguous||!closableExecution(card);});
      if(unresolved.length)throw new Error(`끝나지 않은 실행 ${unresolved.length}건: ${unresolved.slice(0,3).map(x=>remainingText(x,center.cards.find(c=>c.key===x.key))).join(', ')}${unresolved.length>3?` 외 ${unresolved.length-3}건`:''}. 실행을 마치거나 취소하고, 담당을 바꿨다면 명시 인계 또는 완료 확정(kadan done)을 한 뒤 업무 결과를 확인하세요`);
      next.result=required(fields.result,'최종 결과와 확인 근거');next.status=action==='complete'?'done':'cancelled';next.turnOwner='';delete next.waitUntil;delete next.waitUntilSetAt;
+     closePlan=planCardClose(old.executions,center.cards);
     }
    }else throw new Error('알 수 없는 업무 변경');
-   appendStream(this.home,keyStream(key),next);return this.get(key);
+   appendStream(this.home,keyStream(key),next);
+   // 버전은 업무 기록을 쓴 뒤 같은 트랜잭션 안에서 적는다: 커밋 전에는 끼어들 수 없고, 그 뒤에 붙는 줄은 모두 버전을 올린다.
+   if(closePlan)onClosePlan?.(closePlan,storageVersion(this.home));
+   return this.get(key);
   }
  }
 }

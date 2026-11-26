@@ -5,6 +5,7 @@ import { cardUrl, navigate } from "./navigation";
 import { save } from "./resource";
 import { radioChecked } from "./form-state";
 import { lastReadLabel } from "./freshness-label";
+import { saveNotice } from "./save-notice";
 import type { SaveResult } from "./resource";
 import type { Field, FormSpec, Row } from "./types";
 
@@ -323,7 +324,7 @@ function ActionFormInner({
           setDirty(false);
           context.draft(id, false);
           setRevision(result.result.revision);
-          context.notice("저장했습니다.");
+          context.notice(saveNotice(result.result));
           if (onSaved) onSaved(result);
           else if (spec.action.endsWith("/create"))
             navigate(result.location, false, true);
