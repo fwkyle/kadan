@@ -77,8 +77,10 @@ export function stoppedRoles(center, roles) {
     .map((r) => r.role).sort((a, b) => a.localeCompare(b, "ko"));
 }
 // 역할이 든 일(미완료 카드·업무·발령)의 이유. 관계표 정리와 같은 함수(hierarchy-prune.mjs heldRoles)라 기준이 갈리지 않는다.
-// 비용: 카드·업무 목록 한 번 + 원장 사건 한 번 훑기. 원장·카드·업무 배열이 직전과 같으면 다시 계산하지 않는다(시각을 읽지 않는다).
-// 원장이 10배면 다시 계산할 때의 훑기도 10배다(운영 실측은 결과 문서). 원장·업무를 못 읽으면 null.
+// 비용: 카드·업무 목록 한 번 + 원장 사건 한 번 훑기. 원장·카드·업무 배열이 직전과 같을 때만 다시 계산하지 않는다 —
+// 원장 배열은 사건이 붙을 때마다 새 배열이라, 사건이 계속 붙는 운영에서는 수집마다 다시 계산될 수 있다.
+// 가짜 원장 실측(2026-11-26): 사건 14만 건 약 46ms, 10배(140만 건) 약 0.4초·임시 메모리 약 150MB. 운영 원장으로는 재지 않았다.
+// 정리와 같은 입력·같은 함수를 지키려고 원장을 미리 거르지 않는다. 원장·업무를 못 읽으면 null.
 function heldReasons(snapshot, ledger, roles) {
   const works = registeredCenterWorks(snapshot).works, cards = snapshot.center?.cards;
   if (snapshot.ledgerLines === null || !Array.isArray(works) || !Array.isArray(cards)) return null;
@@ -124,7 +126,6 @@ export function statusData(snapshot, url, stamp, m) {
   // 대상은 지도에 오를 수 있는 역할(관계표·열린 실행 담당·경보 대상)로 좁힌다 — 원장의 모든 과거 역할을 싣지 않는다.
   const mapRoles = new Set([...Object.keys(m.hierarchy ?? {}), ...statusRows.map((r) => r.owner).filter(Boolean), ...(allAlerts?.items ?? []).map((a) => a.role)]);
   const stopped = stoppedRoles(snapshot.center, mapRoles);
-  const held = heldReasons(snapshot, ledger, mapRoles);
   const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles, stopped });
   // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
   // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
@@ -162,6 +163,8 @@ export function statusData(snapshot, url, stamp, m) {
   // ?repo=<저장소>(PR2 사이드 탭): 행·워크·결정·경보·최근·첫 화면 띠를 그 저장소로 거른다. ?super=가 있으면 위에서 이미 돌려줬으므로 무시된다.
   // 사이드 탭 목록(sidebar)은 거르기 전 전체로 만든다(저장소를 고른 뒤에도 다른 저장소로 옮길 수 있어야 한다).
   const repo = url.searchParams.get("repo") || null;
+  // ?super= 응답(감독 AI가 경보마다 읽는다)은 held를 쓰지 않으므로 그 반환 뒤에서 계산한다.
+  const held = heldReasons(snapshot, ledger, mapRoles);
   const mergeCtx = mergeContext(snapshot);
   const boards = snapshot.center.boards;
   const staleCards = piece("stale-cards", [m.cards, m.rows],

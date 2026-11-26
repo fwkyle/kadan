@@ -8,7 +8,7 @@ import { AutopilotBand, AutopilotPolicyNotes, OtherGithub, RepoAutopilotHead, us
 import type { AutopilotStrip } from "../autopilot-repos";
 import { radarBlips } from "../radar-blips";
 import { ALERT_SHOWN, STOP_SHOWN, alertMore, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
-import { bandChips, liveLabel, shownSupervisors, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
+import { bandChips, isIdleSuper, liveLabel, shownSupervisors, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 import { buildMap } from "../strategy-map";
 
 // 일을 들고 있는데 stop 기록 없이 세션이 사라진 담당(레이더의 세션 사라짐 점). 일부러 끈 역할은 뺀다. 세션 상태를 모르면 비워 둔다.
@@ -73,9 +73,7 @@ const groups = [
   ["done", "완료"], ["closed", "취소·대체"],
 ];
 const OPEN_WORK_LIMIT = 8;
-// 저장소·열린 워크·작업중·막힘·결정·경보가 모두 0인 슈퍼감독 줄은 한 줄로 합친다. 하나라도 있으면 늘 보인다.
-const isIdleSuper = (s: Supervisors["items"][number]) =>
-  s.repos.length === 0 && s.openWorks === 0 && s.running === 0 && s.stuck === 0 && s.decisions === 0 && s.alerts === 0;
+// 저장소·열린 워크·작업중·막힘·결정·경보가 모두 0인 슈퍼감독 줄(status-band.ts isIdleSuper)은 한 줄로 합친다. 하나라도 있으면 늘 보인다.
 const busySupers = (items: Supervisors["items"]) => items.filter(s => !isIdleSuper(s));
 const idleSupers = (items: Supervisors["items"]) => items.filter(isIdleSuper);
 export default function Status({url}: {url: URL}) {

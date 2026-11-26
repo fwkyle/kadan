@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandChips, liveLabel, supervisorLife, supervisorLine, shownSupervisors } from "../src/status-band.ts";
+import { bandChips, liveLabel, supervisorLife, supervisorLine, isIdleSuper, shownSupervisors } from "../src/status-band.ts";
 
 const base = { decisions: 0, stopped: 0, running: 0, alerts: { count: 0, items: [] }, flow: { total: 0, unconfirmedCount: 0, unconfirmed: [] }, live: [] };
 
@@ -43,10 +43,15 @@ test("슈퍼감독 한 줄: 숫자 칸 순서와 모름, 생존 칸", () => {
   assert.equal(supervisorLife({ ...s, model: null }), "살아 있음");
   assert.equal(supervisorLife({ ...s, alive: false }), "세션 사라짐");
   assert.equal(supervisorLife({ ...s, alive: false, stopped: true }), "꺼짐 · 인계 필요");
-  // 일부러 껐고 전략 맵에도 없는 슈퍼감독만 줄에서 뺀다. 사라진 세션·지도에 남은 꺼진 역할·세션 모름은 남긴다.
-  const items = [{ ...s, super: "살아" }, { ...s, super: "끈-빈손", alive: false, stopped: true }, { ...s, super: "끈-인계", alive: false, stopped: true },
-    { ...s, super: "사라짐", alive: false }, { ...s, super: "모름", alive: null, stopped: false }];
-  assert.deepEqual(shownSupervisors(items, new Set(["살아", "끈-인계"])).map((x) => x.super), ["살아", "끈-인계", "사라짐", "모름"]);
+  // 일부러 껐고 전략 맵에도 없고 숫자도 전부 0인 슈퍼감독만 줄에서 뺀다. 사라진 세션·지도에 남은 꺼진 역할·세션 모름은 남긴다.
+  // 결정·하위의 열린 워크처럼 지도에 역할을 올리지 않는 것이 남은 줄(숫자가 0이 아님)과 모르는 칸이 있는 줄은 숨기지 않는다.
+  const none = { ...s, repos: [], running: 0, stuck: 0, openWorks: 0, decisions: 0, alerts: 0, alive: false, stopped: true };
+  assert.equal(isIdleSuper(none), true);
+  const items = [{ ...s, super: "살아" }, { ...none, super: "끈-빈손" }, { ...none, super: "끈-인계" }, { ...none, super: "끈-결정", decisions: 1 },
+    { ...none, super: "끈-하위워크", openWorks: 2 }, { ...none, super: "끈-결정모름", decisions: null },
+    { ...none, super: "사라짐", stopped: false }, { ...none, super: "모름", alive: null, stopped: false }];
+  assert.deepEqual(shownSupervisors(items, new Set(["살아", "끈-인계"])).map((x) => x.super),
+    ["살아", "끈-인계", "끈-결정", "끈-하위워크", "끈-결정모름", "사라짐", "모름"]);
   assert.equal(supervisorLife({ ...s, alive: null }), "세션 모름");
 });
 

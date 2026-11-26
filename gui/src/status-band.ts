@@ -59,10 +59,14 @@ export function supervisorLife(s: SupervisorSummary): string {
   if (!s.alive) return s.stopped ? "꺼짐 · 인계 필요" : "세션 사라짐";
   return s.model ? `살아 있음 · ${s.model}` : "살아 있음";
 }
-// 슈퍼감독별 현황에 보일 줄: 일부러 껐고 전략 맵에도 없는(든 일·경보·보이는 하위가 없는) 슈퍼감독은 뺀다.
+// 저장소·열린 워크·작업중·막힘·결정·경보가 모두 0인 슈퍼감독 줄. 현황 화면이 "일 없는 슈퍼감독" 한 줄로 합친다.
+export const isIdleSuper = (s: SupervisorSummary) =>
+  s.repos.length === 0 && s.openWorks === 0 && s.running === 0 && s.stuck === 0 && s.decisions === 0 && s.alerts === 0;
+// 슈퍼감독별 현황에 보일 줄: 일부러 껐고 전략 맵에도 없고(든 일·경보·보이는 하위가 없음) 줄의 숫자도 전부 0인 슈퍼감독만 뺀다.
+// 결정·하위의 열린 워크처럼 지도에 역할을 올리지 않는 것이 남아 있으면(숫자가 0이 아니면) 줄을 숨기지 않는다. 모르는 칸(null)도 숨기지 않는다.
 // onMap은 전략 맵(buildMap)에 오른 역할 이름이다 — "든 일" 기준을 여기서 다시 세지 않는다.
 export function shownSupervisors(items: SupervisorSummary[], onMap: ReadonlySet<string>): SupervisorSummary[] {
-  return items.filter((s) => !(s.alive === false && s.stopped && !onMap.has(s.super)));
+  return items.filter((s) => !(s.alive === false && s.stopped && !onMap.has(s.super) && isIdleSuper(s)));
 }
 
 // 담당 한 줄: 역할 · 실행기/모델/강도. 모델을 모르면 '모델 기록 없음'.
