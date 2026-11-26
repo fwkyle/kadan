@@ -114,13 +114,16 @@ kadan work create 저장소/work-product-photos \
   --goal '등록 제품에서 사진을 확인할 수 있다' \
   --scope '등록 제품 전체' \
   --acceptance '생성·제품 연결·누락 검수와 화면 확인' \
-  --owner 제품-감독 --board 제품 --repo-path /절대/저장소/경로
+  --owner 제품-감독 --board 제품 --repo-path /절대/저장소/경로 \
+  [--preset <프리셋>]
 
 kadan work execute 저장소/work-product-photos \
   --revision 1 --phase implementation --round 1 \
   --title '제품 사진 생성' --body-file /절대/실행지시.md \
   --note '전체 업무 안의 생성 실행'
 ```
+
+특정 프리셋으로 돌릴 업무는 `create`나 `update`에 `--preset <프리셋>`을 적는다(`runner-settings.json`에 없는 프리셋이나 빈 값은 종료 코드 2로 거절, `work update ... --preset ""`은 지정 비우기). 지정된 업무의 역할은 `kadan start ... --work <업무키>`(또는 `--preset <프리셋>`)로 그 프리셋 값으로 띄우며 발령 검사(`runnerGuard`)도 그 프리셋을 기준으로 본다([업무별 프리셋 지정](runner-settings.md#업무별-프리셋-지정)).
 
 `create` 응답(JSON)에는 `ownerOpenWorks`가 더해진다. 책임 감독의 열린 업무 수이고 방금 만든 업무를 포함한다. 사람이 읽는 한 줄(`책임 감독 ○○의 열린 업무 N건 (이 업무 포함)`)은 stderr에만 나가 stdout JSON을 읽는 쪽을 깨지 않는다. 숫자는 원장에 적힌 `owner` 기준이며 인계(`withEffectiveOwner`) 반영 전 값이다. 숫자는 참고만 하고, 새 일반감독 배정은 [슈퍼감독 지침 `판 열기` 2번](../skills/kadan-super/SKILL.md#판-열기-슈퍼감독-고유-규칙)의 기준(진행 중인 큰 업무 유무, 보류·시간 대기 제외)을 따른다.
 

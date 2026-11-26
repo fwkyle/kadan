@@ -11,7 +11,7 @@ import {effectiveCardRole} from './handover-state.mjs';
 import {checkFamilies,readSettings} from './runner-settings.mjs';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
-const workStamp=w=>hash(JSON.stringify([w.goal,w.scope,w.acceptance,w.owner,w.board,w.repoPath]));
+const workStamp=w=>hash(JSON.stringify([w.goal,w.scope,w.acceptance,w.owner,w.board,w.repoPath,...(w.preset?[w.preset]:[])]));
 const cardStamp=c=>hash(JSON.stringify([c.body,c.scope,c.repoPath]));
 const terminal=['pass','exception','boundary','limit'];
 const closed=['done','cancelled','superseded','archived'];

@@ -10,9 +10,10 @@ import {
 import { composeMailInstructions } from "./mail-instructions.mjs";
 import { mailHeaderLine } from "./mail-header.mjs";
 import { CardStore } from "./card-store.mjs";
+import { WorkStore } from "./work-store.mjs";
 import { resolveWorkMail } from "./work-mail.mjs";
 import { inspectCardSendIdentity } from "./ai-identity.mjs";
-import { inspectDispatchRunnerGuard } from "./dispatch-runner-guard.mjs";
+import { inspectDispatchRunnerGuard, resolveGuardPreset } from "./dispatch-runner-guard.mjs";
 import { readSettings } from "./runner-settings.mjs";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -146,7 +147,23 @@ export function guardedSend({
     // 발령 기록의 난이도: 발령 순간의 카드 값을 고정한다. 받는 쪽이 작업자 프로필일 때만 적고, 카드를 못 찾았으면 적지 않는다.
     // 카드는 위 카드 단계 대조가 이미 찾은 것이다(새 조회 없음).
     if (phase?.cardDifficulty === "hard" && guardProfile === "worker") cardDifficulty = "hard";
-    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, phaseProfile, allowOldRunner });
+    // 연결된 업무가 지정한 프리셋을 구한다. workKey가 있으면 해당 업무 1건만 읽고(O(1)), executionKey만 있으면 연결 업무를 찾는다.
+    let workPreset = null, hasWork = false;
+    try {
+      const works = new WorkStore(home);
+      let work = null;
+      if (mailContext?.workKey) {
+        work = works.get(mailContext.workKey);
+      } else if (mailContext?.executionKey) {
+        const linked = works.listLatest().filter(w => w.executions.some(e => e.key === mailContext.executionKey));
+        if (linked.length === 1) work = linked[0];
+      }
+      if (work) {
+        hasWork = true;
+        if (work.preset) workPreset = work.preset;
+      }
+    } catch { /* 업무를 못 읽으면 미연결로 두고 기존 검사를 따른다 */ }
+    runnerGuard = inspectDispatchRunnerGuard({ home, role, session, identity, profile: guardProfile, phaseProfile, allowOldRunner, workPreset, hasWork });
     if (runnerGuard.result === "reject") {
       const error = new Error(runnerGuard.message);
       error.code = "KADAN_STALE_RUNNER";
@@ -157,11 +174,16 @@ export function guardedSend({
     // 어려움 카드를 어려운 일 세션이 아닌 작업자에게 보낸다: 막지 않고 경고와 기록만 남긴다. 어려운 일 자리를 안 쓰면(비어 있으면) 정상이라 조용하다.
     // 이 경로(어려움 카드 + 보통 세션)에서만 설정 파일 하나를 읽는다. 발령 검사의 판정·문구는 건드리지 않는다.
     if (cardDifficulty === "hard" && identity.launch.difficulty !== "hard") {
-      let slotFilled = false;
-      try { const settings = readSettings(home); slotFilled = Boolean(settings?.presets?.[settings.activePreset]?.roles?.["worker-hard"]); } catch { /* 설정을 못 읽으면 경고하지 않는다 */ }
+      let slotFilled = false, presetFlag = "";
+      try {
+        const settings = readSettings(home);
+        const { preset, pinnedKind } = resolveGuardPreset({ settings, identity, workPreset, hasWork });
+        slotFilled = Boolean(preset && settings?.presets?.[preset]?.roles?.["worker-hard"]);
+        if ((pinnedKind === "work" || pinnedKind === "session") && preset) presetFlag = ` --preset ${preset}`;
+      } catch { /* 설정을 못 읽으면 경고하지 않는다 */ }
       if (slotFilled) {
         difficultyMismatch = true;
-        console.error(`경고: 어려움 카드(${taskId})를 어려운 일 작업자가 아닌 ${session}에 보낸다 — 조치: kadan start <새 역할> --profile worker --difficulty hard로 새 작업자를 띄워 보내라 (발령은 그대로 간다)`);
+        console.error(`경고: 어려움 카드(${taskId})를 어려운 일 작업자가 아닌 ${session}에 보낸다 — 조치: kadan start <새 역할> --profile worker --difficulty hard${presetFlag}로 새 작업자를 띄워 보내라 (발령은 그대로 간다)`);
       }
     }
   }

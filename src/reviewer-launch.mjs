@@ -2,14 +2,27 @@
 import {inspectCardSendIdentity, launchIdentityOf} from './ai-identity.mjs';
 import {checkChoice, launchFor, launchForFallback, modelFamily} from './runner-settings.mjs';
 
-export function reviewerLaunch({settings, entries, workerRole, workerSession, currentPid}) {
+export function reviewerLaunch({settings, entries, workerRole, workerSession, currentPid, preset: explicitPreset}) {
   const identity = inspectCardSendIdentity({entries, session: workerSession, currentPid});
   if (!identity.ok) throw new Error(`검수자 시작 거절: 작업자 실행 모델 확인 실패 — ${identity.message}`);
   const family = modelFamily(identity.model, settings?.families);
   if (!family) throw new Error(`검수자 시작 거절: 작업자 ${identity.model}의 계열을 모른다`);
-  const presetName = identity.launch.compareMode ? identity.launch.settingsPreset : settings?.activePreset;
-  const preset = settings?.presets[presetName];
-  if (!preset?.roles.reviewer) throw new Error('검수자 시작 거절: 검수자 1순위 설정이 없다');
+  const workerPinned = identity.launch.compareMode
+    ? identity.launch.settingsPreset
+    : identity.launch.presetSource && identity.launch.settingsPreset ? identity.launch.settingsPreset : null;
+  if (explicitPreset && workerPinned && explicitPreset !== workerPinned) {
+    throw new Error(`검수자 시작 거절: 지정 프리셋(${explicitPreset})이 작업자 ${workerRole}의 프리셋(${workerPinned})과 다르다`);
+  }
+  const presetName = explicitPreset ?? workerPinned ?? settings?.activePreset;
+  const preset = presetName && settings?.presets && Object.hasOwn(settings.presets, presetName)
+    ? settings.presets[presetName] : null;
+  if (!preset) {
+    if (explicitPreset || workerPinned) throw new Error(`검수자 시작 거절: 없는 프리셋: ${presetName}`);
+    throw new Error('검수자 시작 거절: 검수자 1순위 설정이 없다');
+  }
+  if (!preset.roles.reviewer) throw new Error('검수자 시작 거절: 검수자 1순위 설정이 없다');
+  const inheritedFromWorker = !explicitPreset && !identity.launch.compareMode
+    && Boolean(identity.launch.presetSource && workerPinned);
   const candidates = [preset.roles.reviewer, ...(preset.fallback?.reviewer ?? [])];
   const skipped = [];
   for (const [index, value] of candidates.entries()) {
@@ -32,8 +45,12 @@ export function reviewerLaunch({settings, entries, workerRole, workerSession, cu
     catch (error) { skipped.push(`${candidate.model}: ${error.message}`); continue; }
     return {
       ...candidate,
-      ...(identity.launch.compareMode && index === 0
+      ...(identity.launch.compareMode && !explicitPreset && index === 0
         ? {compareMode: true, pickId: identity.launch.pickId} : {}),
+      ...(inheritedFromWorker ? {
+        presetSource: 'review-for',
+        ...(identity.launch.presetWorkKey ? {presetWorkKey: identity.launch.presetWorkKey} : {}),
+      } : {}),
       reviewFor: {role: workerRole, session: workerSession, panePid: String(currentPid),
         model: identity.model, family, reviewerModel: parsed.model, reviewerFamily: other,
         reason: `작업자 ${identity.model}(${family})와 다른 계열 ${other} 선택`, skipped},
