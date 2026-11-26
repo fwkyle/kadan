@@ -2,8 +2,8 @@
 // '오래된 미확정'으로 띄웠다(2026-11-26). 마감이 저장된 뒤 그 업무에 연결된 열린 실행 카드만 done으로 닫는다.
 // 카드 상태에는 failed가 없어 실패한 실행도 done이고, 원장 결과는 메모(상태 이유)와 실행 기록에 남는다.
 //
-// 비용: 계획은 마감 관문이 이미 계산한 카드 센터를 써서 추가 읽기가 없다. 닫기는 카드 한 장마다 card update 한 번이고,
-// card update는 담당 확인용으로 원장 전체와 카드 요약 목록을 읽는다(원장·카드가 10배면 장당 시간도 약 10배).
+// 비용: 계획과 담당은 마감 관문이 이미 읽은 원장·카드로 만들고, 닫기는 원장 전체를 다시 읽지 않는다(card-store.mjs closeDone).
+// 카드 한 장마다 그 카드 이력만 읽고 한 줄을 쓴다. 판정 뒤 원장에 줄이 붙었으면 그 새 줄만 읽는다.
 // 마감 명령 한 번에만 돌고 주기 경로에는 없다.
 import {CardStore} from './card-store.mjs';
 import {isEnded} from './status-labels.mjs';
@@ -19,24 +19,20 @@ export function planCardClose(executions,cards){
   return executions.flatMap(({key})=>{
     const card=byKey.get(key);
     if(isEnded(card.status))return [];
-    return [{key,from:card.status,revision:card.revision,result:card.displayState==='failed'?'failed':'ok',
+    return [{key,from:card.status,revision:card.revision,role:card.role,result:card.displayState==='failed'?'failed':'ok',
       runs:card.runs.map(run=>`${run.role} ${run.state==='failed'?'failed':'ok'}`)}];
   });
 }
 
 // 던지지 않는다. 업무 마감은 이미 저장됐으므로 닫지 못한 카드는 이유와 함께 돌려준다.
-// 계획 때의 revision으로만 쓴다: 그 사이 바뀐 카드는 덮어쓰지 않는다. 이미 닫힌 카드는 기록 없이 넘어간다.
-export function closeWorkCards(home,plan,{workKey,action,by}){
-  const store=new CardStore(home),out={closed:[],failed:[]};
-  for(const {key,from,revision,result,runs} of plan){
-    try{
-      if(isEnded(store.get(key,{body:false}).status))continue;
-      store.update(key,{status:'done'},{revision,by,
-        note:`업무 ${workKey} ${ACTION_LABEL[action]} 마감으로 자동 닫음 · 원장 결과 ${result} (${runs.join(' · ')})`});
-      out.closed.push({key,from,result});
-    }catch(error){out.failed.push({key,reason:error.message});}
-  }
-  return out;
+// 계획 때의 revision과 원장 버전으로만 닫는다: 그 사이 카드가 바뀌었거나 그 카드의 새 원장 기록이 생겼으면 닫지 않는다.
+// 이미 닫힌 카드는 기록 없이 넘어간다.
+export function closeWorkCards(home,plan,{workKey,action,by,version}){
+  const items=plan.map(({key,revision,role,result,runs})=>({key,revision,role,
+    note:`업무 ${workKey} ${ACTION_LABEL[action]} 마감으로 자동 닫음 · 원장 결과 ${result} (${runs.join(' · ')})`}));
+  const {closed,failed}=new CardStore(home).closeDone(items,{version,by});
+  const written=new Set(closed);
+  return {closed:plan.filter(p=>written.has(p.key)).map(({key,from,result})=>({key,from,result})),failed};
 }
 
 // CLI가 stderr에 보이는 줄. 전체 목록은 JSON의 cardClose에 있다.
@@ -46,7 +42,8 @@ export function cardCloseLines(cardClose){
   if(closed.length)lines.push(`실행 카드 ${closed.length}장 닫음: ${listed(closed,c=>`${c.key}(${c.result})`)}`);
   if(failed.length){
     lines.push(`실행 카드 닫기 실패 ${failed.length}장(업무 마감은 기록됨): ${listed(failed,f=>`${f.key} — ${f.reason}`)}`);
-    lines.push('  카드 상태를 확인한 뒤 직접 닫기: kadan card update <카드키> --revision <최신> --status done --note <이유>');
+    lines.push('  새 기록이 생겨 닫지 않은 카드는 그 실행부터 확인하세요. 닫아도 되면 직접: '
+      +'kadan card update <카드키> --revision <최신> --status done --note <이유>');
   }
   return lines;
 }

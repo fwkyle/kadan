@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
+import {createDatabase, storageVersion, writeStorageMarker} from '../src/storage.mjs';
 import {WorkStore} from '../src/work-store.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {appendLedger, readLedger} from '../src/ledger.mjs';
@@ -15,6 +15,9 @@ import {workCommand} from '../src/work-command.mjs';
 import {recentExecutionEvents} from '../src/dashboard-status.mjs';
 import {dashboardData} from '../src/dashboard-api.mjs';
 import {buildTree} from '../src/cli-tree.mjs';
+import {createRequire} from 'node:module';
+
+const {DatabaseSync} = createRequire(import.meta.url)('node:sqlite');
 
 // Why: 업무를 마감해도 실행 카드의 저장 상태가 assigned로 남아, 대시보드가 끝난 작업자·감독을 경보했다(2026-11-26).
 // 원장 시각은 실제 순서(배정 → 발령 → 완료 → 마감)의 현재 시각을 쓴다. 미래 시각을 쓰면 실행이 저장 상태를 늘 이겨
@@ -221,17 +224,17 @@ test('판정 뒤 카드가 바뀌면 덮어쓰지 않고, 같은 계획을 다�
   const {planCardClose, closeWorkCards} = await import('../src/work-card-close.mjs');
   const f = fixture(), moved = f.execution(), still = f.execution();
   const center = buildCardCenter({cards: f.cards.list(), entries: readLedger(f.home), tree: [], runtimeKnown: false});
-  const plan = planCardClose(f.store.get('repo/w').executions, center.cards);
+  const plan = planCardClose(f.store.get('repo/w').executions, center.cards), version = storageVersion(f.home);
   f.patch(moved, {}, '판정 뒤 감독 메모');
-  const first = closeWorkCards(f.home, plan, {workKey: 'repo/w', action: 'complete', by: BOSS});
+  const first = closeWorkCards(f.home, plan, {workKey: 'repo/w', action: 'complete', by: BOSS, version});
   assert.deepEqual(first.closed.map(c => c.key), [still]);
   assert.equal(first.failed.length, 1);
   assert.equal(first.failed[0].key, moved);
   assert.match(first.failed[0].reason, /카드가 변경됨/);
   assert.equal(f.cards.get(moved).status, 'assigned');
   const revision = f.cards.get(still).revision;
-  assert.deepEqual(closeWorkCards(f.home, plan.filter(p => p.key === still), {workKey: 'repo/w', action: 'complete', by: BOSS}),
-    {closed: [], failed: []});
+  assert.deepEqual(closeWorkCards(f.home, plan.filter(p => p.key === still),
+    {workKey: 'repo/w', action: 'complete', by: BOSS, version}), {closed: [], failed: []});
   assert.equal(f.cards.get(still).revision, revision);
 });
 
@@ -288,4 +291,171 @@ test('업무 상태 글의 실패 수: 손으로 done 처리한 실패는 세고
   const content = buildWorkStatus(f.home, 'repo/w').content;
   assert.match(content, /실패로 끝난 실행: 1건/);
   assert.match(content, /열린 실행: 없음/);
+});
+
+// 원장 전체 읽기 한 번은 작업 영역(tasks/events.jsonl)을 처음부터 한 번 읽는다. 실제 SQL을 세서 함수 이름에 기대지 않는다.
+function countFullLedgerReads(t) {
+  const count = {reads: 0}, prepare = DatabaseSync.prototype.prepare;
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    const statement = prepare.call(this, sql);
+    if (/FROM events WHERE stream=\? ORDER BY seq/.test(sql)) {
+      const iterate = statement.iterate.bind(statement);
+      statement.iterate = (...args) => { if (args.at(-1) === 'tasks/events.jsonl') count.reads++; return iterate(...args); };
+    }
+    return statement;
+  });
+  return count;
+}
+// 닫기 단계의 두 자리에 원장 줄을 끼워 넣는다: closeDone을 부르기 직전(마감 저장 뒤), 새 줄을 읽은 직후(다음 잠금 전).
+function beforeClose(t, inject) {
+  const original = CardStore.prototype.closeDone;
+  t.mock.method(CardStore.prototype, 'closeDone', function (...args) { inject(); return original.apply(this, args); });
+}
+function afterDelta(t, inject = () => {}) {
+  const original = CardStore.prototype.mentionedAfter, count = {reads: 0};
+  t.mock.method(CardStore.prototype, 'mentionedAfter', function (...args) {
+    const result = original.apply(this, args);
+    inject(++count.reads);
+    return result;
+  });
+  return count;
+}
+const unrelated = home => appendLedger({kind: 'alert', by: 'watch', alertKind: '무관한 사건', role: 'Z'}, home);
+
+for (const actor of [BOSS, '사람']) {
+  test(`원장 전체 읽기는 닫는 카드 수와 상관없이 한 번이고, 사이에 새 줄이 없으면 새 줄 읽기도 없다 (${actor})`, t => {
+    const totals = [0, 1, 12].map(cards => {
+      const f = fixture();
+      for (let i = 0; i < cards; i++) f.execution({runs: [['A', i % 2 ? 'failed' : 'ok']]});
+      const full = countFullLedgerReads(t), delta = afterDelta(t);
+      const summaries = t.mock.method(CardStore.prototype, 'listSummaries');
+      const work = f.store.change('repo/w', 'complete', {result: '근거'},
+        {revision: f.store.get('repo/w').revision, by: actor, note: '확인'});
+      const out = [cards, work.cardClose.closed.length, full.reads, delta.reads, summaries.mock.callCount()];
+      t.mock.restoreAll();
+      return out;
+    });
+    assert.deepEqual(totals, [[0, 0, 1, 0, 0], [1, 1, 1, 0, 0], [12, 12, 1, 0, 0]]);
+  });
+}
+
+const RACES = {
+  '새 발령': (f, key) => appendLedger({kind: 'send', by: BOSS, role: 'B', taskId: key.split('/')[1], executionKey: key, digest: 'new'}, f.home),
+  '짧은 ID만 적힌 새 발령': (f, key) => appendLedger({kind: 'send', by: BOSS, role: 'B', taskId: key.split('/')[1], digest: 'short'}, f.home),
+  '새 완료 기록': (f, key) => appendLedger({kind: 'done', by: 'B', role: 'B', taskId: key.split('/')[1], executionKey: key, result: 'failed'}, f.home),
+  '새 인계': (f, key) => appendLedger({kind: 'handover', phase: 'transferred', handoverId: 'h-1', from: 'A', to: 'B', taskIds: [key], by: BOSS}, f.home),
+};
+for (const [name, inject] of Object.entries(RACES)) {
+  test(`경합: 마감 판정 뒤 ${name}이 생긴 카드는 닫지 않고 나머지만 닫는다`, t => {
+    const f = fixture(), first = f.execution(), raced = f.execution(), last = f.execution();
+    const revision = f.cards.get(raced).revision;
+    const full = countFullLedgerReads(t);
+    beforeClose(t, () => inject(f, raced));
+    const work = complete(f);
+    assert.equal(full.reads, 1);
+    t.mock.restoreAll();
+    assert.equal(work.status, 'done');
+    assert.deepEqual(work.cardClose.closed.map(c => c.key), [first, last]);
+    assert.deepEqual(work.cardClose.failed.map(c => c.key), [raced]);
+    assert.match(work.cardClose.failed[0].reason, /새 원장 기록/);
+    assert.equal(f.cards.get(raced).status, 'assigned');
+    assert.equal(f.cards.get(raced).revision, revision);
+  });
+}
+
+test('경합: 새 발령을 닫지 않으면 대시보드 판정이 그 발령을 완료로 가리지 않는다', t => {
+  const f = fixture(), raced = f.execution();
+  beforeClose(t, () => { tick(); RACES['새 발령'](f, raced); });
+  complete(f);
+  assert.equal(f.view(raced).displayState, 'unconfirmed');
+});
+
+test('경합: 새 줄을 확인한 직후, 잠금에 들어가기 전에 붙은 발령도 잡는다(잠금 안 버전 비교)', t => {
+  const f = fixture(), first = f.execution(), raced = f.execution();
+  beforeClose(t, () => unrelated(f.home));
+  const delta = afterDelta(t, n => { if (n === 1) RACES['새 발령'](f, raced); });
+  const work = complete(f);
+  assert.equal(delta.reads, 2);
+  assert.deepEqual(work.cardClose.closed.map(c => c.key), [first]);
+  assert.deepEqual(work.cardClose.failed.map(c => c.key), [raced]);
+  assert.equal(f.cards.get(raced).status, 'assigned');
+});
+
+test('상관없는 원장 줄이 끼어들면 새 줄만 한 번 읽고 모두 닫는다', t => {
+  const f = fixture(), keys = [f.execution(), f.execution(), f.execution()];
+  const full = countFullLedgerReads(t), delta = afterDelta(t);
+  beforeClose(t, () => unrelated(f.home));
+  const work = complete(f);
+  assert.deepEqual([full.reads, delta.reads], [1, 1]);
+  assert.deepEqual(work.cardClose.closed.map(c => c.key), keys);
+});
+
+test('원장에 새 줄이 계속 붙으면 정한 횟수만 다시 보고 닫지 않은 것으로 알린다', t => {
+  const f = fixture(), key = f.execution();
+  beforeClose(t, () => unrelated(f.home));
+  const delta = afterDelta(t, () => unrelated(f.home));
+  const work = complete(f);
+  assert.equal(delta.reads, 20);
+  assert.deepEqual(work.cardClose.closed, []);
+  assert.match(work.cardClose.failed[0].reason, /계속 붙어/);
+  assert.equal(f.cards.get(key).status, 'assigned');
+});
+
+test('마감과 닫기 사이에 손으로 고친 카드는 덮지 않고, 손으로 닫은 카드는 조용히 넘어간다', t => {
+  const f = fixture(), edited = f.execution(), handClosed = f.execution(), fine = f.execution();
+  const original = CardStore.prototype.closeDone;
+  let handRevision;
+  t.mock.method(CardStore.prototype, 'closeDone', function (...args) {
+    f.patch(edited, {}, '사이에 남긴 메모');
+    f.patch(handClosed, {status: 'done'}, '손으로 닫음');
+    handRevision = f.cards.get(handClosed).revision;
+    return original.apply(this, args);
+  });
+  const work = complete(f);
+  assert.deepEqual(work.cardClose.closed.map(c => c.key), [fine]);
+  assert.deepEqual(work.cardClose.failed.map(c => c.key), [edited]);
+  assert.match(work.cardClose.failed[0].reason, /카드가 변경됨/);
+  assert.equal(f.cards.get(handClosed).revision, handRevision);
+});
+
+test('판정 시점의 원장 버전이 없으면 확인할 수 없어 아무것도 닫지 않는다', () => {
+  const f = fixture(), key = f.execution();
+  const revision = f.cards.get(key).revision;
+  const out = f.cards.closeDone([{key, revision, role: 'A', note: '버전 없음'}], {by: BOSS});
+  assert.deepEqual(out.closed, []);
+  assert.match(out.failed[0].reason, /원장 버전이 없어/);
+  assert.equal(f.cards.get(key).revision, revision);
+});
+
+test('일괄 닫기가 쓰는 카드 기록은 card update로 닫은 기록과 같다(인계·계획 판·보류·차례 칸 포함)', () => {
+  const build = () => {
+    const f = fixture();
+    const handed = f.execution();
+    appendLedger({kind: 'handover', phase: 'transferred', handoverId: 'h-2', from: 'A', to: 'B', taskIds: [handed], by: BOSS}, f.home);
+    const planned = f.execution({status: 'draft'});
+    appendLedger({kind: 'plan', board: '계획에만 있는 판', taskId: planned.split('/')[1], executionKey: planned, by: BOSS}, f.home);
+    const held = f.execution({status: 'hold', runs: []});
+    f.patch(held, {nextAction: '재개 조건', resolutionOwner: 'A'}, '보류 메모');
+    tick();
+    appendLedger({kind: 'send', by: BOSS, role: 'A', taskId: held.split('/')[1], executionKey: held, digest: 'held'}, f.home);
+    appendLedger({kind: 'done', by: 'A', role: 'A', taskId: held.split('/')[1], executionKey: held, result: 'failed'}, f.home);
+    const turned = f.execution();
+    f.patch(turned, {turnOwner: 'A'}, '차례 지정');
+    tick();
+    return {f, keys: [handed, planned, held, turned]};
+  };
+  const comparable = (f, key) => {
+    const {history, body, path: bodyPath, resultPath, evidenceDir, key: own, id, at, repoPath, ...rest} = f.cards.get(key);
+    return rest;
+  };
+  const batch = build(), manual = build();
+  assert.equal(complete(batch.f).cardClose.closed.length, 4);
+  batch.keys.forEach((key, i) => {
+    const {note, by} = batch.f.cards.get(key);
+    const twin = manual.keys[i];
+    manual.f.cards.update(twin, {status: 'done'}, {revision: manual.f.cards.get(twin).revision, by, note});
+    assert.deepEqual(comparable(batch.f, key), comparable(manual.f, twin), `${i}번째 카드`);
+  });
+  assert.equal(batch.f.cards.get(batch.keys[0]).role, 'B');
+  assert.equal(batch.f.cards.get(batch.keys[1]).board, null);
 });
