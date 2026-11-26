@@ -43,6 +43,8 @@ export type Row = {
   turnReason?: string;
   parentWorkKey?: string;
   failureReason?: string;
+  // 라운드가 있는 열린 업무 행에만 온다. 서버 dashboard/work-round.mjs가 상세 라운드 표의 flow에서 옮긴다.
+  roundNow?: { round: number; label: string; openedAt: string | null };
   // 카드별 작업 시간(ms)과 실제 모델 판정. 서버 card-worktime.mjs가 계산한다.
   workMs?: number | null;
   workBasis?: "start" | "assigned" | null;
