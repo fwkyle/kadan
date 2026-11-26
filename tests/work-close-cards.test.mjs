@@ -18,6 +18,7 @@ import {buildTree} from '../src/cli-tree.mjs';
 import {createRequire} from 'node:module';
 import {Readable} from 'node:stream';
 import {createCenterHandler} from '../src/center-wall.mjs';
+import {cardCloseReasonCode} from '../src/work-card-close.mjs';
 
 const {DatabaseSync} = createRequire(import.meta.url)('node:sqlite');
 
@@ -220,6 +221,7 @@ test('카드 하나를 닫지 못해도 업무 마감은 남고 실패한 카드
   assert.equal(f.cards.get(fine).status, 'done');
   assert.deepEqual(work.cardClose.closed.map(c => c.key), [fine]);
   assert.deepEqual(work.cardClose.failed, [{key: broken, reason: '주입한 저장 실패'}]);
+  assert.equal(cardCloseReasonCode('주입한 저장 실패'), 'error');
 });
 
 test('판정 뒤 카드가 바뀌면 덮어쓰지 않고, 같은 계획을 다시 적용해도 이력이 늘지 않는다', async t => {
@@ -364,6 +366,7 @@ for (const [name, inject] of Object.entries(RACES)) {
     assert.deepEqual(work.cardClose.closed.map(c => c.key), [first, last]);
     assert.deepEqual(work.cardClose.failed.map(c => c.key), [raced]);
     assert.match(work.cardClose.failed[0].reason, /새 원장 기록/);
+    assert.equal(cardCloseReasonCode(work.cardClose.failed[0].reason), 'record');
     assert.equal(f.cards.get(raced).status, 'assigned');
     assert.equal(f.cards.get(raced).revision, revision);
   });
@@ -404,6 +407,7 @@ test('원장에 새 줄이 계속 붙으면 정한 횟수만 다시 보고 닫�
   assert.equal(delta.reads, 20);
   assert.deepEqual(work.cardClose.closed, []);
   assert.match(work.cardClose.failed[0].reason, /계속 붙어/);
+  assert.equal(cardCloseReasonCode(work.cardClose.failed[0].reason), 'busy');
   assert.equal(f.cards.get(key).status, 'assigned');
 });
 
@@ -421,6 +425,7 @@ test('마감과 닫기 사이에 손으로 고친 카드는 덮지 않고, 손�
   assert.deepEqual(work.cardClose.closed.map(c => c.key), [fine]);
   assert.deepEqual(work.cardClose.failed.map(c => c.key), [edited]);
   assert.match(work.cardClose.failed[0].reason, /카드가 변경됨/);
+  assert.equal(cardCloseReasonCode(work.cardClose.failed[0].reason), 'changed');
   assert.equal(f.cards.get(handClosed).revision, handRevision);
 });
 
@@ -470,20 +475,20 @@ test('일괄 닫기가 쓰는 카드 기록은 card update로 닫은 기록과 �
 // 업무 기록만 바뀌므로 카드 revision과 원장은 그대로다.
 const reopen = (f, key = 'repo/w') => f.change('reopen', {}, key);
 const MOVES = {
-  '다시 열고 다른 열린 업무로 옮긴': {reason: /다시 열려/, move: (f, key) => {
+  '다시 열고 다른 열린 업무로 옮긴': {code: 'reopened', reason: /다시 열려/, move: (f, key) => {
     reopen(f);
     f.change('unlink', {execution: key});
     f.change('link', {execution: key, phase: 'implementation', round: '1'}, 'repo/other');
   }},
-  '업무를 다시 연': {reason: /다시 열려/, move: f => reopen(f)},
-  '옮긴 뒤 원래 업무를 다시 마감한': {reason: /연결이 빠/, move: (f, key) => {
+  '업무를 다시 연': {code: 'reopened', reason: /다시 열려/, move: f => reopen(f)},
+  '옮긴 뒤 원래 업무를 다시 마감한': {code: 'unlinked', reason: /연결이 빠/, move: (f, key) => {
     reopen(f);
     f.change('unlink', {execution: key});
     f.change('link', {execution: key, phase: 'implementation', round: '1'}, 'repo/other');
     complete(f);
   }},
 };
-for (const [name, {reason, move}] of Object.entries(MOVES)) {
+for (const [name, {code, reason, move}] of Object.entries(MOVES)) {
   test(`경합: 마감 저장 뒤 ${name} 카드는 이전 업무의 마감으로 닫지 않는다`, t => {
     const f = fixture();
     f.makeWork('repo/other');
@@ -500,6 +505,7 @@ for (const [name, {reason, move}] of Object.entries(MOVES)) {
     assert.deepEqual(work.cardClose.closed, []);
     assert.deepEqual(work.cardClose.failed.map(c => c.key), [moved]);
     assert.match(work.cardClose.failed[0].reason, reason);
+    assert.equal(cardCloseReasonCode(work.cardClose.failed[0].reason), code);
     assert.equal(f.cards.get(moved).status, 'assigned');
     assert.equal(f.cards.get(moved).revision, revision);
   });
