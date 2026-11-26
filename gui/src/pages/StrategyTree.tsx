@@ -22,7 +22,7 @@ const fitLine = (full: string, state: string, max: number) => (fitText(full, max
 const sessionLife = (s: LiveSession) => (s.pidState === "match" ? "살아 있음" : "PID 변경 · 확인 필요");
 const unitTitle = (unit: Unit) => `${unit.role} · ${KIND_LABEL[unit.kind]} · ${unitLine(unit)}${unit.alerts ? ` · 경보 ${unit.alerts}건` : ""}`;
 
-// 모양 = 실행 도구, 색 = 상태. 창 없음은 가운데 ✕ 금.
+// 모양 = 실행 도구, 색 = 상태. 세션 사라짐(dead)은 가운데 ✕ 금. 꺼짐(stopped)은 회색만 — 일부러 끈 것이라 ✕를 긋지 않는다.
 function ShapeMark({ harness, state, cx, cy, r }: { harness: string | null; state: UnitState; cx: number; cy: number; r: number }) {
   const shape = shapeOf(harness), cls = `smt-shape sm-s-${state}${shape === "none" ? " smt-nohar" : ""}`, k = r * 0.45;
   return <>

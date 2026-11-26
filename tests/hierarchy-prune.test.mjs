@@ -55,6 +55,35 @@ test('오래된 시작은 종료 근거가 아니며 재시작·경보 해소 �
   }
 });
 
+test('종료 뒤 우편함 보관 우편은 종료 근거를 지우지 않고, 실제 세션 전달·완료 확정은 지운다', () => {
+  const after = new Date(now - PRUNE_GRACE_MS).toISOString();
+  const mail = {kind:'send',role:'leaf',by:'사람',transport:'mailbox',mailId:'m-1',t:after};
+  for (const death of [stop('leaf'), {kind:'alert',role:'leaf',alertKind:'죽음',t:old}]) {
+    const kept = plan({entries:[start('leaf'),death,mail]});
+    assert.deepEqual(kept.remove, [{role:'leaf',parent:'boss',observedDeadAt:old}], '꺼진 채 받은 보관 우편은 활동이 아니다');
+  }
+  // 짝: 세션에 실제로 들어간 전달(우편함 아님)과 다른 사람이 기록한 완료는 지금처럼 새 종료 관측을 기다리게 한다.
+  for (const activity of [{kind:'send',role:'leaf',by:'boss',t:after}, {kind:'send',role:'leaf',by:'boss',transport:'pane',t:after},
+    {kind:'done',role:'leaf',by:'boss',taskId:'x',result:'ok',t:after}]) {
+    assert.equal(reason(plan({entries:[start('leaf'),stop('leaf'),activity]})), '종료 시각 모름');
+  }
+  // 보관 우편 뒤에 실제 전달이 오면 그 전달이 근거를 지운다(우편이 뒤의 활동을 가리지 않는다).
+  assert.equal(reason(plan({entries:[start('leaf'),stop('leaf'),mail,{kind:'send',role:'leaf',by:'boss',t:after}]})), '종료 시각 모름');
+});
+
+test('정리로 빠진 역할을 다시 띄울 때 관계표 줄은 만든 쪽이 역할일 때만 되살아난다(24시간 유예를 두는 이유)', () => {
+  const f = fixture();
+  assert.equal(pruneHierarchy({...f.options,apply:true}).applied, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file)), {boss:'@user'});
+  // 사람이 직접 다시 띄우면(만든 쪽을 모름) 옛 상위 줄이 돌아오지 않아 감시 알림의 보고 경로가 끊긴다.
+  const byHuman = registerStartedRole({home:f.home,role:'leaf',creator:'사람',cmd:'claude',entries:f.snapshot.entries});
+  assert.deepEqual([byHuman.registered, byHuman.reason], [false, '만든 사람의 역할을 모름']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file)), {boss:'@user'});
+  const byRole = registerStartedRole({home:f.home,role:'leaf',creator:'boss',cmd:'claude',entries:f.snapshot.entries});
+  assert.equal(byRole.registered, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.file)), {boss:'@user',leaf:'boss'});
+});
+
 test('마지막 시작 뒤 종료 관측부터 24시간을 센다', () => {
   for (const kind of ['stop','alert']) {
     const death = {kind,role:'leaf',alertKind:'죽음',t:new Date(now-PRUNE_GRACE_MS+1).toISOString()};

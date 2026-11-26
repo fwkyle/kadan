@@ -7,7 +7,7 @@ import type { LastRun } from "../strategy-map";
 import type { LiveSession, OpenAlerts } from "../status-band";
 import AskSuper from "../AskSuper";
 import { RestartRole } from "./RestartRole";
-import { buildMap, KIND_LABEL, lifeLabel, restartGeneration, runLabel, systemSessions, STATE_LABEL, visibleUnits } from "../strategy-map";
+import { askTarget, buildMap, KIND_LABEL, lifeLabel, restartGeneration, runLabel, systemSessions, STATE_LABEL, visibleUnits } from "../strategy-map";
 import { buildForest } from "../strategy-tree";
 import StrategyTree, { TreeLegend } from "./StrategyTree";
 
@@ -16,6 +16,7 @@ import StrategyTree, { TreeLegend } from "./StrategyTree";
 type StatusData = Stamp & {
   rows: Row[]; live: LiveSession[] | null; alerts: OpenAlerts | null; hierarchy: Record<string, string> | null;
   activity?: Record<string, number[]>; lastRuns?: Record<string, LastRun>;
+  stopped?: string[] | null; held?: Record<string, string> | null; askTo?: Record<string, string> | null;
 };
 const DEPOT = "\u0000창고"; // 선택 상태에서 창고를 역할 이름과 구분하는 키
 // 묶음 이름은 서버 bucketGroups와 같다(2026-10-05 [kyle]).
@@ -46,7 +47,7 @@ export default function StrategyMap({ url }: { url: URL }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [showResting, setShowResting] = useState(false);
   const pick = (key: string) => setSelected((now) => (now === key ? null : key));
-  const map = data ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts, lastRuns: data.lastRuns }) : null;
+  const map = data ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts, lastRuns: data.lastRuns, stopped: data.stopped, held: data.held }) : null;
   const unit = map?.bases.flatMap((b) => b.units).find((u) => u.role === selected) ?? null;
   const unitBase = unit ? map?.bases.find((b) => b.units.includes(unit)) ?? null : null;
   const resting = map ? map.bases.reduce((n, b) => n + b.units.length - visibleUnits(b.units, false).length, 0) : 0;
@@ -66,13 +67,13 @@ export default function StrategyMap({ url }: { url: URL }) {
         <span className={tone(map.totals.running, "sm-t-running")}><Roll value={map.totals.running} /> 작업중 상자</span>
         <span className={tone(map.totals.stuck, "sm-t-stuck")}><Roll value={map.totals.stuck} /> 막힌 상자</span>
         <span><Roll value={map.totals.stale} /> 오래된 미확정 상자</span>
-        <span className={tone(map.totals.dead, "sm-t-dead")}><Roll value={map.totals.dead} /> 창 없음</span>
+        <span className={tone(map.totals.dead, "sm-t-dead")}><Roll value={map.totals.dead} /> {STATE_LABEL.dead}</span>
         <span><Roll value={map.totals.alerts} /> 열린 경보</span>
         {data.live === null && <span>세션 상태를 지금 알 수 없습니다.</span>}
         {!data.hierarchy && <span>관계표가 없어 모든 역할을 한 기지에 모았습니다.</span>}
       </p>
       <ul className="sm-legend" aria-label="색 안내">
-        {(["running", "stuck", "stale", "dead", "idle", "off"] as const).map((s) => <li key={s}><i className={"sm-dot sm-s-" + s} />{STATE_LABEL[s]}</li>)}
+        {(["running", "stuck", "stale", "dead", "stopped", "idle", "off"] as const).map((s) => <li key={s}><i className={"sm-dot sm-s-" + s} />{STATE_LABEL[s]}</li>)}
         <TreeLegend forest={forest} />
         {resting > 0 && <li><label className="sm-toggle"><input type="checkbox" checked={showResting} onChange={(e) => setShowResting(e.target.checked)} />쉬는 역할도 보기({resting})</label></li>}
       </ul>
@@ -101,7 +102,7 @@ export default function StrategyMap({ url }: { url: URL }) {
               <span className={"sm-dot sm-c-" + row.bucket} /><CardLink row={row} />
               <small><Pulse at={row.signalAt} />{row.healthLabel}{row.signalAt ? ` · 마지막 신호 ${time(row.signalAt)}` : ""}</small></li>)}</ul>
               : <p className="st-empty">진행 중인 카드가 없습니다.</p>}
-            {unitBase && <AskSuper key={"ask:" + unit.role} unit={unit} base={unitBase} />}
+            {unitBase && <AskSuper key={"ask:" + unit.role} unit={unit} base={unitBase} to={askTarget(data.askTo, unit.role)} live={data.live} />}
           </>}
         </aside>
       </div>

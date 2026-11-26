@@ -11,6 +11,7 @@ import { WorkStore } from "./work-store.mjs";
 import { withEffectiveOwner } from "./handover-state.mjs";
 import { floor as defaultFloor } from "./floor.mjs";
 import { appendLedger, readLedger } from "./ledger.mjs";
+import { storageTransaction, storageVersion } from "./storage.mjs";
 import { currentRottieWindow } from "./restore.mjs";
 import { readSettings } from "./runner-settings.mjs";
 import { sessionOwner, assertSessionOwner } from "./session-ownership.mjs";
@@ -18,6 +19,7 @@ import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, markStop
 import { pendingCardsFor, buildStopLedgerEntry, closeStartedWindow } from "./cli-start-support.mjs";
 import { stopConversationFields, lookupDeps } from "./role-conversation.mjs";
 import { paneInfo } from "./commands/restart.mjs";
+import { isIntendedStop, isLifecycle } from "./lifecycle-tail.mjs";
 
 const OWNED_WORKS_MAX = 20;
 // 이 역할이 현재 owner인 열린 업무 키. 끄면 주인 없는 업무가 되므로 알린다(막지 않는다). 못 읽으면 알리지 않고 끈다.
@@ -28,12 +30,71 @@ function ownedOpenWorks(role, entries, readWorks) {
   } catch { return []; }
 }
 
+// 세션이 이미 없는 역할(재부팅·창 닫힘으로 사라진 세션)의 꺼짐 기록만 남긴다(2026-11-26). 끄는 것이 없으니 PID 대조·대화 번호 조회·
+// 창 정리는 건너뛴다. 이 기록이 있어야 대시보드 지도가 "세션 사라짐"(빨강) 대신 꺼진 역할로 읽고 관계표 정리가 종료 시각을 안다.
+// 막는 경우: 그 세션의 start 기록 없음(오타 — 예전과 같은 "세션 없음" 문구), 세션 목록을 못 읽음(없다고 확인된 때만 기록),
+// 이미 꺼짐으로 기록됨(중복 없이 안내만).
+// "이미 꺼짐"은 감시와 같은 판정(마지막 수명 사건이 restart 아닌 stop)이다. 마지막이 restart stop이면 기록한다(재시작 도중 사라진 세션).
+// 겹친 호출·그 사이의 재시작(검수 exec-61aef215 발견 4): 관측(원장 읽기 → 세션 목록)과 쓰기 사이에 다른 stop이나 새 start가 끼어들 수 있다.
+// 쓰기는 원장 쓰기 잠금(storageTransaction) 안에서 하고, 그 안에서 이 세션의 마지막 수명 사건이 관측 때와 같은지 다시 본다.
+// 다른 호출이 이미 꺼짐을 적었으면 중복 없이 안내만 하고, 새 start가 들어왔으면 기록하지 않는다(새 세대를 정상 종료로 적지 않는다).
+// 쓰기 잠금 안에서는 원장을 읽지 않는다 — 원장 버전(마지막 사건 번호)만 관측 때와 비교한다. 같으면 그 사이 붙은 사건이 없으니 그대로 쓰고,
+// 다르면 빈손으로 잠금을 놓고 잠금 밖에서 다시 읽어 이 세션의 수명 사건을 비교한 뒤 다시 들어간다(최대 RECHECKS번).
+// 이유: 쓰기 잠금을 쥔 채 원장 전체를 읽으면 다른 쓰기(감시 포함)가 그동안 기다린다(storage.mjs prepareOutsideLock의 2026-09-24 실측).
+// 비용: 잠금 밖 원장 읽기 1번 + 그 사이 다른 사건이 붙은 횟수만큼(최대 RECHECKS - 1번) 더. 원장이 10배면 읽기 한 번이 10배다.
+const RECHECKS = 3;
+const lifecycleOf = (entries, session) => entries.filter(e => isLifecycle(e) && e.session === session);
+function recordGoneStop({ role, session, home, floor, log, announce }) {
+  const refuse = (message) => ({ ok: false, code: 1, message });
+  const already = (last) => {
+    log(`이미 꺼짐으로 기록됨: ${session}${last.t ? ` (${last.t})` : ""} — 다시 기록하지 않습니다`);
+    return { ok: true, session, windowIncomplete: false, alreadyRecorded: true };
+  };
+  // 버전을 원장 읽기보다 먼저 적는다: 그 뒤에 붙은 사건은 무엇이든 버전을 올린다.
+  let version = storageVersion(home);
+  const entries = readLedger(home);
+  try { sessionOwner(entries, session, role); } catch (error) { return refuse(error.message); }
+  // 시작 기록이 없는 이름은 예전과 똑같이 거절한다(출력·종료 코드 불변).
+  if (!entries.some(e => e?.kind === "start" && e.session === session)) return refuse(`세션 없음: ${session}`);
+  try {
+    if (floor.list({ strict: true }).some(s => s.session === session && s.alive !== false)) {
+      return refuse(`세션 상태가 엇갈립니다: ${session} — 꺼짐으로 기록하지 않았습니다. 잠시 뒤 다시 치세요`);
+    }
+  } catch (error) { return refuse(`세션 상태를 확인하지 못해 꺼짐으로 기록하지 않았습니다: ${error.message}`); }
+  const seen = lifecycleOf(entries, session), last = seen.at(-1);
+  if (isIntendedStop(last)) return already(last);
+  const owned = announce(entries);
+  const entry = { ...buildStopLedgerEntry({ role, session }), sessionGone: true, conversationMissing: "session-gone",
+    ...(owned.length > 0 ? { ownedOpenWorks: owned.slice(0, OWNED_WORKS_MAX) } : {}) };
+  for (let attempt = 0; attempt < RECHECKS; attempt++) {
+    const written = storageTransaction(home, () => {
+      if (storageVersion(home) !== version) return false;
+      appendLedger(entry, home);
+      return true;
+    });
+    if (written) {
+      log(`꺼짐으로 기록함: ${session} — 세션은 이미 없었습니다`);
+      return { ok: true, session, windowIncomplete: false, entry, recordOnly: true };
+    }
+    // 그 사이 원장에 무언가 붙었다. 잠금 밖에서 다시 읽어 이 세션의 수명 사건이 그대로인지 본다.
+    version = storageVersion(home);
+    const now = lifecycleOf(readLedger(home), session), lastNow = now.at(-1);
+    if (isIntendedStop(lastNow)) return already(lastNow);
+    // 수명 사건 수와 마지막 사건이 모두 같아야 같은 세대다(시각만 비교하지 않는다 — 같은 밀리초의 사건이 있을 수 있다).
+    if (now.length !== seen.length || JSON.stringify(lastNow) !== JSON.stringify(last)) {
+      return refuse(`확인하는 사이 ${session}의 시작·종료 기록이 바뀌었습니다 — 꺼짐으로 기록하지 않았습니다. 상태를 확인한 뒤 다시 치세요`);
+    }
+  }
+  return refuse(`원장에 다른 기록이 계속 붙어 확인을 마치지 못했습니다: ${session} — 꺼짐으로 기록하지 않았습니다. 잠시 뒤 다시 치세요`);
+}
+
 // 반환: {ok: false, message, code} — 끄지 않았다. {ok: true, session, windowIncomplete, entry} — 껐고 기록했다.
+// recordGone(`kadan stop`만 켠다): 세션이 이미 없으면 꺼짐 기록만 남긴다 → {ok: true, recordOnly: true, entry} 또는 {ok: true, alreadyRecorded: true}.
 // {ok: false, stopped: true, error} — 세션은 껐지만 창 정리·기록에서 예외가 났다(호출자가 다시 던지거나 보고한다).
 // {ok: true, session, handedOff: true, logPath} — 자기 세션이라 끄기부터를 분리된 프로세스에 넘겼다(selfStop 때만).
 // log는 stdout, warn은 stderr 줄이다. lookup은 시험에서 가짜 조회를 넣는 자리다.
 export function stopRole({ role, session, home, floor = defaultFloor, log = console.log, warn = console.error, beforeStop = null,
-  selfStop = null,
+  selfStop = null, recordGone = false,
   readWorks = () => new WorkStore(home).listWatch(),
   lookup = input => stopConversationFields({ ...input, deps: lookupDeps({ paneInfo }) }) }) {
   const infrastructure = TARGETS.includes(role);
@@ -42,21 +103,30 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
   const release = infrastructure ? acquireReviveLock(home, { waitMs: lockWaitMs(), onReclaim: reclaimLog, onLegacy: legacyLog }) : () => {};
   if (!release) return { ok: false, code: 1, message: `자동 되살리기(kadan up --auto)가 실행 중이라 끄지 않았습니다. 잠시 뒤 다시 kadan stop ${role}를 치세요` };
   const refuse = (message) => { release(); return { ok: false, code: 1, message }; };
-  if (!floor.alive(session)) return refuse(`세션 없음: ${session}`);
+  // 미확정 카드·열린 업무 안내 두 줄. 세션을 끄는 길과 꺼짐만 기록하는 길이 같이 쓴다. 돌려주는 값은 owner인 열린 업무 키다.
+  const announce = (entries) => {
+    const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), role);
+    if (pending.length > 0) {
+      log(`미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`);
+    }
+    const owned = infrastructure ? [] : ownedOpenWorks(role, entries, readWorks);
+    if (owned.length > 0) {
+      log(`이 역할이 owner인 열린 업무 ${owned.length}건: ${owned.slice(0, OWNED_WORKS_MAX).join(", ")}${owned.length > OWNED_WORKS_MAX ? " 외" : ""} — 끄면 주인 없는 업무가 된다`);
+    }
+    return owned;
+  };
+  if (!floor.alive(session)) {
+    // 기반 프로세스는 꺼짐 기록을 만들지 않는다: stop 기록이 생기면 `kadan up --auto`가 되살리기를 건너뛴다(잠긴 규칙 3).
+    if (!recordGone || infrastructure) return refuse(`세션 없음: ${session}`);
+    return recordGoneStop({ role, session, home, floor, log, announce });
+  }
   const entries = readLedger(home);
   let owner;
   try {
     owner = sessionOwner(entries, session, role);
     assertSessionOwner(owner, floor.pid(session), { infrastructure });
   } catch (error) { return refuse(error.message); }
-  const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), role);
-  if (pending.length > 0) {
-    log(`미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`);
-  }
-  const owned = infrastructure ? [] : ownedOpenWorks(role, entries, readWorks);
-  if (owned.length > 0) {
-    log(`이 역할이 owner인 열린 업무 ${owned.length}건: ${owned.slice(0, OWNED_WORKS_MAX).join(", ")}${owned.length > OWNED_WORKS_MAX ? " 외" : ""} — 끄면 주인 없는 업무가 된다`);
-  }
+  const owned = announce(entries);
   // 자기 세션이면 끄는 순간 이 프로세스도 죽는다. 표시·대화 조회·끄기는 pane 밖의 분리된 프로세스가 처음부터 다시 한다.
   // 자기 세션 판정은 프로세스 조상으로 한다. 넘기지 못하면 아무것도 바꾸지 않고 거절한다(표시 저장 전이다).
   let self = false;

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMap, lifeLabel, restartGeneration, runLabel, systemSessions, visibleUnits } from "../src/strategy-map.ts";
+import { askTarget, buildMap, lifeLabel, recipientGone, restartGeneration, runLabel, STATE_LABEL, systemSessions, visibleUnits } from "../src/strategy-map.ts";
 import type { Row } from "../src/types.ts";
 
 const row = (key: string, owner: string, bucket: string) => ({ key, owner, bucket, title: key }) as unknown as Row;
@@ -31,10 +31,10 @@ test("슈퍼감독마다 기지 하나, 사슬이 끊긴 역할은 '관계표 �
   assert.deepEqual(map.bases[2].units.map((u) => u.role).sort(), ["고아", "떠돌이"]);
 });
 
-test("유닛 상태 우선순위: 창 없음 > 막힘 > 작업 중 > 결과 대기 > 대기, 슈퍼감독은 창이 없으면 일이 없어도 창 없음", () => {
+test("유닛 상태 우선순위: 세션 사라짐 > 막힘 > 작업 중 > 결과 대기 > 대기, stop 기록 없는 슈퍼감독은 세션이 없으면 일이 없어도 세션 사라짐", () => {
   const map = buildMap({ hierarchy, rows, live, alerts: null });
   const unit = (role: string) => map.bases.flatMap((b) => b.units).find((u) => u.role === role)!;
-  assert.equal(unit("m-작업자").state, "dead", "창이 없는데 일이 남았다");
+  assert.equal(unit("m-작업자").state, "dead", "stop 기록 없이 세션이 없는데 일이 남았다");
   assert.deepEqual(unit("m-작업자").crates, { running: 1, stuck: 0, stale: 1, planned: 0, hold: 0 }, "오래된 미확정은 막힘과 따로 센다");
   assert.equal(unit("m-검수자").state, "running", "결과 대기는 #102부터 작업중으로 온다");
   assert.equal(unit("m-감독").state, "idle");
@@ -46,7 +46,7 @@ test("유닛 상태 우선순위: 창 없음 > 막힘 > 작업 중 > 결과 대�
   assert.equal(alive.totals.running, 3, "작업자 1 + 검수자 1 + 관계표 밖 1");
 });
 
-test("세션 상태를 모르면 '창 없음'으로 꾸미지 않고 세션 모름, 경보는 대상 역할에 붙는다", () => {
+test("세션 상태를 모르면 '세션 사라짐'으로 꾸미지 않고 세션 모름, 경보는 대상 역할에 붙는다", () => {
   const map = buildMap({ hierarchy, rows: [], live: null, alerts: { count: 2, items: [
     { id: "a", kind: "정체", level: "AMBER", role: "m-검수자", session: "kadan-m-검수자", recipient: "m-감독", at: "" },
     { id: "b", kind: "죽음", level: "RED", role: "m-검수자", session: "kadan-m-검수자", recipient: "m-감독", at: "" },
@@ -63,7 +63,7 @@ test("관계표를 모르면 모든 역할이 '관계표 밖' 한 기지에 모�
   assert.deepEqual(map.bases.map((b) => b.id), ["관계표 밖"]);
 });
 
-test("오래된 미확정만 든 역할은 창이 없어도 '창 없음'으로 과장하지 않는다, 감시기·대시보드 세션은 유닛이 아니다", () => {
+test("오래된 미확정만 든 역할은 세션이 없어도 '세션 사라짐'으로 과장하지 않는다, 감시기·대시보드 세션은 유닛이 아니다", () => {
   const map = buildMap({ hierarchy, rows: [row("r/9", "m-작업자", "stale"), row("r/10", "m-검수자", "stuck")], live: [...live,
     { role: "watch", harness: null, model: null, effort: null, pidState: "match" }, { role: "대시보드", harness: null, model: null, effort: null, pidState: "match" }], alerts: null });
   const units = map.bases.flatMap((b) => b.units);
@@ -117,10 +117,88 @@ test("닫힌 담당·세션 상태 모름에도 마지막 실행 기록을 보�
   assert.equal(unit(map, "m-감독").lastRun, null);
   const unknown = buildMap({ hierarchy, rows, live: null, alerts: null, lastRuns });
   assert.equal(runLabel(unit(unknown, "m-작업자")), "마지막 실행: codex · model-2", "세션 상태를 몰라도 기록은 보인다");
-  assert.equal(runLabel(unit(base, "m-작업자")), "창 없음", "기록이 없으면 예전처럼");
+  assert.equal(runLabel(unit(base, "m-작업자")), "세션 사라짐", "기록이 없으면 세션이 왜 없는지를 지도와 같은 말로");
   assert.equal(map.totals.units, base.totals.units, "기반 세션은 지도 유닛 수를 바꾸지 않는다");
   assert.deepEqual(systemSessions([...live, ...sys])?.map((s) => s.role), ["watch", "대시보드"]);
   assert.equal(systemSessions(null), null);
   assert.equal(restartGeneration({ alive: true, session: sys[1] }, false), "104");
   assert.equal(restartGeneration({ alive: true, session: sys[1] }, true), null);
+});
+
+// 꺼진 역할 가르기(2026-11-26 [kyle]). 가짜 역할 8개는 운영 실측(빨강 7개)을 흉내 낸 경우다. "일부러 껐다"(stopped)와
+// "든 일"(held)은 서버가 정해 내려 준다 — 이 표의 서버 쪽 짝은 tests/dashboard-stopped-roles.test.mjs가 같은 원장으로 확인한다.
+const goneTable = {
+  "꺼짐-빈손": "@user", "꺼짐-업무": "@user", "꺼짐-발령": "@user", "꺼짐-하위": "@user", "꺼짐-하위-작업자": "꺼짐-하위",
+  "사라짐": "@user", "재시작중": "@user", "모름": "@user", "살아있음": "@user",
+};
+const goneInput = {
+  hierarchy: goneTable, rows: [] as Row[], alerts: null,
+  live: [
+    { role: "살아있음", harness: "claude", model: "opus", effort: null, pidState: "match" },
+    { role: "꺼짐-하위-작업자", harness: "codex", model: "gpt", effort: null, pidState: "match" },
+  ],
+  // 서버 판정: 마지막 수명 사건이 restart 아닌 stop인 역할만. 재시작중(restart stop)·사라짐(start만)은 여기 없다.
+  stopped: ["꺼짐-빈손", "꺼짐-업무", "꺼짐-발령", "꺼짐-하위"],
+  held: { "꺼짐-업무": "미완료 업무", "꺼짐-발령": "미완료 발령" },
+};
+
+test("꺼진 역할 표: 정상 종료+빈손은 지도에 없고, 든 일·하위가 있으면 회색, stop 기록 없이 사라졌으면 빨강", () => {
+  const map = buildMap(goneInput);
+  const units = new Map(map.bases.flatMap((b) => b.units).map((u) => [u.role, u]));
+  const shown = (role: string) => { const u = units.get(role); return u ? [u.state, STATE_LABEL[u.state]] : null; };
+  assert.equal(shown("꺼짐-빈손"), null, "정상 종료이고 든 일이 없으면 지도에서 빠진다");
+  assert.ok(!map.bases.some((b) => b.id === "꺼짐-빈손"), "판도 생기지 않는다");
+  assert.deepEqual(shown("꺼짐-업무"), ["stopped", "꺼짐 · 인계 필요"]);
+  assert.deepEqual(shown("꺼짐-발령"), ["stopped", "꺼짐 · 인계 필요"]);
+  assert.deepEqual(shown("꺼짐-하위"), ["stopped", "꺼짐 · 인계 필요"], "든 일이 없어도 살아 있는 하위가 판 아래 보인다");
+  assert.deepEqual(map.bases.find((b) => b.id === "꺼짐-하위")!.units.map((u) => u.role), ["꺼짐-하위", "꺼짐-하위-작업자"]);
+  assert.deepEqual(shown("사라짐"), ["dead", "세션 사라짐"]);
+  assert.deepEqual(shown("재시작중"), ["dead", "세션 사라짐"], "restart stop은 정상 종료가 아니다");
+  assert.deepEqual(shown("살아있음"), ["idle", "대기"], "살아 있으면 지금과 같은 상태 표시");
+  assert.deepEqual(shown("모름"), ["dead", "세션 사라짐"], "세션 조회가 됐고 stop 기록이 없으면 사라진 것이다");
+  assert.equal(map.totals.dead, 3, "요약의 세션 사라짐 수는 빨강만 센다(회색은 세지 않는다)");
+  // 세션 조회 실패(live null): 누구도 꺼졌다고 꾸미지 않고 전부 세션 모름으로 지도에 남는다.
+  const unknown = buildMap({ ...goneInput, live: null });
+  const all = unknown.bases.flatMap((b) => b.units);
+  assert.ok(all.every((u) => u.state === "unknown" && STATE_LABEL[u.state] === "세션 모름"));
+  assert.ok(all.some((u) => u.role === "꺼짐-빈손"), "모를 때는 숨기지 않는다");
+});
+
+test("꺼진 역할: 다시 살아나면 예전 표시, 재료를 모르면 숨기지 않는다, 감독·작업자에게도 같은 색 규칙", () => {
+  const state = (input: Parameters<typeof buildMap>[0], role: string) => buildMap(input).bases.flatMap((b) => b.units).find((u) => u.role === role)?.state ?? null;
+  // 서버 목록이 낡았어도 세션이 살아 있으면 꺼진 것으로 보지 않는다.
+  assert.equal(state({ ...goneInput, live: [...goneInput.live, { role: "꺼짐-빈손", harness: "claude", model: "o", effort: null, pidState: "match" }] }, "꺼짐-빈손"), "idle");
+  // 든 일을 모르면(held null) 일부러 끈 최상위 역할을 숨기지 않고 회색으로 남긴다. 일부러 껐는지를 모르면(stopped null) 예전처럼 빨강.
+  assert.equal(state({ ...goneInput, held: null }, "꺼짐-빈손"), "stopped");
+  assert.equal(state({ ...goneInput, stopped: null }, "꺼짐-빈손"), "dead");
+  // 하위 역할: 일부러 껐고 진행 카드가 남으면 회색, stop 기록 없이 사라졌으면 빨강, 오래된 미확정만 들면 예전처럼 오래된 미확정.
+  const hierarchy2 = { "판": "@user", "감독": "판", "끈-작업자": "감독", "사라진-작업자": "감독", "끈-옛작업자": "감독", "끈-빈손": "감독" };
+  const live2 = [{ role: "판", harness: "claude", model: "o", effort: null, pidState: "match" }];
+  const input = { hierarchy: hierarchy2, live: live2, alerts: null, stopped: ["감독", "끈-작업자", "끈-옛작업자", "끈-빈손"], held: { "끈-작업자": "미완료 카드", "끈-빈손": "미완료 발령" },
+    rows: [row("x/1", "끈-작업자", "running"), row("x/2", "사라진-작업자", "stuck"), row("x/3", "끈-옛작업자", "stale")] };
+  assert.equal(state(input, "끈-작업자"), "stopped");
+  assert.equal(state(input, "사라진-작업자"), "dead");
+  assert.equal(state(input, "끈-옛작업자"), "stale", "오래된 미확정 묶음(2026-11-23)은 그대로");
+  assert.equal(state({ ...goneInput, rows: [row("z/1", "꺼짐-발령", "stale")] }, "꺼짐-발령"), "stopped", "최상위는 오래된 미확정만 들어도 회색이다(예전의 빨강 자리)");
+  assert.equal(state(input, "감독"), "stopped", "일부러 끈 감독이 하위 사슬 때문에 지도에 오르면 회색");
+  assert.equal(state(input, "끈-빈손"), null, "하위 역할은 지금처럼 세션·진행 카드·경보가 있을 때만 오른다(정리가 붙잡는 발령만으로는 새로 올리지 않는다)");
+  assert.ok(visibleUnits(buildMap(input).bases[0].units, false).some((u) => u.role === "끈-작업자"), "회색 작업자는 쉬는 역할로 숨기지 않는다");
+  const withAlert = { ...goneInput, alerts: { count: 1, items: [{ id: "a", kind: "정체", level: "AMBER", role: "꺼짐-빈손", session: "kadan-꺼짐-빈손", recipient: "@user", at: "" }] } };
+  assert.equal(state(withAlert, "꺼짐-빈손"), "stopped", "열린 경보도 든 일이다");
+});
+
+test("질문 칸: 받는 사람은 서버가 준 값(askTo)이고, 그 세션이 없다고 확인된 때만 막는다", () => {
+  // 서버(/ask와 같은 계산)가 준 유닛 → 받는 사람. 화면은 관계표 위치로 다시 계산하지 않는다.
+  const askTo = { "꺼짐-하위-작업자": "꺼짐-하위", "살아있음": "살아있음", "떠돌이": "비서", "중첩-작업자": "살아있음" };
+  assert.equal(askTarget(askTo, "꺼짐-하위-작업자"), "꺼짐-하위", "살아 있는 작업자를 골라도 받는 사람은 꺼진 슈퍼감독이다");
+  assert.equal(recipientGone(askTarget(askTo, "꺼짐-하위-작업자"), goneInput.live), true);
+  assert.equal(recipientGone(askTarget(askTo, "살아있음"), goneInput.live), false);
+  // 지도의 판(최상위)이 꺼져 있어도 서버가 정한 받는 사람(판 아래의 살아 있는 슈퍼감독)이 살아 있으면 막지 않는다.
+  assert.equal(recipientGone(askTarget(askTo, "중첩-작업자"), goneInput.live), false);
+  assert.equal(recipientGone(askTarget(askTo, "꺼짐-하위-작업자"), null), false, "세션 상태를 모르면 막지 않는다");
+  assert.equal(recipientGone(askTarget(askTo, "떠돌이"), goneInput.live), true, "비서가 받는 사람일 때도 같은 기준");
+  // 서버가 받는 사람을 주지 않았으면(관계표 모름·없는 이름) 모르는 것이라 막지 않는다.
+  assert.equal(askTarget(null, "살아있음"), null);
+  assert.equal(askTarget(askTo, "없는-이름"), null);
+  assert.equal(recipientGone(null, goneInput.live), false);
 });

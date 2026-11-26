@@ -5,6 +5,7 @@ import { ledgerBy } from "./ledger.mjs";
 import { boardFromRole } from "./board.mjs";
 import { recordedPid } from "./cli-basics.mjs";
 import { launchOrigin, startDisplay } from "./cli-family.mjs";
+import { isIntendedStop, isLifecycle } from "./lifecycle-tail.mjs";
 
 export function roleFromSession(session) {
   return typeof session === "string" && session.startsWith("kadan-")
@@ -70,6 +71,7 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
         lastStart: null,
         originStart: null,
         lastStop: null,
+        lastLifecycle: null,
         lastActivityAt: null,
         untrackedSends: 0,
         cardsById: new Map(),
@@ -85,6 +87,8 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
     if (entry.t && (!item.lastActivityAt || entry.t > item.lastActivityAt)) {
       item.lastActivityAt = entry.t;
     }
+    // 마지막 수명 사건(start·stop). 정상 종료 판정(lifecycle-tail.mjs)의 재료이며 이 한 번의 훑기에서 같이 챙긴다.
+    if (isLifecycle(entry)) item.lastLifecycle = entry;
     if (entry.kind === "start") {
       item.lastStart = entry;
       // 이미 살아 있어 재사용한 start(reuseOf)는 새로 띄운 것이 아니다: 출처는 그 세대를 띄운 마지막 start가 말한다.
@@ -173,6 +177,9 @@ export function buildTree(entries, aliveBySession = {}, cards = null) {
       untrackedSends: item.untrackedSends,
       life,
       cards,
+      // 일부러 끈 역할인가(감시의 intendedStop과 같은 판정식). life.state "dead"는 stop이 한 번이라도 있었다는 뜻일 뿐이라
+      // (재시작·뒤의 start를 가리지 않는다) 대시보드 지도는 이 값을 쓴다.
+      intendedStop: isIntendedStop(item.lastLifecycle),
       roleProfile: item.lastStart?.roleProfile ?? null,
       ...startDisplay(item.lastStart),
       launch: launchOrigin(item.originStart),

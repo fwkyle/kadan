@@ -1,6 +1,6 @@
 // 현황 화면과 ?super= 거름망(DS-1-impl: dashboard-api.mjs에서 옮김).
 import { showCycleWaits } from "../wait-until.mjs";
-import { registeredCenterWorks } from "../center-wall.mjs";
+import { askRecipient, registeredCenterWorks } from "../center-wall.mjs";
 import { isExecution } from "../human-brief.mjs";
 import { boardProgressCounts } from "../board-progress.mjs";
 import { renderWatchVerdict, renderWatchOverview } from "../watch-overview-wall.mjs";
@@ -24,6 +24,8 @@ import { effectiveWorkOwner, withEffectiveOwner } from "../handover-state.mjs";
 import { previousGenerationExecutions, previousGenerationWorks } from "../watch-scope.mjs";
 import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
+import { heldRoles } from "../hierarchy-prune.mjs";
+import { taskIdentity } from "../task-identity.mjs";
 import { nextTimeBoundary } from "../wall-snapshot-cache.mjs";
 import { letters, pick, compact, page, piece, earlier, staleBoundary } from "./shared.mjs";
 import { frontStrip } from "./front.mjs";
@@ -67,6 +69,42 @@ const previousSummary = (items) => items && ({
   works: items.filter((i) => i.kind === "work").length, executions: items.filter((i) => i.kind === "execution").length, items: items.slice(0, 20),
 });
 
+// 일부러 끈 역할: 세션이 없고 마지막 수명 사건이 restart 아닌 stop이다. 역할 나무(cli-tree.mjs buildTree)가 원장을 한 번 훑을 때
+// 역할마다 챙긴 값(intendedStop)을 읽기만 한다 — 원장을 다시 훑지 않는다. 세션 상태를 모르면 null.
+export function stoppedRoles(center, roles) {
+  if (!center?.runtimeKnown) return null;
+  return (center.roles ?? []).filter((r) => r.intendedStop === true && r.life?.state !== "alive" && roles.has(r.role))
+    .map((r) => r.role).sort((a, b) => a.localeCompare(b, "ko"));
+}
+// 역할이 든 일(미완료 카드·업무·발령)의 이유. 관계표 정리와 같은 함수(hierarchy-prune.mjs heldRoles)라 기준이 갈리지 않는다.
+// 비용: 카드·업무 목록 한 번 + 원장 사건 한 번 훑기. 원장·카드·업무 배열이 직전과 같을 때만 다시 계산하지 않는다 —
+// 원장 배열은 사건이 붙을 때마다 새 배열이라, 사건이 계속 붙는 운영에서는 수집마다 다시 계산될 수 있다.
+// 가짜 원장 실측(2026-11-26): 사건 14만 건 약 46ms, 10배(140만 건) 약 0.4초·임시 메모리 약 150MB. 운영 원장으로는 재지 않았다.
+// 정리와 같은 입력·같은 함수를 지키려고 원장을 미리 거르지 않는다. 원장·업무를 못 읽으면 null.
+// 열린 경보도 든 일이다(이유 "열린 경보"). 화면이 받는 경보 미리 보기는 앞 20건뿐이라, 그 밖의 경보만 가진 꺼진 역할이
+// 지도에서 빠졌다(검수 exec-61aef215 발견 3). 그래서 열린 경보 전체(allAlerts — 이미 계산한 값이라 원장을 다시 훑지 않는다)로 센다.
+// 정리(heldRoles)에는 넣지 않는다: 넣으면 죽음 경보가 열린 죽은 역할을 관계표 정리가 영영 빼지 못한다. 경보를 모르면 null.
+function heldReasons(snapshot, ledger, roles, allAlerts) {
+  const works = registeredCenterWorks(snapshot).works, cards = snapshot.center?.cards;
+  if (snapshot.ledgerLines === null || !allAlerts || !Array.isArray(works) || !Array.isArray(cards)) return null;
+  try {
+    const all = piece("held-roles", [ledger, ledger.length, cards, works],
+      () => heldRoles({ displayed: cards, works, entries: ledger, identity: taskIdentity(cards) }));
+    const held = Object.fromEntries([...all].filter(([role]) => roles.has(role)));
+    for (const alert of allAlerts.items) if (alert.role && roles.has(alert.role) && !(alert.role in held)) held[alert.role] = "열린 경보";
+    return held;
+  } catch { return null; }
+}
+// '슈퍼감독에게 묻기'의 받는 사람(유닛 → 받는 사람). 질문을 실제로 보내는 /ask와 같은 함수(center-wall.mjs askRecipient)·같은 프로필
+// 기준으로 서버가 정하고, 화면은 이 값을 그대로 쓴다 — 화면이 관계표 위치로 따로 계산하자 실제 받는 사람과 다른 세션을 보고
+// 막거나 열었다(검수 exec-61aef215 발견 1). 받는 사람의 생존은 화면이 같은 응답의 live로 본다. 관계표를 모르면 null(/ask도 거부한다).
+// 비용: 역할마다 상위 사슬을 한 번 오른다(최대 64단). 원장을 읽지 않는다.
+function askRecipients(hierarchy, profiles, roles) {
+  if (!hierarchy) return null;
+  try { return Object.fromEntries([...roles].sort((a, b) => a.localeCompare(b, "ko")).map((role) => [role, askRecipient(role, hierarchy, profiles)])); }
+  catch { return null; }
+}
+
 export function statusData(snapshot, url, stamp, m) {
   const recent = recentExecutionEvents(m.cards);
   // 워크 owner는 확정된 역할 인계를 따라 지금 책임 감독으로 센다(옛 감독 이름이면 슈퍼감독별 현황·?super=에서 빠졌다, PR #99 검수 2).
@@ -98,7 +136,11 @@ export function statusData(snapshot, url, stamp, m) {
   // 원장을 못 읽으면 프로필을 모르므로 예전 기준(상위가 @user)으로 돌아간다(super-role.mjs).
   const profiles = snapshot.ledgerLines === null ? null
     : piece("super-profiles", [ledger, ledger.length], () => superProfiles(ledger));
-  const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles });
+  // 꺼진 역할 재료(2026-11-26): 지도·슈퍼감독 줄이 "정상 종료"와 "세션만 사라짐"을 가르는 데 쓴다. 화면은 다시 판정하지 않는다.
+  // 대상은 지도에 오를 수 있는 역할(관계표·열린 실행 담당·경보 대상)로 좁힌다 — 원장의 모든 과거 역할을 싣지 않는다.
+  const mapRoles = new Set([...Object.keys(m.hierarchy ?? {}), ...statusRows.map((r) => r.owner).filter(Boolean), ...(allAlerts?.items ?? []).map((a) => a.role)]);
+  const stopped = stoppedRoles(snapshot.center, mapRoles);
+  const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles, stopped });
   // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
   // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
   const previousItems = previousGenerationItems(snapshot, m);
@@ -135,6 +177,10 @@ export function statusData(snapshot, url, stamp, m) {
   // ?repo=<저장소>(PR2 사이드 탭): 행·워크·결정·경보·최근·첫 화면 띠를 그 저장소로 거른다. ?super=가 있으면 위에서 이미 돌려줬으므로 무시된다.
   // 사이드 탭 목록(sidebar)은 거르기 전 전체로 만든다(저장소를 고른 뒤에도 다른 저장소로 옮길 수 있어야 한다).
   const repo = url.searchParams.get("repo") || null;
+  // ?super= 응답(감독 AI가 경보마다 읽는다)은 held를 쓰지 않으므로 그 반환 뒤에서 계산한다.
+  const held = heldReasons(snapshot, ledger, mapRoles, allAlerts);
+  // 지도에 오를 수 있는 이름 전부(관계표·열린 실행 담당·경보 대상·살아 있는 역할)에 받는 사람을 싣는다.
+  const askTo = askRecipients(m.hierarchy, profiles, new Set([...mapRoles, ...(live ?? []).map((s) => s.role)]));
   const mergeCtx = mergeContext(snapshot);
   const boards = snapshot.center.boards;
   const staleCards = piece("stale-cards", [m.cards, m.rows],
@@ -197,6 +243,11 @@ export function statusData(snapshot, url, stamp, m) {
     decisions: repoDecisions,
     previousGeneration: previousSummary(previousItems),
     live,
+    // 일부러 끈 역할 이름(세션이 없는 역할만)과 역할이 든 일의 이유. 모르면 null — 화면은 모를 때 숨기지 않는다.
+    stopped,
+    held,
+    // 유닛마다 '슈퍼감독에게 묻기'가 실제로 갈 곳. 관계표를 모르면 null.
+    askTo,
     lastRuns: lastRuns(snapshot.center, { hierarchy: m.hierarchy, alerts: allAlerts }),
     flow: (({ total, unconfirmed }) => ({ total, unconfirmedCount: unconfirmed.length, unconfirmed: unconfirmed.slice(0, FLOW_PREVIEW) }))(flowSummary(m.reviewFlows)),
     alerts: repo ? alertsOfRepo(allAlerts, repoOwners) : alerts,

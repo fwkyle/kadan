@@ -34,17 +34,14 @@ function checkedSessions(sessions) {
   return new Map(sessions.map(s => [s.session, s]));
 }
 
-// 파일·프로세스 조회 없이 주어진 한 시점의 자료로만 판정한다.
-export function planHierarchyPrune({ table, entries, cards, works, sessions, now = Date.now() }) {
-  const parents = parseHierarchy(table), live = checkedSessions(sessions);
-  if (!Array.isArray(entries) || entries.some(e => !e || e.broken) ||
-      !Array.isArray(cards) || !Array.isArray(works) || !Number.isFinite(now)) {
-    throw new Error('카드·업무·원장 정보 모름: 정리하지 않음');
-  }
-  const identity = taskIdentity(cards), required = new Map(), pending = new Map();
+// 역할이 아직 들고 있는 일: 미완료 카드(담당·해결 담당) → 미완료 업무(책임 감독·다음 담당) → done 없는 발령 순서로 첫 이유만 남긴다.
+// 관계표 정리(아래 planHierarchyPrune)와 대시보드 지도(dashboard/status.mjs의 held)가 이 함수 하나를 같이 쓴다 —
+// 지도에서 "든 일 없음"으로 뺀 최상위 역할을 정리가 다른 기준으로 붙잡지 않게 하기 위해서다(2026-11-26).
+// displayed는 buildCardCenter가 만든 카드(status·displayState·role·resolutionOwner·key)다. 파일·프로세스 조회는 없다.
+// 비용: 카드·업무 목록 한 번 + 원장 사건 한 번 훑기(workEntries). 돌려주는 값: 역할 → 이유.
+export function heldRoles({ displayed, works, entries, identity }) {
+  const required = new Map(), pending = new Map();
   const keep = (role, reason) => { if (role && !required.has(role)) required.set(role, reason); };
-  const displayed = buildCardCenter({cards:cards.map(c => ({...c, history:c.history ?? []})), entries,
-    tree:[], runtimeKnown:false, now}).cards;
   // 이미 마감된 업무(done·cancelled)에 속한 옛 카드·발령은 역할을 붙잡지 않는다(감시 범위 inactive와 같은 기준).
   const closedWorkCards = new Set(works.filter(w => ['done', 'cancelled'].includes(w.status))
     .flatMap(w => (w.executions ?? []).map(e => e.key)));
@@ -68,7 +65,20 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
     else pending.delete(key);
   }
   for (const role of pending.values()) keep(role, '미완료 발령');
+  return required;
+}
 
+// 파일·프로세스 조회 없이 주어진 한 시점의 자료로만 판정한다.
+export function planHierarchyPrune({ table, entries, cards, works, sessions, now = Date.now() }) {
+  const parents = parseHierarchy(table), live = checkedSessions(sessions);
+  if (!Array.isArray(entries) || entries.some(e => !e || e.broken) ||
+      !Array.isArray(cards) || !Array.isArray(works) || !Number.isFinite(now)) {
+    throw new Error('카드·업무·원장 정보 모름: 정리하지 않음');
+  }
+  const identity = taskIdentity(cards);
+  const displayed = buildCardCenter({cards:cards.map(c => ({...c, history:c.history ?? []})), entries,
+    tree:[], runtimeKnown:false, now}).cards;
+  const required = heldRoles({displayed, works, entries, identity});
   const starts = new Map(), deaths = new Map();
   for (const entry of entries) {
     if (!entry.role) continue;
@@ -79,7 +89,10 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
       if (entry.resolved) deaths.delete(entry.role);
       else deaths.set(entry.role, entry);
     } else if (['send', 'done'].includes(entry.kind)) {
-      // 이전 죽음 관측 뒤 다시 활동한 흔적이 있으면 새 종료 관측을 기다린다.
+      // 우편함 보관(transport=mailbox)은 받는 쪽이 꺼져 있어도 쌓인다. 다시 활동한 흔적이 아니다.
+      // 2026-11-26 실측: 정상 종료 사흘 뒤 사람이 보낸 보관 우편 한 통이 종료 근거를 지워 역할이 관계표에 계속 남았다.
+      if (entry.kind === 'send' && entry.transport === 'mailbox') continue;
+      // 이전 죽음 관측 뒤 다시 활동한 흔적(세션에 실제로 들어간 전달·완료 확정)이 있으면 새 종료 관측을 기다린다.
       deaths.delete(entry.role);
     }
   }

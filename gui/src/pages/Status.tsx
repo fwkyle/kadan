@@ -8,13 +8,14 @@ import { AutopilotBand, AutopilotPolicyNotes, OtherGithub, RepoAutopilotHead, us
 import type { AutopilotStrip } from "../autopilot-repos";
 import { radarBlips } from "../radar-blips";
 import { ALERT_SHOWN, STOP_SHOWN, alertMore, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
-import { bandChips, liveLabel, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
+import { bandChips, isIdleSuper, liveLabel, shownSupervisors, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
+import { buildMap } from "../strategy-map";
 
-// 일을 들고 있는데 창이 없는 담당(레이더의 창 없음 점). 세션 상태를 모르면 비워 둔다.
-function deadRoles(data: { live: { role: string }[] | null; rows: Row[] }) {
+// 일을 들고 있는데 stop 기록 없이 세션이 사라진 담당(레이더의 세션 사라짐 점). 일부러 끈 역할은 뺀다. 세션 상태를 모르면 비워 둔다.
+function deadRoles(data: { live: { role: string }[] | null; rows: Row[]; stopped?: string[] | null }) {
   if (!data.live) return [];
-  const alive = new Set(data.live.map((s) => s.role));
-  return [...new Set(data.rows.flatMap((r) => (r.owner && (r.bucket === "running" || r.bucket === "stuck") && !alive.has(r.owner) ? [r.owner] : [])))];
+  const alive = new Set(data.live.map((s) => s.role)), stopped = new Set(data.stopped ?? []);
+  return [...new Set(data.rows.flatMap((r) => (r.owner && (r.bucket === "running" || r.bucket === "stuck") && !alive.has(r.owner) && !stopped.has(r.owner) ? [r.owner] : [])))];
 }
 type FlowItem = {id: string; title: string; label: string; warnings: string[]};
 function FlowList({items}: {items: FlowItem[]}) {
@@ -53,6 +54,8 @@ type StatusData = Stamp & {
   // 쉬는 역할 정리 후보 수(마지막 실행 기준). 모르면 null 또는 없음.
   idleCandidates?: number | null;
   live: LiveSession[] | null; flow: FlowSummary; alerts: OpenAlerts | null; supervisors: Supervisors | null;
+  // 전략 맵과 같은 재료: 관계표, 일부러 끈 역할, 역할이 든 일의 이유(모르면 null).
+  hierarchy?: Record<string, string> | null; stopped?: string[] | null; held?: Record<string, string> | null;
   boards: {name: string; state: string; total: number; counts: Record<string, number>; watchHtml?: string}[];
   watchHtml: string;
   resources: {current: {memory: string; freePercent: number | null; swapUsed: number | null; load5: number | null}; ncpu: number | null} | null;
@@ -70,9 +73,7 @@ const groups = [
   ["done", "완료"], ["closed", "취소·대체"],
 ];
 const OPEN_WORK_LIMIT = 8;
-// 저장소·열린 워크·작업중·막힘·결정·경보가 모두 0인 슈퍼감독 줄은 한 줄로 합친다. 하나라도 있으면 늘 보인다.
-const isIdleSuper = (s: Supervisors["items"][number]) =>
-  s.repos.length === 0 && s.openWorks === 0 && s.running === 0 && s.stuck === 0 && s.decisions === 0 && s.alerts === 0;
+// 저장소·열린 워크·작업중·막힘·결정·경보가 모두 0인 슈퍼감독 줄(status-band.ts isIdleSuper)은 한 줄로 합친다. 하나라도 있으면 늘 보인다.
 const busySupers = (items: Supervisors["items"]) => items.filter(s => !isIdleSuper(s));
 const idleSupers = (items: Supervisors["items"]) => items.filter(isIdleSuper);
 export default function Status({url}: {url: URL}) {
@@ -104,6 +105,9 @@ export default function Status({url}: {url: URL}) {
   const held = data?.works.filter(row => row.state === "hold") || [];
   const closed = data?.works.filter(row => ["done","cancelled"].includes(row.state)) || [];
   const closedCount = data?.endedWorks && !data.endedWorks.included ? data.endedWorks.total : closed.length;
+  // 슈퍼감독 줄은 전략 맵과 같은 계산(buildMap)으로 거른다: 일부러 껐고 지도에도 없는 슈퍼감독은 줄에서 뺀다. 기준을 여기서 다시 만들지 않는다.
+  const onMap = new Set(data && !repo ? buildMap({ hierarchy: data.hierarchy ?? null, rows: data.rows, live: data.live, alerts: data.alerts, stopped: data.stopped, held: data.held }).bases.flatMap(b => b.units.map(u => u.role)) : []);
+  const supers = data?.supervisors ? shownSupervisors(data.supervisors.items, onMap) : [];
   const execution = (row: Row) => <article className={row.healthKind === "attention" ? "st-attn-card" : "st-work"} key={row.key}>
     <div className="st-attn-head"><Health row={row}/><strong><CardLink row={row}/></strong></div>
     <p>{row.healthReason}</p>
@@ -204,15 +208,15 @@ export default function Status({url}: {url: URL}) {
         <li className="st-live-row"><a href="#strategy-map">전략 맵에서 담당 전체 보기</a></li>
       </ul></details>
       <section id="status-supers" className="st-section">
-        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? data.supervisors.items.length + "명" : "모름"}</span><span className="st-hint">슈퍼감독(--profile super로 시작한 역할)마다 한 줄입니다. 그 아래 감독·담당의 실행을 가장 가까운 슈퍼감독 한 곳에만 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
+        <header className="st-sec-head"><h2>슈퍼감독별 현황</h2><span className="st-cnt">{data.supervisors ? supers.length + "명" : "모름"}</span><span className="st-hint">슈퍼감독(--profile super로 시작한 역할)마다 한 줄입니다. 그 아래 감독·담당의 실행을 가장 가까운 슈퍼감독 한 곳에만 묶어 세므로, 묻지 않아도 어디가 돌고 어디가 막혔는지 보입니다.</span></header>
         {data.supervisors === null ? <p className="st-error" role="alert">관계표를 읽지 못해 슈퍼감독별로 묶지 못했습니다. 감시기가 읽는 관계표 파일(원장의 마지막 hierarchy-loaded 기록이 가리키는 경로)을 확인하세요.</p>
-          : data.supervisors.items.length === 0 ? <p className="st-empty">슈퍼감독(--profile super)으로 시작한 역할이 관계표에 없습니다.</p>
-          : <><ul className="st-sup-list">{busySupers(data.supervisors.items).map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? " st-sup-dead" : "")}>
+          : supers.length === 0 ? <p className="st-empty">슈퍼감독(--profile super)으로 시작한 역할이 관계표에 없습니다.</p>
+          : <><ul className="st-sup-list">{busySupers(supers).map(s => <li key={s.super} data-fresh={`sup:${s.super}:${s.stuck}:${s.alerts ?? 0}`} className={"st-sup-row" + (s.stuck || (s.alerts ?? 0) ? " st-sup-attn" : "") + (s.alive === false ? (s.stopped ? " st-sup-stopped" : " st-sup-dead") : "")}>
               <strong>{s.super}</strong>
               <span className="st-sup-life">{supervisorLife(s)}</span>
               <small>{supervisorLine(s)} · 마지막 신호 {s.lastSignal ? time(s.lastSignal) : "없음"}</small>
             </li>)}</ul>
-            {idleSupers(data.supervisors.items).length > 0 && <details className="st-fold st-sup-idle"><summary>일 없는 슈퍼감독 {idleSupers(data.supervisors.items).length}명</summary><p>{idleSupers(data.supervisors.items).map(s => s.super + " (" + supervisorLife(s) + ")").join(" · ")}</p></details>}</>}
+            {idleSupers(supers).length > 0 && <details className="st-fold st-sup-idle"><summary>일 없는 슈퍼감독 {idleSupers(supers).length}명</summary><p>{idleSupers(supers).map(s => s.super + " (" + supervisorLife(s) + ")").join(" · ")}</p></details>}</>}
         {data.supervisors && data.supervisors.unassigned > 0 && <p className="st-hint">관계표에 없는 담당의 실행 {data.supervisors.unassigned}건은 어느 슈퍼감독에도 묶이지 않았습니다.</p>}
         {data.previousGeneration && data.previousGeneration.works + data.previousGeneration.executions > 0 && <p className="st-hint" id="status-previous-generation">이전 세대 업무 {data.previousGeneration.works + data.previousGeneration.executions}건(업무 {data.previousGeneration.works} · 발령 {data.previousGeneration.executions})은 같은 이름을 새 대화가 다시 쓰기 전에 붙은 책임이라 "놀고 있음" 할 일에서 뺐습니다. 새 대화가 이어받으려면 업무·발령을 다시 맡기거나 인계하세요.</p>}
         {data.supervisors && (data.supervisors.unowned ?? 0) > 0 && <p className="st-hint">담당이 아직 정해지지 않은 실행(진행 전·일시정지) {data.supervisors.unowned}건은 세지 않았습니다.</p>}
