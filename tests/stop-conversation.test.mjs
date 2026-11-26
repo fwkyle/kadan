@@ -8,6 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import {ledgerHome, appendLedger, readLedger} from '../src/ledger.mjs';
 import {stopRole} from '../src/role-stop.mjs';
+import {intendedStop} from '../src/lifecycle-tail.mjs';
+import {TARGETS} from '../src/revive.mjs';
 import {stopConversationFields, budgetedRun, launchStart, lookupDeps, MISSING_REASONS} from '../src/role-conversation.mjs';
 import {paneInfo} from '../src/commands/restart.mjs';
 import {processTree} from '../src/process-tree.mjs';
@@ -255,4 +257,63 @@ test('인계는 선임을 끄기 직전 같은 조회를 부르고 stop 사건�
       assert.equal(stop.conversationMissing, 'session-gone');
     }
   }
+});
+
+// 세션이 이미 없는 역할의 꺼짐 기록(2026-11-26). `kadan stop`만 recordGone을 켠다.
+test('세션이 이미 없고 시작 기록이 있으면 꺼짐 기록 한 줄만 남기고, 다시 치면 중복 없이 안내만 한다', () => {
+  const f = fixture();
+  f.floor.alive = () => false;
+  f.floor.list = () => [];
+  const works = () => [{key: 'r/open-work', status: 'open', owner: f.role}];
+  const first = f.run({recordGone: true, readWorks: works});
+  assert.equal(first.ok, true);
+  assert.equal(first.recordOnly, true);
+  const [stop, ...rest] = f.stops();
+  assert.equal(rest.length, 0);
+  assert.deepEqual([stop.kind, stop.role, stop.session, stop.sessionGone, stop.conversationMissing, stop.restart],
+    ['stop', f.role, f.session, true, 'session-gone', undefined], '세션이 없었다는 사실이 구분되고 정상 종료로 읽힌다');
+  assert.deepEqual(stop.ownedOpenWorks, ['r/open-work']);
+  assert.equal(intendedStop(readLedger(f.home), f.session), true, '감시·지도와 같은 판정으로 정상 종료다');
+  assert.deepEqual(f.calls, [], '끌 세션이 없으니 PID 대조·대화 조회·끄기를 부르지 않는다');
+  assert.deepEqual(f.lines.out, [`이 역할이 owner인 열린 업무 1건: r/open-work — 끄면 주인 없는 업무가 된다`,
+    `꺼짐으로 기록함: ${f.session} — 세션은 이미 없었습니다`]);
+  const again = f.run({recordGone: true, readWorks: works});
+  assert.deepEqual([again.ok, again.alreadyRecorded, again.entry], [true, true, undefined]);
+  assert.equal(f.stops().length, 1, '중복 기록 없음');
+  assert.match(f.lines.out.at(-1), new RegExp(`^이미 꺼짐으로 기록됨: ${f.session} .*다시 기록하지 않습니다$`));
+});
+
+test('꺼짐 기록을 막는 경우: 시작 기록 없음·기반 프로세스·세션 상태 모름·살아 있다고 보임, 재시작 도중 사라진 세션은 기록한다', () => {
+  const home = ledgerHome(), lines = [];
+  const gone = {name: 'tmux', alive: () => false, list: () => [], pid: () => null, stop: () => assert.fail('끄지 않는다')};
+  const run = (role, floor = gone) => stopRole({role, session: `kadan-${role}`, home, floor, recordGone: true,
+    log: line => lines.push(line), warn: line => lines.push(line), readWorks: () => []});
+  const stops = role => readLedger(home).filter(e => e.session === `kadan-${role}` && e.kind === 'stop');
+  // 오타: 그 이름의 시작 기록이 없다.
+  const typo = run('없는-역할-오타');
+  assert.deepEqual([typo.ok, typo.code], [false, 1]);
+  assert.match(typo.message, /^세션 없음: kadan-없는-역할-오타 — 시작 기록도 없습니다/);
+  assert.equal(stops('없는-역할-오타').length, 0);
+  // 기반 프로세스 4개는 시작 기록이 있어도 예전처럼 거절한다(stop 기록이 생기면 up --auto가 되살리지 않는다).
+  for (const role of TARGETS) {
+    appendLedger({kind: 'start', floor: 'tmux', role, session: `kadan-${role}`, cmd: 'x', panePid: '100', by: '사람'}, home);
+    const before = stops(role).length; // 같은 홈의 앞 시험이 남긴 기록이 있을 수 있다
+    assert.deepEqual(run(role), {ok: false, code: 1, message: `세션 없음: kadan-${role}`});
+    assert.equal(stops(role).length, before);
+  }
+  // 없다고 확인된 때만 기록한다: 목록 조회 실패·목록에는 살아 있음.
+  const f = fixture();
+  assert.match(run(f.role, {...gone, list: () => { throw new Error('tmux 세션 목록 조회 실패: 생존 상태 모름'); }}).message, /확인하지 못해 꺼짐으로 기록하지 않았습니다/);
+  assert.match(run(f.role, {...gone, list: () => [{session: f.session, alive: true, pid: '100'}]}).message, /엇갈립니다/);
+  assert.equal(f.stops().length, 0);
+  // 마지막 수명 사건이 restart stop이면(재시작 도중 사라짐) 정상 종료가 아니므로 기록한다.
+  appendLedger({kind: 'stop', role: f.role, session: f.session, restart: true, by: 'boss'}, home);
+  assert.equal(run(f.role).recordOnly, true);
+  assert.deepEqual(f.stops().map(e => [e.restart ?? null, e.sessionGone ?? null]), [[true, null], [null, true]]);
+  // 켜지 않은 호출자(업무 마감의 함께 끄기 등)는 예전처럼 거절한다.
+  const off = fixture();
+  off.floor.alive = () => false;
+  off.floor.list = () => [];
+  assert.deepEqual(off.run(), {ok: false, code: 1, message: `세션 없음: ${off.session}`});
+  assert.equal(off.stops().length, 0);
 });

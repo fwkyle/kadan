@@ -79,7 +79,10 @@ export function planHierarchyPrune({ table, entries, cards, works, sessions, now
       if (entry.resolved) deaths.delete(entry.role);
       else deaths.set(entry.role, entry);
     } else if (['send', 'done'].includes(entry.kind)) {
-      // 이전 죽음 관측 뒤 다시 활동한 흔적이 있으면 새 종료 관측을 기다린다.
+      // 우편함 보관(transport=mailbox)은 받는 쪽이 꺼져 있어도 쌓인다. 다시 활동한 흔적이 아니다.
+      // 2026-11-26 실측: 정상 종료 사흘 뒤 사람이 보낸 보관 우편 한 통이 종료 근거를 지워 역할이 관계표에 계속 남았다.
+      if (entry.kind === 'send' && entry.transport === 'mailbox') continue;
+      // 이전 죽음 관측 뒤 다시 활동한 흔적(세션에 실제로 들어간 전달·완료 확정)이 있으면 새 종료 관측을 기다린다.
       deaths.delete(entry.role);
     }
   }

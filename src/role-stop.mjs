@@ -18,6 +18,7 @@ import { TARGETS, acquireReviveLock, lockWaitMs, reclaimLog, legacyLog, markStop
 import { pendingCardsFor, buildStopLedgerEntry, closeStartedWindow } from "./cli-start-support.mjs";
 import { stopConversationFields, lookupDeps } from "./role-conversation.mjs";
 import { paneInfo } from "./commands/restart.mjs";
+import { isIntendedStop, isLifecycle } from "./lifecycle-tail.mjs";
 
 const OWNED_WORKS_MAX = 20;
 // 이 역할이 현재 owner인 열린 업무 키. 끄면 주인 없는 업무가 되므로 알린다(막지 않는다). 못 읽으면 알리지 않고 끈다.
@@ -28,12 +29,42 @@ function ownedOpenWorks(role, entries, readWorks) {
   } catch { return []; }
 }
 
+// 세션이 이미 없는 역할(재부팅·창 닫힘으로 사라진 세션)의 꺼짐 기록만 남긴다(2026-11-26). 끄는 것이 없으니 PID 대조·대화 번호 조회·
+// 창 정리는 건너뛴다. 이 기록이 있어야 대시보드 지도가 "세션 사라짐"(빨강) 대신 꺼진 역할로 읽고 관계표 정리가 종료 시각을 안다.
+// 막는 경우: 세션 목록을 못 읽음(없다고 확인된 때만 기록), 그 세션의 start 기록 없음(오타), 이미 꺼짐으로 기록됨(중복 없이 안내만).
+// "이미 꺼짐"은 감시와 같은 판정(마지막 수명 사건이 restart 아닌 stop)이다. 마지막이 restart stop이면 기록한다(재시작 도중 사라진 세션).
+function recordGoneStop({ role, session, home, floor, log, announce }) {
+  const refuse = (message) => ({ ok: false, code: 1, message });
+  try {
+    if (floor.list({ strict: true }).some(s => s.session === session && s.alive !== false)) {
+      return refuse(`세션 상태가 엇갈립니다: ${session} — 꺼짐으로 기록하지 않았습니다. 잠시 뒤 다시 치세요`);
+    }
+  } catch (error) { return refuse(`세션 상태를 확인하지 못해 꺼짐으로 기록하지 않았습니다: ${error.message}`); }
+  const entries = readLedger(home);
+  try { sessionOwner(entries, session, role); } catch (error) { return refuse(error.message); }
+  const last = entries.findLast(e => isLifecycle(e) && e.session === session);
+  if (!entries.some(e => e?.kind === "start" && e.session === session)) {
+    return refuse(`세션 없음: ${session} — 시작 기록도 없습니다. 역할 이름을 확인하세요`);
+  }
+  if (isIntendedStop(last)) {
+    log(`이미 꺼짐으로 기록됨: ${session}${last.t ? ` (${last.t})` : ""} — 다시 기록하지 않습니다`);
+    return { ok: true, session, windowIncomplete: false, alreadyRecorded: true };
+  }
+  const owned = announce(entries);
+  const entry = { ...buildStopLedgerEntry({ role, session }), sessionGone: true, conversationMissing: "session-gone",
+    ...(owned.length > 0 ? { ownedOpenWorks: owned.slice(0, OWNED_WORKS_MAX) } : {}) };
+  appendLedger(entry, home);
+  log(`꺼짐으로 기록함: ${session} — 세션은 이미 없었습니다`);
+  return { ok: true, session, windowIncomplete: false, entry, recordOnly: true };
+}
+
 // 반환: {ok: false, message, code} — 끄지 않았다. {ok: true, session, windowIncomplete, entry} — 껐고 기록했다.
+// recordGone(`kadan stop`만 켠다): 세션이 이미 없으면 꺼짐 기록만 남긴다 → {ok: true, recordOnly: true, entry} 또는 {ok: true, alreadyRecorded: true}.
 // {ok: false, stopped: true, error} — 세션은 껐지만 창 정리·기록에서 예외가 났다(호출자가 다시 던지거나 보고한다).
 // {ok: true, session, handedOff: true, logPath} — 자기 세션이라 끄기부터를 분리된 프로세스에 넘겼다(selfStop 때만).
 // log는 stdout, warn은 stderr 줄이다. lookup은 시험에서 가짜 조회를 넣는 자리다.
 export function stopRole({ role, session, home, floor = defaultFloor, log = console.log, warn = console.error, beforeStop = null,
-  selfStop = null,
+  selfStop = null, recordGone = false,
   readWorks = () => new WorkStore(home).listWatch(),
   lookup = input => stopConversationFields({ ...input, deps: lookupDeps({ paneInfo }) }) }) {
   const infrastructure = TARGETS.includes(role);
@@ -42,21 +73,30 @@ export function stopRole({ role, session, home, floor = defaultFloor, log = cons
   const release = infrastructure ? acquireReviveLock(home, { waitMs: lockWaitMs(), onReclaim: reclaimLog, onLegacy: legacyLog }) : () => {};
   if (!release) return { ok: false, code: 1, message: `자동 되살리기(kadan up --auto)가 실행 중이라 끄지 않았습니다. 잠시 뒤 다시 kadan stop ${role}를 치세요` };
   const refuse = (message) => { release(); return { ok: false, code: 1, message }; };
-  if (!floor.alive(session)) return refuse(`세션 없음: ${session}`);
+  // 미확정 카드·열린 업무 안내 두 줄. 세션을 끄는 길과 꺼짐만 기록하는 길이 같이 쓴다. 돌려주는 값은 owner인 열린 업무 키다.
+  const announce = (entries) => {
+    const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), role);
+    if (pending.length > 0) {
+      log(`미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`);
+    }
+    const owned = infrastructure ? [] : ownedOpenWorks(role, entries, readWorks);
+    if (owned.length > 0) {
+      log(`이 역할이 owner인 열린 업무 ${owned.length}건: ${owned.slice(0, OWNED_WORKS_MAX).join(", ")}${owned.length > OWNED_WORKS_MAX ? " 외" : ""} — 끄면 주인 없는 업무가 된다`);
+    }
+    return owned;
+  };
+  if (!floor.alive(session)) {
+    // 기반 프로세스는 꺼짐 기록을 만들지 않는다: stop 기록이 생기면 `kadan up --auto`가 되살리기를 건너뛴다(잠긴 규칙 3).
+    if (!recordGone || infrastructure) return refuse(`세션 없음: ${session}`);
+    return recordGoneStop({ role, session, home, floor, log, announce });
+  }
   const entries = readLedger(home);
   let owner;
   try {
     owner = sessionOwner(entries, session, role);
     assertSessionOwner(owner, floor.pid(session), { infrastructure });
   } catch (error) { return refuse(error.message); }
-  const pending = pendingCardsFor(taskIdentity(new CardStore(home).listSummaries()).project(entries), role);
-  if (pending.length > 0) {
-    log(`미확정 카드 ${pending.length}건: ${pending.join(", ")} — 종료하면 화면이 사라진다. 확인했으면 kadan done ${role} <카드id> <ok|failed>`);
-  }
-  const owned = infrastructure ? [] : ownedOpenWorks(role, entries, readWorks);
-  if (owned.length > 0) {
-    log(`이 역할이 owner인 열린 업무 ${owned.length}건: ${owned.slice(0, OWNED_WORKS_MAX).join(", ")}${owned.length > OWNED_WORKS_MAX ? " 외" : ""} — 끄면 주인 없는 업무가 된다`);
-  }
+  const owned = announce(entries);
   // 자기 세션이면 끄는 순간 이 프로세스도 죽는다. 표시·대화 조회·끄기는 pane 밖의 분리된 프로세스가 처음부터 다시 한다.
   // 자기 세션 판정은 프로세스 조상으로 한다. 넘기지 못하면 아무것도 바꾸지 않고 거절한다(표시 저장 전이다).
   let self = false;

@@ -20,7 +20,8 @@ export function cmdStop(argv, flags = {}) {
     if (!result.ok || result.windowIncomplete) process.exitCode = 1;
     return;
   }
-  const result = stopRole({ role, session, home, selfStop: createSelfStop(home) });
+  // 세션이 이미 없는 역할은 꺼짐 기록만 남긴다(recordGone). 기반 프로세스·시작 기록 없는 이름은 예전처럼 거절한다.
+  const result = stopRole({ role, session, home, selfStop: createSelfStop(home), recordGone: true });
   // 세션을 끈 뒤의 예외(창 정리·원장 기록)는 예전처럼 그대로 올린다.
   if (result.error) throw result.error;
   if (!result.ok) die(result.message, result.code);
