@@ -8,9 +8,10 @@
 import {CardStore} from './card-store.mjs';
 import {streamHeads} from './storage.mjs';
 import {isEnded} from './status-labels.mjs';
+import {closeNoteHead} from './work-close-note.mjs';
 
 const LIST_MAX=10;
-const ACTION_LABEL={complete:'완료',cancel:'취소'};
+const ACTION_STATUS={complete:'done',cancel:'cancelled'};
 
 // executions: 업무에 연결된 실행. cards: 마감 관문을 통과한 카드 센터의 카드(연결 실행이 모두 있고 끝나 있다).
 // 저장 상태가 끝 묶음(done·cancelled·superseded)인 카드는 이미 정리된 것이라 뺀다. 그 밖(draft·ready·assigned·hold·archived)은
@@ -28,7 +29,7 @@ export function planCardClose(executions,cards){
 // 마감 저장과 닫기 사이에는 업무가 다시 열리거나 카드가 다른 업무로 옮겨 갈 수 있다. 업무 기록만 바뀌어 카드 revision과
 // 원장은 그대로이므로, 카드마다 쓰기 직전(쓰기 잠금 안)에 이 업무의 최신 기록 한 줄만 읽어 확인한다(이력·원장은 읽지 않는다).
 // 한 실행은 한 업무에만 연결된다(work-store의 link·execute가 같은 잠금 안에서 거절한다). 이 업무에 남아 있으면 다른 업무에는 없다.
-function stillClosedAndLinked(home,workKey){
+export function stillClosedAndLinked(home,workKey){
   const stream=`works/${workKey}/events.jsonl`;
   return key=>{
     const head=streamHeads(home,[stream]).get(stream);
@@ -57,7 +58,7 @@ export function cardCloseQuery(failed=[]){
 // 이미 닫힌 카드는 기록 없이 넘어간다.
 export function closeWorkCards(home,plan,{workKey,action,by,version}){
   const items=plan.map(({key,revision,role,result,runs})=>({key,revision,role,
-    note:`업무 ${workKey} ${ACTION_LABEL[action]} 마감으로 자동 닫음 · 원장 결과 ${result} (${runs.join(' · ')})`}));
+    note:`${closeNoteHead('auto',workKey,ACTION_STATUS[action])}${result} (${runs.join(' · ')})`}));
   const {closed,failed}=new CardStore(home).closeDone(items,{version,by,guard:stillClosedAndLinked(home,workKey)});
   const written=new Set(closed);
   return {closed:plan.filter(p=>written.has(p.key)).map(({key,from,result})=>({key,from,result})),failed};

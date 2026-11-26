@@ -11,6 +11,7 @@ import {isUserActor} from './actors.mjs';
 import {latestPassReview} from './merge-check.mjs';
 import {closeWorkRoles} from './work-role-cleanup.mjs';
 import {cardCloseLines} from './work-card-close.mjs';
+import {backfillCloseCards,backfillLines} from './work-card-backfill.mjs';
 
 const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 
@@ -31,6 +32,7 @@ export const WORK_FLAGS={
  complete:[...REVISION_NOTE,'result','keep-roles'],
  cancel:[...REVISION_NOTE,'result'],
  reopen:[...REVISION_NOTE],
+ 'backfill-close':['apply'],
  'auto-configure':['revision','implementation','review','worker','reviewer','notify','deadline','next-block'],
  'auto-show':[],
  'auto-report':['execution','outcome','result-file'],
@@ -85,6 +87,7 @@ export function workCommand(args,flags,context){
  chatDecisionsAfter(args,flags,context,revisionBefore,failure);
  if(failure)throw failure;
  for(const line of cardCloseLines(result?.cardClose))process.stderr.write(`${line}\n`);
+ if(args[0]==='backfill-close'&&!flags.help)for(const line of backfillLines(result))process.stderr.write(`${line}\n`);
  return closeRolesAfterComplete(args,flags,context,result);
 }
 
@@ -107,9 +110,9 @@ function closeRolesAfterComplete([action],flags,context,result){
 // 규칙(차례 변경은 kyle이 답했다는 근거가 아니다): execute는 부른 역할이 요청한 결정만, complete·cancel은 모두, 그 밖은 닫지 않는다.
 // 명령이 실패해도 업무에 쓴 것이 있으면(revision이 달라짐) 알리되 닫지는 않는다. 읽기 명령은 내지 않는다.
 const CHAT_CLOSE={execute:['후속 발령으로 자동 닫힘','requester'],complete:['업무 완료로 자동 닫힘','all'],cancel:['업무 취소로 자동 닫힘','all']};
-// 안내·닫기 대상이 아닌 명령: 읽기(list·show)와 create, 그리고 자동 왕복(auto-*). auto-*는 프로그램·작업자가 부르고 결과가 비동기라 안내를 읽는 감독이 없다.
+// 안내·닫기 대상이 아닌 명령: 읽기(list·show)와 create, 업무를 쓰지 않는 backfill-close, 그리고 자동 왕복(auto-*). auto-*는 프로그램·작업자가 부르고 결과가 비동기라 안내를 읽는 감독이 없다.
 const READ_ACTIONS=new Set(['list','show']);
-const skipsChat=action=>READ_ACTIONS.has(action)||action==='create'||String(action).startsWith('auto-');
+const skipsChat=action=>READ_ACTIONS.has(action)||action==='create'||action==='backfill-close'||String(action).startsWith('auto-');
 const NOTICE_MAX=5;
 function revisionOf([action='list',key],flags,{home}){
  if(skipsChat(action)||!key||flags.help)return null;
@@ -145,14 +148,24 @@ function listWorks(store,flags){
  return store.list().filter(w=>(!flags.repo||w.repo===flags.repo)&&(!flags.status||w.status===flags.status)&&(!flags.open||UNFINISHED.has(w.status)));
 }
 
+// 되돌릴 수 없는 줄을 한꺼번에 쓰는 명령이라 인자를 엄격히 받는다. --apply는 값 없는 옵션이라 `--apply false`는
+// "적용 + 남는 인자 false"로 풀리고, 업무 키를 붙이면 그 업무만 닫는 줄 알고 전체를 닫게 된다. 둘 다 거절한다.
+function backfillClose(args,flags,{home,by}){
+ const usage='kadan work backfill-close [--apply] (--apply가 없으면 미리보기)';
+ if(args.length>1)throw Object.assign(new Error(`work backfill-close는 업무 키나 다른 인자를 받지 않습니다(남는 인자: ${args.slice(1).join(' ')}). 끝난 업무 전체가 대상입니다: ${usage}`),{exitCode:2});
+ if(flags.apply!==undefined&&flags.apply!==true)throw Object.assign(new Error(`--apply는 값 없이 씁니다: ${usage}`),{exitCode:2});
+ return backfillCloseCards(home,{apply:flags.apply===true,by});
+}
+
 function workCommandInner(args,flags,context){
  const {home,by}=context;
  const [action='list',key]=args,store=new WorkStore(home);
  if(flags.help&&action.startsWith('auto-'))return 'kadan work auto-configure <업무키> --revision N --implementation 원본카드키 --review 검수원본키 --worker 작업자 --reviewer 검수자 [--notify 감독 --deadline 기존시한 --next-block] | auto-show <업무키> | auto-report <업무키> --execution 현재실행키 --outcome implemented|pass|changes|exception [--result-file 기존절대경로] | auto-step <업무키> | auto-run <업무키> [--interval 초]. 상세: docs/automatic-review.md';
  if(action.startsWith('auto-'))return automaticReviewCommand(args,flags,context);
- if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] [--preset 프리셋] | list [--repo 저장소] [--status open|hold|done|cancelled | --open (끝나지 않은 업무 = open·hold, --status와 함께 쓰지 않음)] | show <키> | update <키> --revision N --note 이유 [--preset 프리셋|""] [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유. 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
+ if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] [--preset 프리셋] | list [--repo 저장소] [--status open|hold|done|cancelled | --open (끝나지 않은 업무 = open·hold, --status와 함께 쓰지 않음)] | show <키> | update <키> --revision N --note 이유 [--preset 프리셋|""] [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유 | backfill-close [--apply] (끝난 업무에 남은 실행 카드 소급 닫기. 업무 키를 받지 않고, --apply가 없으면 미리보기만). 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
  if(action==='list'){const works=listWorks(store,flags),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions,preset})=>({key,title,owner,status,revision,...(preset?{preset}:{}),executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
  if(action==='show'){const work=store.get(key);return {...work,...operationsFlowSummaries(home,[work]).get(key),latestPassReviewSha:latestPassReview(home,work)};}
+ if(action==='backfill-close')return backfillClose(args,flags,context);
  if(action==='create'){
   const work=store.create({key,title:flags.title,goal:flags.goal,scope:flags.scope,acceptance:flags.acceptance,owner:flags.owner,repoPath:flags['repo-path'],board:flags.board,preset:flags.preset,by});
   // 책임 감독에게 쌓인 열린 업무 수(방금 만든 업무 포함). 새 업무를 이 감독에게 줄지 고를 때 본다. JSON은 필드만 더한다.
