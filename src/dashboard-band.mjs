@@ -46,7 +46,8 @@ export function supervisorOf(hierarchy, role, profiles = null) {
   return nearestSuper(role, hierarchy, profiles);
 }
 
-export function supervisorSummary({ hierarchy, rows = [], works = [], decisions = null, alerts = null, live = null, profiles = null }) {
+// stopped: 일부러 끈 역할 이름 목록(dashboard/status.mjs stoppedRoles). 줄마다 stopped 칸으로 싣는다 — 화면이 "세션 사라짐"과 가른다.
+export function supervisorSummary({ hierarchy, rows = [], works = [], decisions = null, alerts = null, live = null, profiles = null, stopped = null }) {
   if (!hierarchy || typeof hierarchy !== "object") return null;
   const parents = new Map(Object.entries(hierarchy));
   const topOf = (role) => supervisorOf(parents, role, profiles);
@@ -70,7 +71,8 @@ export function supervisorSummary({ hierarchy, rows = [], works = [], decisions 
   for (const a of alerts?.items ?? []) { const s = bySuper.get(topOf(a.recipient)); if (s) s.alerts++; }
   const items = [...bySuper.values()].map((s) => {
     const session = live === null ? null : live.find((l) => l.role === s.super) ?? null;
-    return { ...s, repos: [...s.repos].sort(), alive: live === null ? null : Boolean(session), model: session?.model ?? null };
+    return { ...s, repos: [...s.repos].sort(), alive: live === null ? null : Boolean(session), model: session?.model ?? null,
+      stopped: live !== null && !session && (stopped ?? []).includes(s.super) };
   });
   return { items, unassigned, unowned };
 }

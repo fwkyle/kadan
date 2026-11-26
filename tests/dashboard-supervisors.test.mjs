@@ -31,10 +31,15 @@ test("슈퍼감독마다 실행·워크·결정·경보를 사슬 끝으로 묶�
   assert.equal(result.unowned, 1, "담당이 아직 없는 실행은 관계표 사각이 아니라 따로 센다");
   assert.deepEqual(result.items, [
     { super: "a-슈퍼감독", repos: ["repoA", "repoA2"], running: 2, stuck: 1, openWorks: 2, decisions: 2, alerts: 1,
-      lastSignal: "2026-10-05T02:00:00Z", alive: true, model: "gpt-5-mini" },
+      lastSignal: "2026-10-05T02:00:00Z", alive: true, model: "gpt-5-mini", stopped: false },
     { super: "b-슈퍼감독", repos: ["repoB"], running: 0, stuck: 1, openWorks: 1, decisions: 1, alerts: 1,
-      lastSignal: null, alive: false, model: null },
+      lastSignal: null, alive: false, model: null, stopped: false },
   ]);
+  // 일부러 끈 역할 목록을 주면 세션이 없는 슈퍼감독만 stopped로 표시한다(살아 있으면 아니고, 세션 상태를 모르면 판정하지 않는다).
+  const marked = (liveNow) => supervisorSummary({ hierarchy, rows, works, decisions, alerts, live: liveNow, stopped: ["a-슈퍼감독", "b-슈퍼감독"] })
+    .items.map((s) => [s.super, s.alive, s.stopped]);
+  assert.deepEqual(marked(live), [["a-슈퍼감독", true, false], ["b-슈퍼감독", false, true]]);
+  assert.deepEqual(marked(null), [["a-슈퍼감독", null, false], ["b-슈퍼감독", null, false]]);
 });
 
 test("관계표를 모르면 null, 결정·경보·세션을 모르면 그 칸만 null, 사용자 바로 아래 역할이 없으면 빈 목록", () => {

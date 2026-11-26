@@ -37,6 +37,8 @@ export function bandChips(input: BandInput): Chip[] {
 export type SupervisorSummary = {
   super: string; repos: string[]; running: number; stuck: number; openWorks: number;
   decisions: number | null; alerts: number | null; lastSignal: string | null; alive: boolean | null; model: string | null;
+  // 일부러 끈 역할인가(서버 판정). 세션이 없을 때만 참이다.
+  stopped?: boolean;
 };
 export type Supervisors = { items: SupervisorSummary[]; unassigned: number; unowned?: number };
 
@@ -50,11 +52,17 @@ export function supervisorLine(s: SupervisorSummary): string {
   ].join(" · ");
 }
 
-// 생존 칸: 창이 열려 있으면 모델까지, 없으면 '창 없음', 세션 상태를 모르면 '세션 모름'.
+// 생존 칸: 세션이 열려 있으면 모델까지, 세션 상태를 모르면 '세션 모름'. 세션이 없으면 전략 맵과 같은 말로 가른다 —
+// 일부러 껐으면 '꺼짐 · 인계 필요', stop 기록 없이 사라졌으면 '세션 사라짐'(2026-11-26 [kyle]).
 export function supervisorLife(s: SupervisorSummary): string {
   if (s.alive === null) return "세션 모름";
-  if (!s.alive) return "창 없음";
+  if (!s.alive) return s.stopped ? "꺼짐 · 인계 필요" : "세션 사라짐";
   return s.model ? `살아 있음 · ${s.model}` : "살아 있음";
+}
+// 슈퍼감독별 현황에 보일 줄: 일부러 껐고 전략 맵에도 없는(든 일·경보·보이는 하위가 없는) 슈퍼감독은 뺀다.
+// onMap은 전략 맵(buildMap)에 오른 역할 이름이다 — "든 일" 기준을 여기서 다시 세지 않는다.
+export function shownSupervisors(items: SupervisorSummary[], onMap: ReadonlySet<string>): SupervisorSummary[] {
+  return items.filter((s) => !(s.alive === false && s.stopped && !onMap.has(s.super)));
 }
 
 // 담당 한 줄: 역할 · 실행기/모델/강도. 모델을 모르면 '모델 기록 없음'.

@@ -15,7 +15,7 @@ export function shapeOf(harness: string | null): Shape {
 }
 
 // 상태별 개수. 접은 줄에 하위 상태를 합쳐 보일 때 쓴다. 0인 상태는 뺀다.
-const STATE_ORDER: UnitState[] = ["running", "stuck", "stale", "dead", "idle", "unknown", "off"];
+const STATE_ORDER: UnitState[] = ["running", "stuck", "stale", "dead", "stopped", "idle", "unknown", "off"];
 export type Count = { state: UnitState; n: number };
 export function stateCounts(units: Unit[]): Count[] {
   return STATE_ORDER.map((state) => ({ state, n: units.filter((u) => u.state === state).length })).filter((c) => c.n > 0);

@@ -27,9 +27,11 @@ test('질문 편지: 머리에 대시보드 질문·유닛, 끝에 "발령·승�
 
 test('묻기 경로: 화면 표·같은 사이트, 받는 사람은 서버가 정하고 요청의 to는 무시', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-ask-'));
-  const calls = [];
+  const calls = [], asked = [];
+  let recipient = true; // 받는 사람 세션: true 있음 · false 없음(확인됨) · null 모름
   const server = createWallServer(() => ({center:null, entries:[], tree:[], ledgerLines:0, collectedAt:new Date()}),
-    {home, cacheSec:0, hierarchy:() => table, ask:async (args) => { calls.push(args); return {to:args.to, mailId:'id-1'}; }});
+    {home, cacheSec:0, hierarchy:() => table, ask:async (args) => { calls.push(args); return {to:args.to, mailId:'id-1'}; },
+      sessionAlive:(role) => { asked.push(role); if (recipient === 'throw') throw new Error('조회 실패'); return recipient; }});
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -47,6 +49,21 @@ test('묻기 경로: 화면 표·같은 사이트, 받는 사람은 서버가 �
     assert.equal(ok.status, 200);
     assert.deepEqual(await ok.json(), {location:'/#strategy-map', result:{to:'m-슈퍼감독', mailId:'id-1'}});
     assert.deepEqual(calls, [{to:'m-슈퍼감독', message:askMessage({unit:'m-검수자', text:'왜 꺼졌어?', context:'유닛 정보'})}]);
+    assert.deepEqual(asked, ['m-슈퍼감독'], '생존은 고른 유닛이 아니라 실제 받는 사람으로 묻는다');
+    // 받는 사람 세션이 없다고 확인되면 거절하고 아무것도 보내지 않는다(우편함에 쌓지 않는다).
+    recipient = false;
+    for (const unit of ['m-검수자', 'm-슈퍼감독', '떠돌이']) {
+      const refused = await post({token, unit, text:'왜 꺼졌어?'});
+      assert.equal(refused.status, 409);
+      assert.equal(await refused.text(), `꺼져 있음 — 받을 세션 없음: ${unit === '떠돌이' ? '비서' : 'm-슈퍼감독'}`);
+    }
+    assert.equal(calls.length, 1, '거절한 질문은 보내지 않는다');
+    // 세션 상태를 모르면(값 없음·조회가 던짐) 지금처럼 보낸다.
+    for (const unknown of [null, 'throw']) {
+      recipient = unknown;
+      assert.equal((await post({token, unit:'m-검수자', text:'왜?'})).status, 200);
+    }
+    assert.equal(calls.length, 3);
   } finally { server.close(); }
 });
 

@@ -463,9 +463,9 @@ export function needsDecisions(url){
 }
 
 export function createWallServer(loadSnapshot, {home,notify,cacheSec=10,now=Date.now,warmAfterMs=12_000,runtime=null,
-  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,remote,remoteOptions,loadSummary,loadListSnapshot,
+  gui=false,guiRoot,startSecretary,ask,hierarchy,restart,sessionAlive,remote,remoteOptions,loadSummary,loadListSnapshot,
   loadLedger,loadMail,howToFile} = {}) {
-  const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{})}):null;
+  const centerHandler=home?createCenterHandler(home,{notify,...(startSecretary?{startSecretary}:{}),...(ask?{ask}:{}),...(hierarchy?{hierarchy}:{}),...(restart?{restart}:{}),...(sessionAlive?{sessionAlive}:{})}):null;
  // 같은 주소를 15초마다 다시 읽는 화면에서 원장 읽기와 렌더를 줄인다(2026-09-18). 수집 시각은 페이지에 그대로 남는다.
  // 원격 접속 설정(KADAN_HOME/remote-access.json)이 있을 때만 게이트를 만든다. 없으면 열쇠 조회도 타이머도 없다(2026-10-18).
  // remote를 직접 넘기면(시험) 파일 대신 그 설정을 쓴다.

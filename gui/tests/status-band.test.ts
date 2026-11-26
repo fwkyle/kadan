@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bandChips, liveLabel, supervisorLife, supervisorLine } from "../src/status-band.ts";
+import { bandChips, liveLabel, supervisorLife, supervisorLine, shownSupervisors } from "../src/status-band.ts";
 
 const base = { decisions: 0, stopped: 0, running: 0, alerts: { count: 0, items: [] }, flow: { total: 0, unconfirmedCount: 0, unconfirmed: [] }, live: [] };
 
@@ -41,7 +41,12 @@ test("슈퍼감독 한 줄: 숫자 칸 순서와 모름, 생존 칸", () => {
   assert.equal(supervisorLine({ ...s, repos: [], decisions: null, alerts: null }), "저장소 없음 · 열린 워크 3 · 작업중 2 · 막힘 0 · 내 결정 모름 · 경보 모름");
   assert.equal(supervisorLife(s), "살아 있음 · gpt-5-mini");
   assert.equal(supervisorLife({ ...s, model: null }), "살아 있음");
-  assert.equal(supervisorLife({ ...s, alive: false }), "창 없음");
+  assert.equal(supervisorLife({ ...s, alive: false }), "세션 사라짐");
+  assert.equal(supervisorLife({ ...s, alive: false, stopped: true }), "꺼짐 · 인계 필요");
+  // 일부러 껐고 전략 맵에도 없는 슈퍼감독만 줄에서 뺀다. 사라진 세션·지도에 남은 꺼진 역할·세션 모름은 남긴다.
+  const items = [{ ...s, super: "살아" }, { ...s, super: "끈-빈손", alive: false, stopped: true }, { ...s, super: "끈-인계", alive: false, stopped: true },
+    { ...s, super: "사라짐", alive: false }, { ...s, super: "모름", alive: null, stopped: false }];
+  assert.deepEqual(shownSupervisors(items, new Set(["살아", "끈-인계"])).map((x) => x.super), ["살아", "끈-인계", "사라짐", "모름"]);
   assert.equal(supervisorLife({ ...s, alive: null }), "세션 모름");
 });
 

@@ -37,6 +37,7 @@ import {setIdleHours} from './idle-roles-setting.mjs';
 import {compareReport} from './compare-report.mjs';
 import {renderRunnerSettings,runnerSettingsStyle} from './runner-settings-wall.mjs';
 import {sessionName} from './cli-basics.mjs';
+import {floor} from './floor.mjs';
 import {autopilotState} from './autopilot.mjs';
 import {listRepos, setRepoPolicy, AutopilotRepoPolicyError, autopilotRepoHttpMessage} from './autopilot-repo-policy.mjs';
 export const htmlEscape=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
@@ -197,6 +198,10 @@ export function askRecipient(unit, table, profiles = null) {
  if(!table)throw new Error('관계표를 읽을 수 없어 받는 사람을 확인하지 못했다');
  return nearestSuper(unit,table,profiles)??'비서';
 }
+// 받는 사람의 세션이 있는가: true·false·null(모름). 세션 목록 조회가 실패하면 모름이다 — 없다고 확인된 때만 질문을 막는다.
+export function recipientAliveDefault(role) {
+ try{return floor.list({strict:true}).some(s=>s.session===sessionName(role)&&s.alive!==false);}catch{return null;}
+}
 // 질문은 사용자 명의(KADAN_ROLE 비움)로 보낸다. 그래야 편지에 붙는 안내가 "사람 우편함으로 최종 답변" 명령을 적어 준다.
 // --raw를 쓰지 않는다 — 그 안내가 답이 돌아오는 길이다.
 export async function askDefault({to,message,cli=new URL('./cli.mjs',import.meta.url).pathname,env=process.env,run=promisify(execFile)}={}) {
@@ -212,7 +217,7 @@ export function askMessage({unit,text,context}) {
  return `[대시보드 질문 · ${unit}]\n${text}${context?`\n\n${context}`:''}\n\n이 편지는 사용자의 질문이다. 새 발령·승인이 아니다.`;
 }
 
-export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedgerIncremental(home))}={}) {
+export function createCenterHandler(home, {notify,startSecretary=startSecretaryDefault,ask=askDefault,restart=restartRoleDefault,hierarchy=()=>readActiveHierarchy(readLedgerIncremental(home)),sessionAlive=recipientAliveDefault}={}) {
  let listing=false;
  const token=randomBytes(24).toString('hex'),store=new CardStore(home),works=new WorkStore(home);
  return {token,async handle(req,res,url,cache={}) {
@@ -294,6 +299,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     if(text.length>4000||context.length>2000)throw new Error('질문이 너무 길다(본문 4000자·유닛 정보 2000자 이하)');
     let profiles=null;try{profiles=superProfiles(readLedgerIncremental(home));}catch{}
     const to=askRecipient(unit,hierarchy(),profiles);
+    // 받을 세션이 없다고 확인되면 보내지 않는다 — 꺼진 역할의 우편함에 쌓이기만 하고 답이 오지 않는다(2026-11-26 [kyle]).
+    // 세션 상태를 모르면(조회 실패) 막지 않는다. 기준은 고른 유닛이 아니라 실제 받는 사람이다.
+    let alive=null;try{alive=sessionAlive(to);}catch{}
+    if(alive===false)throw new Error(`꺼져 있음 — 받을 세션 없음: ${to}`);
     saved('/#strategy-map',await ask({to,message:askMessage({unit,text,context})}));return true;
    }
    if(url.pathname==='/decisions/answer') {

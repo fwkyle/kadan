@@ -397,6 +397,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-view .sm-totals .sm-t-running b { color: #814600; }
 .sm-view .sm-totals .sm-t-stuck b { color: #794e00; }
 .sm-view .sm-totals .sm-t-dead b { color: #b3261e; }
+.st-sup-row.st-sup-stopped { border-left-color: #8a948e; } .st-sup-row.st-sup-stopped .st-sup-life { color: #5f6a70; }
 .sm-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 14px; padding: 0; font-size: 12px; color: #536159; }
 .sm-legend li { display: inline-flex; align-items: center; gap: 6px; }
 .sm-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #cbd2cd; flex-shrink: 0; margin-right: 6px; vertical-align: middle; }
@@ -404,6 +405,7 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .sm-dot.sm-s-stuck, .sm-dot.sm-c-stuck { background: #b68625; }
 .sm-dot.sm-s-stale, .sm-dot.sm-c-stale { background: #a58a5c; }
 .sm-dot.sm-s-dead { background: #b3261e; }
+.sm-dot.sm-s-stopped { background: #a9b0b6; box-shadow: inset 0 0 0 1.2px #5f6a70; }
 .sm-dot.sm-s-idle { background: #536159; }
 .sm-dot.sm-s-unknown { background: #8a948e; }
 .sm-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
@@ -461,12 +463,13 @@ summary .preview, summary .muted { display: block; font-weight: 400; margin-top:
 .smt-shape.sm-s-stuck { fill: #b68625; }
 .smt-shape.sm-s-stale { fill: #a58a5c; }
 .smt-shape.sm-s-dead { fill: #b3261e; }
+.smt-shape.sm-s-stopped { fill: #a9b0b6; stroke: #5f6a70; stroke-width: 1.2; }
 .smt-shape.sm-s-idle { fill: #536159; }
 .smt-shape.sm-s-unknown { fill: #8a948e; }
 .smt-shape.sm-s-off { fill: #eef2ef; stroke: #9aa59d; stroke-width: 1.2; }
 .smt-shape.smt-nohar { fill: #fff; stroke: #536159; stroke-width: 1.4; stroke-dasharray: 2 2; }
 .smt-nohar.sm-s-running { stroke: #e68a27; } .smt-nohar.sm-s-stuck { stroke: #b68625; } .smt-nohar.sm-s-stale { stroke: #a58a5c; }
-.smt-nohar.sm-s-dead { stroke: #b3261e; } .smt-nohar.sm-s-unknown { stroke: #8a948e; } .smt-nohar.sm-s-off { stroke: #9aa59d; }
+.smt-nohar.sm-s-dead { stroke: #b3261e; } .smt-nohar.sm-s-stopped { stroke: #5f6a70; } .smt-nohar.sm-s-unknown { stroke: #8a948e; } .smt-nohar.sm-s-off { stroke: #9aa59d; }
 .smt-x { fill: none; stroke: #fff; stroke-width: 1.6; stroke-linecap: round; }
 .smt-icon { flex: none; vertical-align: middle; }
 .smt-legend-run { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }

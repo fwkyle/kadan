@@ -24,6 +24,8 @@ import { effectiveWorkOwner, withEffectiveOwner } from "../handover-state.mjs";
 import { previousGenerationExecutions, previousGenerationWorks } from "../watch-scope.mjs";
 import { isDescendant } from "../hierarchy.mjs";
 import { superProfiles } from "../super-role.mjs";
+import { heldRoles } from "../hierarchy-prune.mjs";
+import { taskIdentity } from "../task-identity.mjs";
 import { nextTimeBoundary } from "../wall-snapshot-cache.mjs";
 import { letters, pick, compact, page, piece, earlier, staleBoundary } from "./shared.mjs";
 import { frontStrip } from "./front.mjs";
@@ -67,6 +69,26 @@ const previousSummary = (items) => items && ({
   works: items.filter((i) => i.kind === "work").length, executions: items.filter((i) => i.kind === "execution").length, items: items.slice(0, 20),
 });
 
+// 일부러 끈 역할: 세션이 없고 마지막 수명 사건이 restart 아닌 stop이다. 역할 나무(cli-tree.mjs buildTree)가 원장을 한 번 훑을 때
+// 역할마다 챙긴 값(intendedStop)을 읽기만 한다 — 원장을 다시 훑지 않는다. 세션 상태를 모르면 null.
+export function stoppedRoles(center, roles) {
+  if (!center?.runtimeKnown) return null;
+  return (center.roles ?? []).filter((r) => r.intendedStop === true && r.life?.state !== "alive" && roles.has(r.role))
+    .map((r) => r.role).sort((a, b) => a.localeCompare(b, "ko"));
+}
+// 역할이 든 일(미완료 카드·업무·발령)의 이유. 관계표 정리와 같은 함수(hierarchy-prune.mjs heldRoles)라 기준이 갈리지 않는다.
+// 비용: 카드·업무 목록 한 번 + 원장 사건 한 번 훑기. 원장·카드·업무 배열이 직전과 같으면 다시 계산하지 않는다(시각을 읽지 않는다).
+// 원장이 10배면 다시 계산할 때의 훑기도 10배다(운영 실측은 결과 문서). 원장·업무를 못 읽으면 null.
+function heldReasons(snapshot, ledger, roles) {
+  const works = registeredCenterWorks(snapshot).works, cards = snapshot.center?.cards;
+  if (snapshot.ledgerLines === null || !Array.isArray(works) || !Array.isArray(cards)) return null;
+  try {
+    const all = piece("held-roles", [ledger, ledger.length, cards, works],
+      () => heldRoles({ displayed: cards, works, entries: ledger, identity: taskIdentity(cards) }));
+    return Object.fromEntries([...all].filter(([role]) => roles.has(role)));
+  } catch { return null; }
+}
+
 export function statusData(snapshot, url, stamp, m) {
   const recent = recentExecutionEvents(m.cards);
   // 워크 owner는 확정된 역할 인계를 따라 지금 책임 감독으로 센다(옛 감독 이름이면 슈퍼감독별 현황·?super=에서 빠졌다, PR #99 검수 2).
@@ -98,7 +120,12 @@ export function statusData(snapshot, url, stamp, m) {
   // 원장을 못 읽으면 프로필을 모르므로 예전 기준(상위가 @user)으로 돌아간다(super-role.mjs).
   const profiles = snapshot.ledgerLines === null ? null
     : piece("super-profiles", [ledger, ledger.length], () => superProfiles(ledger));
-  const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles });
+  // 꺼진 역할 재료(2026-11-26): 지도·슈퍼감독 줄이 "정상 종료"와 "세션만 사라짐"을 가르는 데 쓴다. 화면은 다시 판정하지 않는다.
+  // 대상은 지도에 오를 수 있는 역할(관계표·열린 실행 담당·경보 대상)로 좁힌다 — 원장의 모든 과거 역할을 싣지 않는다.
+  const mapRoles = new Set([...Object.keys(m.hierarchy ?? {}), ...statusRows.map((r) => r.owner).filter(Boolean), ...(allAlerts?.items ?? []).map((a) => a.role)]);
+  const stopped = stoppedRoles(snapshot.center, mapRoles);
+  const held = heldReasons(snapshot, ledger, mapRoles);
+  const supervisors = supervisorSummary({ hierarchy: m.hierarchy, rows: statusRows, works: statusWorks, decisions: openDecisions, alerts: allAlerts, live, profiles, stopped });
   // ?super=<역할>: 그 슈퍼감독 몫만. 감독(AI)이 경보를 받고 행동 전에 자기 판의 지금 상태를 작게 읽는 용도(2026-10-05 [kyle]).
   // 사람 화면과 같은 계산을 쓰고, 담당·요청자·수신자를 사슬 끝으로 올려 거른다.
   const previousItems = previousGenerationItems(snapshot, m);
@@ -197,6 +224,9 @@ export function statusData(snapshot, url, stamp, m) {
     decisions: repoDecisions,
     previousGeneration: previousSummary(previousItems),
     live,
+    // 일부러 끈 역할 이름(세션이 없는 역할만)과 역할이 든 일의 이유. 모르면 null — 화면은 모를 때 숨기지 않는다.
+    stopped,
+    held,
     lastRuns: lastRuns(snapshot.center, { hierarchy: m.hierarchy, alerts: allAlerts }),
     flow: (({ total, unconfirmed }) => ({ total, unconfirmedCount: unconfirmed.length, unconfirmed: unconfirmed.slice(0, FLOW_PREVIEW) }))(flowSummary(m.reviewFlows)),
     alerts: repo ? alertsOfRepo(allAlerts, repoOwners) : alerts,
