@@ -12,6 +12,9 @@ import {buildCardCenter} from '../src/card-center.mjs';
 import {executionBucket, executionHealth, workHealth} from '../src/dashboard-execution.mjs';
 import {buildWorkStatus} from '../src/work-status-message.mjs';
 import {workCommand} from '../src/work-command.mjs';
+import {recentExecutionEvents} from '../src/dashboard-status.mjs';
+import {dashboardData} from '../src/dashboard-api.mjs';
+import {buildTree} from '../src/cli-tree.mjs';
 
 // Why: 업무를 마감해도 실행 카드의 저장 상태가 assigned로 남아, 대시보드가 끝난 작업자·감독을 경보했다(2026-11-26).
 // 원장 시각은 실제 순서(배정 → 발령 → 완료 → 마감)의 현재 시각을 쓴다. 미래 시각을 쓰면 실행이 저장 상태를 늘 이겨
@@ -82,8 +85,33 @@ test('complete: 원장 failed는 done + 결과 메모. 경보 묶음은 사라�
   assert.equal(executionBucket(after), 'closed');
   assert.equal(workHealth(f.store.get('repo/w'), [{card: after, round: 1}]).healthLabel, '업무 완료');
   assert.deepEqual(after.runs.map(r => [r.role, r.state]), [['A', 'failed']]);
+  assert.deepEqual(recentExecutionEvents([after]).filter(e => e.kind === 'failed').map(e => [e.card.key, e.role]), [[key, 'A']]);
   assert.match(after.statusReason, /원장 결과 failed \(A failed\)/);
   assert.match(buildWorkStatus(f.home, 'repo/w').content, /실패로 끝난 실행: 1건/);
+});
+
+test('사건 재현: 끈 작업자의 failed 실행은 마감 전엔 지도에 "꺼짐 · 인계 필요", 마감 뒤엔 지도에서 빠진다', async () => {
+  const {buildMap, STATE_LABEL} = await import('../gui/src/strategy-map.ts');
+  const f = fixture();
+  const file = path.join(f.home, 'hierarchy.json');
+  fs.writeFileSync(file, JSON.stringify({'시험상위': '@user', A: '시험상위'}));
+  appendLedger({kind: 'hierarchy-loaded', path: file, by: 'watch'}, f.home);
+  appendLedger({kind: 'start', role: 'A', session: 'kadan-A', panePid: '101', cmd: 'claude', by: '사람'}, f.home);
+  const key = f.execution({runs: [['A', 'failed']]});
+  appendLedger({kind: 'stop', role: 'A', session: 'kadan-A', by: '사람'}, f.home);
+  const onMap = () => {
+    const entries = readLedger(f.home), tree = buildTree(entries, {}, f.cards.listSummaries()), now = Date.now();
+    const data = dashboardData({home: f.home, collectedAt: new Date(now).toISOString(), centerError: null, entries,
+      ledgerLines: entries.length, center: buildCardCenter({cards: f.cards.list(), entries, tree, runtimeKnown: true, now}),
+      registeredWorks: f.store.list(), resources: null, resourceError: '격리 시험', tree, decisions: []},
+    new URL('http://local/api/dashboard/status'));
+    const unit = buildMap({hierarchy: data.hierarchy, rows: data.rows, live: data.live, alerts: data.alerts,
+      stopped: data.stopped, held: data.held}).bases.flatMap(b => b.units).find(u => u.role === 'A');
+    return {rows: data.rows.map(r => r.key), label: unit ? STATE_LABEL[unit.state] : null};
+  };
+  assert.deepEqual(onMap(), {rows: [key], label: '꺼짐 · 인계 필요'});
+  complete(f);
+  assert.deepEqual(onMap(), {rows: [], label: null});
 });
 
 test('cancel도 같은 방식으로 닫는다', () => {
