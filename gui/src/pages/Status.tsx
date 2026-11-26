@@ -10,6 +10,7 @@ import { radarBlips } from "../radar-blips";
 import { ALERT_SHOWN, STOP_SHOWN, alertMore, firstLine, groupAskText, groupStopped, headRest, shortenTurn, type StopGroup } from "../stopped";
 import { bandChips, isIdleSuper, liveLabel, shownSupervisors, supervisorLife, supervisorLine, type FlowSummary, type LiveSession, type OpenAlerts, type Supervisors } from "../status-band";
 import { buildMap } from "../strategy-map";
+import { roundLine } from "../round-line";
 
 // 일을 들고 있는데 stop 기록 없이 세션이 사라진 담당(레이더의 세션 사라짐 점). 일부러 끈 역할은 뺀다. 세션 상태를 모르면 비워 둔다.
 function deadRoles(data: { live: { role: string }[] | null; rows: Row[]; stopped?: string[] | null }) {
@@ -149,6 +150,7 @@ export default function Status({url}: {url: URL}) {
   const work = (row: Row) => <article className="st-work" key={row.key}>
     <div className="st-work-top"><Health row={row}/><span className="st-work-board">{row.board || row.repo} · {row.flowLabel}</span><span className="st-work-prog">{row.flowPhase}</span></div>
     <h3 className="st-work-title"><CardLink row={row}/></h3>
+    {row.roundNow && <p className="st-work-round">{roundLine(row.roundNow)}</p>}
     {row.purpose && <p className="st-work-purpose">{row.purpose}</p>}
     <p>{row.healthReason}</p>
     <dl className="st-work-grid"><dt>지금 차례</dt><dd className="st-turn" title={shortenTurn(row.turnLabel).rest ? row.turnLabel : undefined}>{shortenTurn(row.turnLabel).text}</dd><dt>다음 행동</dt><dd>{row.next}</dd></dl>

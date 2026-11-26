@@ -17,6 +17,7 @@ import WorktimeSummary from "./WorktimeSummary";
 import { durationLabel, workTitle } from "../worktime";
 import { usePaneScroll } from "../scroll";
 import { shortenTurn } from "../stopped";
+import { roundLine } from "../round-line";
 import { collectionHint, collectionSwitchPatch, columnLabel, filterResetPatch, showDoneButOpen } from "../workspace-labels";
 const Detail = lazy(() => import("./Detail"));
 // 상태 필터 이름. 서버 status-labels.mjs의 exactStatusLabel과 같게 둔다(2026-10-05 [kyle]).
@@ -58,6 +59,7 @@ const baseColumns: Column[] = [
       <>
         <CardLink row={row} />{row.difficulty === "hard" && <> <span className="kb-mark">어려움</span></>}
         <small title={row.purpose || row.summary}>{row.id || row.key}</small>
+        {row.roundNow && <small>{roundLine(row.roundNow)}</small>}
       </>
     ),
   },
@@ -727,6 +729,7 @@ function Grouped({
               <h3>
                 <a href={cardUrl(row.key)}>{row.title}</a>{row.difficulty === "hard" && <> <span className="kb-mark">어려움</span></>}
               </h3>
+              {row.roundNow && <p>{roundLine(row.roundNow)}</p>}
               <p>{row.turnLabel}</p>
               <small>{row.reviewLabel || row.flowLabel}</small>
               {row.model && <small className="tile-model" title={row.modelTitle}>{row.owner ? row.owner + " · " : ""}{row.model}{row.effort ? " · " + row.effort : ""}</small>}
