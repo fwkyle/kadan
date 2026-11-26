@@ -166,7 +166,7 @@ export function statusData(snapshot, url, stamp, m) {
       rows: statusRows.filter((r) => mine(r.owner) && ["running", "stuck"].includes(r.bucket))
         .map((r) => pick(r, ["key", "title", "owner", "bucket", "healthLabel", "signalAt", "failureReason", "next"])),
       works: statusWorks.filter((w) => mine(w.owner) && ["running", "hold"].includes(w.state))
-        .map((w) => pick(w, ["key", "title", "owner", "state", "turnLabel", "next"])),
+        .map((w) => ({ ...pick(w, ["key", "title", "owner", "state", "turnLabel", "next"]), ...(w.roundNow && { roundNow: w.roundNow }) })),
       decisions: openDecisions === null ? null : openDecisions.filter((d) => mine(d.requestedBy)),
       userTurnWaits: myUserTurnWaits,
       previousGeneration: previousSummary(previousItems?.filter((i) => mine(i.role)) ?? null),
