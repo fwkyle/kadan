@@ -343,7 +343,7 @@ const RACES = {
   '새 발령': (f, key) => appendLedger({kind: 'send', by: BOSS, role: 'B', taskId: key.split('/')[1], executionKey: key, digest: 'new'}, f.home),
   '짧은 ID만 적힌 새 발령': (f, key) => appendLedger({kind: 'send', by: BOSS, role: 'B', taskId: key.split('/')[1], digest: 'short'}, f.home),
   '새 완료 기록': (f, key) => appendLedger({kind: 'done', by: 'B', role: 'B', taskId: key.split('/')[1], executionKey: key, result: 'failed'}, f.home),
-  '새 인계': (f, key) => appendLedger({kind: 'handover', phase: 'transferred', handoverId: 'h-1', from: 'A', to: 'B', taskIds: [key], by: BOSS}, f.home),
+  '새 인계 기록': (f, key) => appendLedger({kind: 'handover', phase: 'transferred', handoverId: 'h-1', from: 'A', to: 'B', taskIds: [key], by: BOSS}, f.home),
 };
 for (const [name, inject] of Object.entries(RACES)) {
   test(`경합: 마감 판정 뒤 ${name}이 생긴 카드는 닫지 않고 나머지만 닫는다`, t => {
