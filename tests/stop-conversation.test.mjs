@@ -292,7 +292,7 @@ test('꺼짐 기록을 막는 경우: 시작 기록 없음·기반 프로세스�
   // 오타: 그 이름의 시작 기록이 없다.
   const typo = run('없는-역할-오타');
   assert.deepEqual([typo.ok, typo.code], [false, 1]);
-  assert.match(typo.message, /^세션 없음: kadan-없는-역할-오타 — 시작 기록도 없습니다/);
+  assert.equal(typo.message, '세션 없음: kadan-없는-역할-오타', '예전과 같은 문구');
   assert.equal(stops('없는-역할-오타').length, 0);
   // 기반 프로세스 4개는 시작 기록이 있어도 예전처럼 거절한다(stop 기록이 생기면 up --auto가 되살리지 않는다).
   for (const role of TARGETS) {

@@ -31,21 +31,21 @@ function ownedOpenWorks(role, entries, readWorks) {
 
 // 세션이 이미 없는 역할(재부팅·창 닫힘으로 사라진 세션)의 꺼짐 기록만 남긴다(2026-11-26). 끄는 것이 없으니 PID 대조·대화 번호 조회·
 // 창 정리는 건너뛴다. 이 기록이 있어야 대시보드 지도가 "세션 사라짐"(빨강) 대신 꺼진 역할로 읽고 관계표 정리가 종료 시각을 안다.
-// 막는 경우: 세션 목록을 못 읽음(없다고 확인된 때만 기록), 그 세션의 start 기록 없음(오타), 이미 꺼짐으로 기록됨(중복 없이 안내만).
+// 막는 경우: 그 세션의 start 기록 없음(오타 — 예전과 같은 "세션 없음" 문구), 세션 목록을 못 읽음(없다고 확인된 때만 기록),
+// 이미 꺼짐으로 기록됨(중복 없이 안내만).
 // "이미 꺼짐"은 감시와 같은 판정(마지막 수명 사건이 restart 아닌 stop)이다. 마지막이 restart stop이면 기록한다(재시작 도중 사라진 세션).
 function recordGoneStop({ role, session, home, floor, log, announce }) {
   const refuse = (message) => ({ ok: false, code: 1, message });
+  const entries = readLedger(home);
+  try { sessionOwner(entries, session, role); } catch (error) { return refuse(error.message); }
+  // 시작 기록이 없는 이름은 예전과 똑같이 거절한다(출력·종료 코드 불변).
+  if (!entries.some(e => e?.kind === "start" && e.session === session)) return refuse(`세션 없음: ${session}`);
   try {
     if (floor.list({ strict: true }).some(s => s.session === session && s.alive !== false)) {
       return refuse(`세션 상태가 엇갈립니다: ${session} — 꺼짐으로 기록하지 않았습니다. 잠시 뒤 다시 치세요`);
     }
   } catch (error) { return refuse(`세션 상태를 확인하지 못해 꺼짐으로 기록하지 않았습니다: ${error.message}`); }
-  const entries = readLedger(home);
-  try { sessionOwner(entries, session, role); } catch (error) { return refuse(error.message); }
   const last = entries.findLast(e => isLifecycle(e) && e.session === session);
-  if (!entries.some(e => e?.kind === "start" && e.session === session)) {
-    return refuse(`세션 없음: ${session} — 시작 기록도 없습니다. 역할 이름을 확인하세요`);
-  }
   if (isIntendedStop(last)) {
     log(`이미 꺼짐으로 기록됨: ${session}${last.t ? ` (${last.t})` : ""} — 다시 기록하지 않습니다`);
     return { ok: true, session, windowIncomplete: false, alreadyRecorded: true };
