@@ -55,14 +55,40 @@ test('SQLite: 프로세스가 트랜잭션 도중 죽으면 상태·이력이 �
  const result=await child(`import {transaction} from './src/storage.mjs';import {CardStore} from './src/card-store.mjs';transaction(process.argv[1],()=>{new CardStore(process.argv[1]).update('r/a',{status:'hold'},{revision:1,note:'강제 중단'});process.kill(process.pid,'SIGKILL')})`,[home]);
  assert.notEqual(result.status,0);assert.equal(new CardStore(home).get('r/a').revision,1);assert.equal(verifyStorage(home).integrity,'ok');
 });
-test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:60000},async()=>{
+// TEMP(exec-565c9390): 맥 CI에서 SQLite 문장별 시간을 얻는 임시 측정 코드. 검수 전에 지운다.
+const TRACE_CHILD=`
+const sqlite=process.getBuiltinModule('node:sqlite'),Orig=sqlite.DatabaseSync,log=[],t0=performance.now();
+const r=x=>Math.round(x*10)/10;
+const timed=(label,fn)=>{const s=performance.now();const done=extra=>log.push({label,at:Math.round(s-t0),ms:r(performance.now()-s),...extra});try{const out=fn();done();return out}catch(e){done({threw:e.message,errcode:e.errcode??null});throw e}};
+const exec=Orig.prototype.exec;Orig.prototype.exec=function(sql){for(const part of(/CREATE/i.test(sql)?[sql]:sql.split(';').map(x=>x.trim()).filter(Boolean)))timed('exec: '+part.slice(0,50),()=>exec.call(this,part))};
+const close=Orig.prototype.close;Orig.prototype.close=function(){return timed('close',()=>close.call(this))};
+const prepare=Orig.prototype.prepare;Orig.prototype.prepare=function(sql){const st=prepare.call(this,sql);for(const name of['get','all','run']){const orig=st[name];st[name]=(...a)=>timed(name+': '+sql.slice(0,50),()=>orig.apply(st,a))}return st};
+class Timed extends Orig{constructor(...a){const s=performance.now();super(...a);log.push({label:'open',at:Math.round(s-t0),ms:r(performance.now()-s)})}}
+let ctorPatched=false;try{sqlite.DatabaseSync=Timed;ctorPatched=true}catch{}
+const sleeps=()=>{const cell=new Int32Array(new SharedArrayBuffer(4)),out=[];for(let i=0;i<10;i++){const s=performance.now();Atomics.wait(cell,0,0,100);out.push(r(performance.now()-s))}return out};
+const {appendLedger}=await import('./src/ledger.mjs');
+const sleepBefore=sleeps(),start=performance.now();let message=null;
+try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){message=e.message;process.exitCode=2}
+const elapsedMs=performance.now()-start;
+console.log(JSON.stringify({message,elapsedMs,ctorPatched,sleepBefore,sleepAfter:sleeps(),trace:log}));
+`;
+test('TEMP 잠금 대기 시간 비율 측정',{timeout:150000},async t=>{
+ t.diagnostic('LOCKTRACE env '+JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,sqlite:process.versions.sqlite,cpus:os.availableParallelism(),loadavg:os.loadavg()}));
+ for(const busy of ['2000','5000','15000']){
+  const home=setup(),db=openDatabase(home);db.exec('BEGIN IMMEDIATE');let result;
+  try{result=await child(TRACE_CHILD,[home],{timeout:60000,killSignal:'SIGKILL',env:{...process.env,KADAN_BUSY_TIMEOUT_MS:busy}})}finally{db.exec('ROLLBACK');db.close()}
+  t.diagnostic(`LOCKTRACE busy=${busy} status=${result.status} `+result.stdout.trim()+' '+result.stderr.slice(0,300));
+ }
+});
+test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:60000},async t=>{
  const home=setup(),db=openDatabase(home);db.exec('BEGIN IMMEDIATE');
  let result;
  try{
   assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout,15000);
   // Measure inside the child after imports, excluding process startup and module loading.
-  result=await child(`import {appendLedger} from './src/ledger.mjs';const start=performance.now();try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){console.log(JSON.stringify({message:e.message,elapsedMs:performance.now()-start}));process.exitCode=2}`,[home],{timeout:45000,killSignal:'SIGKILL'});
+  result=await child(TRACE_CHILD,[home],{timeout:45000,killSignal:'SIGKILL'});
  }finally{db.exec('ROLLBACK');db.close()}
+ t.diagnostic('LOCKTRACE main loadavg='+JSON.stringify(os.loadavg())+' '+result.stdout.trim());
  assert.equal(result.status,2,result.stderr);
  const {message,elapsedMs}=JSON.parse(result.stdout);
  assert.match(message,/locked|busy/i);
