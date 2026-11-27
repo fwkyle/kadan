@@ -62,10 +62,12 @@ function effortOf(start, entries, seen = new Set()) {
     }
   }
   if (effort) return effort;
-  if (!start.recoverySource && !start.restoredFrom) return undefined;
+  // 칸이 있는지로 가른다: 빈 문자열·null도 "있는 칸"이라 탭 ID로 내려가지 않는다(맞는 지문이 없어 거절된다).
+  const hasSource = start.recoverySource !== undefined;
+  if (!hasSource && !start.restoredFrom) return undefined;
   const sameRole = entries.filter(e => e.kind === 'start' && e.session === start.session
     && e.role === start.role && e.cwd === start.cwd);
-  const previous = start.recoverySource
+  const previous = hasSource
     ? sameRole.filter(e => digest(e) === start.recoverySource)
     : sameRole.filter(e => e.rottieTerminalId === start.restoredFrom);
   if (previous.length !== 1) fail('추론 강도의 원본 역할 기록을 확인하지 못했습니다.', REFUSED);
@@ -224,12 +226,13 @@ function validateContext(context, home, entries, command) {
   return start;
 }
 
-// 요청 기록을 배타적으로 한 번만 남긴다(디스크까지 쓴다). 이미 있으면 message로 실패한다.
+// 요청 기록을 배타적으로 한 번만 남긴다(디스크까지 쓴다). 이미 있으면 message와 그 파일 경로로 실패한다.
+// 경로는 사실로만 붙인다. 이 문구는 비서 우편으로도 가므로 "옮기라"는 지시는 넣지 않는다(절차는 docs/recovery.md).
 function claimOnce(file, body, message) {
   let fd;
   try { fd = fs.openSync(file, 'wx', 0o600); }
   catch (error) {
-    if (error.code === 'EEXIST') fail(message);
+    if (error.code === 'EEXIST') fail(`${message} 요청 기록: ${file}`);
     throw error;
   }
   try { fs.writeFileSync(fd, JSON.stringify(body)); fs.fsyncSync(fd); }
@@ -302,16 +305,21 @@ function restoreLocked(flags, deps) {
   const dir = path.join(home, 'recovery');
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   const claim = path.join(dir, `${digest(context)}.json`);
-  claimOnce(claim, {state: 'claimed', context}, '이 역할 복원을 이미 요청했습니다. 새 탭을 먼저 확인하세요.');
-  // 새 세션을 만드는 복원은 시작 세대마다 한 번뿐이다. 위 요청 기록의 키는 탭 ID를 포함하므로, 같은 세대를 다른 탭 ID로
-  // 요청하면 키가 달라진다. 세션을 만든 뒤 시작 기록을 남기기 전에 끊기고 그 pane마저 사라진 경우에도 두 번 띄우지
-  // 않도록 세대(세션·시작 지문) 단위 기록을 하나 더 둔다. 살아 있는 pane을 다시 잇는 길은 세션을 만들지 않아 두지 않는다.
+  const alreadyAsked = '이 역할 복원을 이미 요청했습니다. 새 탭을 먼저 확인하세요.';
+  // 살아 있는 pane을 다시 잇는 길: 복원 정보(탭 ID 포함)마다 한 번이다.
+  // 새 세션을 만드는 길: 탭별 기록은 끝난 뒤 영수증으로만 쓰고, 여기서는 이미 남아 있는지만 본다. 막는 것은 아래 세대 기록
+  // 하나라서, 실패를 확인한 사람이 그 파일 하나만 옮기면 같은 요청이 다시 돈다(막힌 요청이 파일을 더 쌓지도 않는다).
+  if (pane) claimOnce(claim, {state: 'claimed', context}, alreadyAsked);
+  else if (fs.existsSync(claim)) fail(`${alreadyAsked} 요청 기록: ${claim}`);
+  // Recheck right before acting. A concurrent new-session also fails atomically on name collision.
+  validateContext(context, home, read(), command);
+  // 새 세션을 만드는 복원은 시작 세대(세션·시작 지문)마다 한 번뿐이다. 탭 ID가 신분 기준이 아니어서 같은 세대를 다른 탭 ID로
+  // 요청할 수 있으므로 키에 탭 ID를 넣지 않는다. 세션을 만들기 직전에 남긴다: 이 기록이 있으면 세션이 만들어졌을 수 있다는
+  // 뜻이고(만들기가 던져도 세션이 생긴 뒤일 수 있다), 그 뒤로는 pane이 사라져도 어느 탭의 요청으로도 다시 띄우지 않는다.
   if (!pane) {
     claimOnce(path.join(dir, `generation-${digest([context.session, context.startDigest])}.json`),
       {state: 'claimed', context}, '이 역할 세대의 복원을 이미 요청했습니다. 역할과 탭을 먼저 확인하세요.');
   }
-  // Recheck after claiming. A concurrent new-session also fails atomically on name collision.
-  validateContext(context, home, read(), command);
   const evidence = pane ? {panePid: pane.pid} : (deps.create || tmuxFloor.create)({
     session: context.session, role: context.role, cwd: context.cwd, cmd: launch.launch,
   });

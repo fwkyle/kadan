@@ -191,6 +191,12 @@ test('K: 추론 강도의 원본은 탭 ID가 아니라 시작 지문으로 찾�
   next.restoredFrom = 'k-old'; next.recoverySource = 'f'.repeat(64);
   const lost = outcome(() => inspectRecovery({terminal: 'k-new'}, f.deps));
   assert.deepEqual([lost.kind, /원본 역할 기록/.test(lost.message)], ['refused', true]);
+  // 빈 문자열·null도 "있는 칸"이다: 탭 ID로 찾을 수 있어도 내려가지 않고 거절한다.
+  for (const empty of [null, '']) {
+    next.recoverySource = empty;
+    const refused = outcome(() => inspectRecovery({terminal: 'k-new'}, f.deps));
+    assert.deepEqual([refused.kind, /원본 역할 기록/.test(refused.message)], ['refused', true], JSON.stringify(empty));
+  }
   // 지문 칸이 없는 옛 기록은 지금처럼 탭 ID로 찾는다.
   delete next.recoverySource;
   assert.equal(inspectRecovery({terminal: 'k-new'}, f.deps).effort, 'high');
@@ -229,4 +235,91 @@ test('L: 같은 세대를 두 탭이 요청해도 세션은 하나만 만든다'
   assert.throws(() => restoreRecovery(c.flags(other), c.deps), /세대의 복원을 이미 요청/);
   assert.throws(() => restoreRecovery(c.flags(lost), c.deps), /이미 요청/);
   assert.equal(c.created.length, 1);
+});
+
+const claimFiles = home => {
+  const dir = path.join(home, 'recovery');
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith('.json')).sort() : [];
+};
+// docs/recovery.md의 사람 절차 그대로: 파일 안 context.session으로 그 세션의 세대 기록을 찾아 recovery/ 밖으로 옮긴다.
+function parkGeneration(home, session) {
+  const dir = path.join(home, 'recovery');
+  const names = fs.readdirSync(dir).filter(name => name.startsWith('generation-')
+    && JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')).context.session === session);
+  assert.equal(names.length, 1);
+  fs.renameSync(path.join(dir, names[0]), path.join(home, `parked-${names[0]}`));
+}
+
+test('막힌 복원 풀기: 세대 기록 하나만 남고, 문서대로 그 파일만 옮기면 같은 요청이 다시 돈다', () => {
+  for (const retry of ['같은 요청', '다른 탭의 요청']) {
+    const f = fixture();
+    const first = inspectRecovery({terminal: 'cur'}, f.deps);
+    const other = inspectRecovery({terminal: 'swapped', ...MAIN}, f.deps);
+    f.panes['kadan-main'] = null;
+    let rejected = 0;
+    const failing = {...f.deps, create: () => { rejected++; throw new Error('세션 생성 실패: 가짜'); }};
+    assert.throws(() => restoreRecovery(f.flags(first), failing), /세션 생성 실패/);
+    // 남는 것은 세대 기록 하나뿐이다. 옮기기 전에는 같은 요청도 다른 탭의 요청도 막히고, 막힌 요청이 파일을 더 남기지 않는다.
+    const files = claimFiles(f.home);
+    assert.deepEqual(files.map(name => name.startsWith('generation-')), [true]);
+    for (const context of [first, other, first]) {
+      const blocked = outcome(() => restoreRecovery(f.flags(context), failing));
+      assert.match(blocked.message, /이 역할 세대의 복원을 이미 요청했습니다/);
+      assert.ok(blocked.message.endsWith(`요청 기록: ${path.join(f.home, 'recovery', files[0])}`), blocked.message);
+    }
+    assert.deepEqual([rejected, claimFiles(f.home)], [1, files]);
+    // 사람이 실패를 확인하고 문서 절차대로 세대 기록만 옮기면 다시 돈다.
+    parkGeneration(f.home, 'kadan-main');
+    const receipt = restoreRecovery(f.flags(retry === '같은 요청' ? first : other), f.deps);
+    assert.deepEqual([receipt.role, receipt.terminalId, f.created.length], ['main', 'new-1', 1], retry);
+  }
+});
+
+test('불확실하면 여전히 막는다: 만들기가 세션을 만든 뒤 던졌으면 그 pane이 사라져도 다시 띄우지 않는다', () => {
+  const f = fixture();
+  const first = inspectRecovery({terminal: 'cur'}, f.deps);
+  const other = inspectRecovery({terminal: 'swapped', ...MAIN}, f.deps);
+  f.panes['kadan-main'] = null;
+  let made = 0;
+  const dying = {...f.deps, create: options => {
+    made++; f.panes[options.session] = {pid: '30', dead: false, created: '456'};
+    throw new Error('세션이 만들어진 직후 끝났다');
+  }};
+  assert.throws(() => restoreRecovery(f.flags(first), dying), /직후 끝났다/);
+  // 새 pane이 살아 있는 동안: 같은 이름의 역할이 이미 있다.
+  assert.throws(() => restoreRecovery(f.flags(other, 'true'), dying), /이미 있습니다/);
+  // 그 pane마저 사라진 뒤: 어느 탭의 요청으로도 자동으로 다시 열리지 않는다.
+  f.panes['kadan-main'] = null;
+  for (const context of [first, other]) {
+    assert.throws(() => restoreRecovery(f.flags(context), dying), /이 역할 세대의 복원을 이미 요청했습니다/);
+  }
+  assert.equal(made, 1);
+  assert.equal(claimFiles(f.home).length, 1);
+});
+
+test('세션을 만들기 전에 끝난 요청은 요청 기록을 남기지 않는다', () => {
+  // 만들기 직전 재확인에서 역할이 교체된 것을 본 경우.
+  const a = fixture();
+  const context = inspectRecovery({terminal: 'cur'}, a.deps);
+  a.panes['kadan-main'] = null;
+  let reads = 0;
+  const replaced = [...a.entries, start(a.home, 'main', {panePid: '99', t: 'later'})];
+  assert.throws(() => restoreRecovery(a.flags(context), {...a.deps, read: () => (++reads >= 2 ? replaced : a.entries)}),
+    /교체되거나/);
+  assert.deepEqual([a.created.length, claimFiles(a.home)], [0, []]);
+  // 이미 쓴 복원 정보(살아 있는 pane을 이은 영수증이 남은 탭별 기록)로 새 세션을 만들려는 경우: 막히고 세대 기록도 없다.
+  const b = fixture();
+  const used = inspectRecovery({terminal: 'cur'}, b.deps);
+  const other = inspectRecovery({terminal: 'swapped', ...MAIN}, b.deps);
+  restoreRecovery(b.flags(used, 'true'), b.deps);
+  const before = claimFiles(b.home);
+  assert.equal(before.length, 1);
+  b.panes['kadan-main'] = null;
+  const blocked = outcome(() => restoreRecovery(b.flags(used), b.deps));
+  assert.match(blocked.message, /이 역할 복원을 이미 요청했습니다/);
+  assert.ok(blocked.message.endsWith(`요청 기록: ${path.join(b.home, 'recovery', before[0])}`), blocked.message);
+  assert.deepEqual([b.created.length, claimFiles(b.home)], [0, before]);
+  // 그 세대의 다른 탭은 막히지 않는다(막힌 요청이 세대 기록을 남기지 않았으므로).
+  assert.equal(restoreRecovery(b.flags(other), b.deps).role, 'main');
+  assert.equal(b.created.length, 1);
 });
