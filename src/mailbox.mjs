@@ -15,7 +15,8 @@ const idPattern=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 const categories=new Set(['request','decision','report']);
 const views=new Set(['received','sent','to-reply','waiting']);
 const canAct=(by,role)=>by===role||isUserActor(by);
-export const readMailboxEntries=home=>ledger.readMailboxLedger(home);
+// 우편함 계산에 필요한 줄만 읽는다(결과는 readMailboxLedger와 같다. src/ledger.mjs 좁은 읽기).
+export const readMailboxEntries=home=>ledger.readMailboxLedgerNarrow(home);
 export {mailboxLetters} from './mailbox-state.mjs';
 import {mailboxLetters} from './mailbox-state.mjs';
 
@@ -60,17 +61,22 @@ export class Mailbox {
   return {mailId,recipient:currentRecipient||this.role,currentRecipient:currentRecipient||this.role,status:'stored',wake:'not-connected'};
  }
  // 기본 받은 편지 목록은 이전 세대 미확인을 빼고, previousGenerations=true면 그것만 보인다(읽음 기록은 가능).
- list({all=false,view='received',unread=false,previousGenerations=false}={}){
+ // entries: 이미 읽은 우편함 조회를 다시 쓸 때만 준다(read가 받은·보낸 목록을 한 번의 읽기로 만든다).
+ list({all=false,view='received',unread=false,previousGenerations=false,entries=readMailboxEntries(this.home)}={}){
   const generation=previousGenerations?'only':view==='received'&&!all?'exclude':undefined;
-  return mailboxLetters(readMailboxEntries(this.home),this.role,{all:view==='sent'||all,view,unread,previousGenerations:generation}).reverse();
+  return mailboxLetters(entries,this.role,{all:view==='sent'||all,view,unread,previousGenerations:generation}).reverse();
  }
  read(id){
   if(!idPattern.test(id))throw new Error('올바른 우편 ID 필요');
-  const letter=[...this.list({all:true}),...this.list({view:'sent'})].find(e=>e.mailId===id);
+  // 받은 편지·보낸 편지를 한 번 읽은 우편함 조회에서 함께 찾는다(예전에는 같은 조회를 두 번 읽었다).
+  const entries=readMailboxEntries(this.home);
+  const letter=[...this.list({all:true,entries}),...this.list({view:'sent',entries})].find(e=>e.mailId===id);
   if(!letter)throw new Error(`${this.role} 우편 없음`);
   const body=ledger.readMailBody(letter.digest,this.home);if(body===null)throw new Error('본문 없음 또는 읽기 실패: 읽음 처리하지 않습니다');
   const recipient=letter.currentRecipient||letter.role;
-  const receiver=composeRoleInstructions({home:this.home,role:recipient,...(recipient===SECRETARY?{profile:'secretary'}:{}),mailContext:letter});
+  // 역할 지침 조립은 전송 길과 같은 좁은 읽기를 쓴다(전송 길이 읽지 않는 감시 사건 여섯 종류만 빠진다).
+  const receiver=composeRoleInstructions({home:this.home,role:recipient,...(recipient===SECRETARY?{profile:'secretary'}:{}),mailContext:letter,
+   entries:ledger.readSendLedgerNarrow(this.home)});
   const instructions=composeMailInstructions({mailId:letter.mailId,recipient,sender:letter.currentSender||letter.by,dispatch:letter.taskId!=null,
    expectReply:letter.replyStatus==='waiting',notificationOnly:letter.notificationOnly===true||letter.systemGenerated==='task-completion'});
   const receiverInstructions=[receiver.instructions,instructions].filter(Boolean).join('\n\n');

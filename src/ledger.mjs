@@ -1,5 +1,5 @@
-import {storageMode,storagePath,storageSnapshot} from './storage.mjs';
-import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams} from './ledger-domains.mjs';
+import {storageMode,storagePath,storageSnapshot,readStream} from './storage.mjs';
+import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams,validateDomainEvent,uniqueDone,legacyCorrupt,SLIM_DROPPABLE} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -135,6 +135,76 @@ export function readRecoveryLedger(home = ledgerHome()) {
     const project = domainProjector('system');
     return [...project.legacy(rows('ledger.jsonl')),...project.rows(rows(ledgerStreams.system))];
   });
+}
+// ── 좁은 읽기(2026-11-27 D1): 우편함 명령(inbox·mail·send)이 판정에 쓰는 줄만 SQL로 골라 읽는다 ──
+// Why: 역할 수십 개가 명령을 칠 때마다 원장 네 영역 17만 줄을 읽고 검증해 명령 하나가 0.5GB 넘게 썼다(2026-11-21 패닉 2회).
+// 결과는 위의 전체 읽기(readMailboxLedger·readSendLedger)와 같은 줄·같은 순서다. 전체 읽기 함수는 비교 기준으로 그대로 둔다
+// (tests/ledger-narrow-read.test.mjs가 두 결과를 지문으로 맞춘다).
+// 방식: SQL은 넓게(필요한 줄을 빠뜨리지 않게) 고르고, 정확한 고르기·모양 바꾸기는 전체 읽기와 같은 domainProjector가 한다.
+//  - 과거 원문 영역(ledger.jsonl)은 통째로 읽는다. 종류 없는 줄·broken 줄의 판정(legacyCorrupt·.broken)이 전체 읽기와 같아야 해서다.
+//  - 세 영역에서 고른 줄은 저장 순번(_ledgerOrder)으로 합친다. 시각으로 재정렬하지 않는다.
+//  - 시스템 영역은 종류를 앞머리에서 읽어(RECOVERY_KIND) 큰 감시 줄을 JSON으로 풀지 않는다.
+// 유지하는 손상 감지(읽은 줄에 한해): 과거 원문 손상(우편함), 줄 모양(validateDomainEvent), 영역 안 순번 역전, 읽은 줄끼리 순번 중복, 우편 ID 중복.
+// 포기하는 손상 감지: 읽지 않은 줄의 모든 손상, 순번 빠짐(영역을 다 읽어야 안다), send/dispatch 짝, 완료 우편과 done의 연결.
+// 이 넷은 전체 읽기(readLedger 계열)·감시기 시작·storage verify가 계속 잡는다. readRecoveryLedger와 같은 타협이다.
+// 원장이 10배면: 우편함 읽기는 우편 영역 줄 수 + start·stop 수 + 과거 원문 줄 수에 비례한다(감시 줄은 SQL이 한 번씩 보기만 한다).
+// 전송 길 읽기는 여섯 감시 종류와 dispatch를 뺀 줄 수에 비례한다. 둘 다 여전히 원장과 함께 자란다(증분 읽기는 후속 D2).
+const NARROW_KINDS = list => list.map(kind => `'${kind}'`).join(',');
+const NARROW_ALL = 'SELECT payload FROM events WHERE stream=? ORDER BY seq';
+const MAILBOX_NARROW = [
+  // 우편함이 작업 영역에서 쓰는 것은 완료 우편이 달린 done뿐이다(판정 근거).
+  [ledgerStreams.tasks, `SELECT payload FROM events WHERE stream=? AND json_extract(payload,'$.kind')='done'`
+    + ` AND json_type(payload,'$.completionMailId') IS NOT NULL ORDER BY seq`],
+  [ledgerStreams.mail, NARROW_ALL],
+  // 세대(start·stop)·인계(handover)·넣은 알림(watch-mail-reminder). 정확한 조건은 domainProjector('mailbox')가 거른다.
+  [ledgerStreams.system, `SELECT payload FROM events WHERE stream=?`
+    + ` AND ${RECOVERY_KIND} IN (${NARROW_KINDS(['start','stop','handover','watch-mail-reminder'])}) ORDER BY seq`],
+];
+const SEND_NARROW = [
+  [ledgerStreams.tasks, `SELECT payload FROM events WHERE stream=? AND json_extract(payload,'$.kind') IS NOT 'dispatch' ORDER BY seq`],
+  [ledgerStreams.mail, NARROW_ALL],
+  // 남는 감시 줄의 큰 본문은 전체 읽기(slimWatch)와 같은 허용 목록으로 SQL에서 뺀다.
+  [ledgerStreams.system, `SELECT CASE WHEN substr(${RECOVERY_KIND},1,6)='watch-'`
+    + ` THEN json_remove(payload,${SLIM_DROPPABLE.map(key => `'$.${key}'`).join(',')}) ELSE payload END AS payload`
+    + ` FROM events WHERE stream=? AND (${RECOVERY_KIND} IS NULL OR ${RECOVERY_KIND} NOT IN (${NARROW_KINDS(SEND_UNUSED_KINDS)})) ORDER BY seq`],
+];
+function readNarrow(home, domain, plan) {
+  if (storageMode(home) === 'none') return [];
+  return storageSnapshot(home, db => {
+    const legacy = readStream(home, 'ledger.jsonl', {optional: true});
+    if (domain && legacyCorrupt(legacy)) throw new Error('과거 원장 손상: 도메인 조회 불가');
+    const project = domainProjector(domain), kept = [];
+    const mailIds = new Set(legacy.filter(row => row?.kind === 'send' && row.mailId).map(row => row.mailId));
+    for (const [index, [stream, sql]] of plan.entries()) {
+      let previous = 0;
+      for (const row of db.prepare(sql).iterate(stream)) {
+        const value = JSON.parse(row.payload);
+        validateDomainEvent(stream, value);
+        if (value._ledgerOrder <= previous) throw new Error(`도메인 원장 순서 손상: ${stream}`);
+        previous = value._ledgerOrder;
+        if (value.kind === 'send') {
+          if (mailIds.has(value.mailId)) throw new Error('도메인 원장 중복 mailId');
+          mailIds.add(value.mailId);
+        }
+        // 줄마다 바로 투영해 해석한 원본을 쥐고 있지 않는다(정점 메모리).
+        for (const entry of project.rows([value])) kept.push({order: previous, index, entry});
+      }
+    }
+    kept.sort((a, b) => a.order - b.order || a.index - b.index);
+    for (let i = 1; i < kept.length; i++) {
+      if (kept[i].order === kept[i - 1].order) throw new Error('도메인 원장 순번 중복');
+    }
+    return uniqueDone([...project.legacy(legacy), ...kept.map(item => item.entry)]);
+  });
+}
+// readMailboxLedger와 같은 결과(우편 영역 + 세대·인계·완료 근거)를 필요한 줄만 읽어 낸다.
+export function readMailboxLedgerNarrow(home = ledgerHome()) {
+  return readNarrow(home, 'mailbox', MAILBOX_NARROW);
+}
+// readSendLedger와 같은 결과(통합 조회에서 감시 사건 여섯 종류를 뺀 것)를 그 줄을 읽지 않고 낸다.
+export function readSendLedgerNarrow(home = ledgerHome()) {
+  const unused = new Set(SEND_UNUSED_KINDS);
+  return readNarrow(home, null, SEND_NARROW).filter(entry => !unused.has(entry?.kind));
 }
 const LIFECYCLE_KINDS = new Set(['start', 'stop', 'window']);
 // 한 세션의 현재 세대 수명 사건(마지막 start부터의 start·stop·window)만 최신 쪽부터 거꾸로 읽는다(up --auto의 has-tab 빠른 길).

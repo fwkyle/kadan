@@ -16,7 +16,7 @@ import { planTurnReturn, claimTurnReturn, turnReturnTail, turnReturnReceipt, rev
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floor } from "../floor.mjs";
-import { ledgerHome, readSendLedger, resolveLedgerBy } from "../ledger.mjs";
+import { ledgerHome, readSendLedgerNarrow, resolveLedgerBy } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -120,7 +120,7 @@ function deliverMessage(argv, flags, command) {
     // dispatch는 앞에서 검증한 명시 --task로 기존 발령 검사를 거친다.
     // 준비 단계의 파생 계산(발령 추론·우편 연결·슈퍼 간 판정·마지막 시작·완료 안내)은 이 읽기 하나를 같이 쓴다.
     // 전송 직전 소유·답장 수신자 판정은 이 값을 넘기지 않고 guardedSend가 새로 읽는다(#311 F2: 준비와 전송 사이의 세대 교체).
-    entries = readSendLedger();
+    entries = readSendLedgerNarrow();
     let taskId=flags.task;
     if(command === 'send' && taskId==null){
       const inferred=inferDispatchTask(ledgerHome(),{executionKey:flags.execution,role,replyTo:flags['reply-to'],expectReply:flags['expect-reply']===true,entries});
@@ -179,8 +179,9 @@ function deliverMessage(argv, flags, command) {
     // 위임받은 쪽이 업무 owner에게 보내는 결과 우편이면 보내기 전에 업무 잠금 안에서 판정·쓰기를 하고(놀고 있음 PR-3),
     // 쓰기가 성공했을 때만 실제 revision의 꼬리를 붙인다. 업무 잠금은 여기서 놓이고 우편은 그 뒤에 시작한다(잠금이 겹치지 않는다).
     const turnPlan = planTurnReturn(ledgerHome(), {sender: process.env.KADAN_ROLE, by, recipient, workKey: mailContext.workKey, taskId,
-      raw: flags.raw === true, keepTurn: flags['keep-turn'] === true});
-    turnClaim = claimTurnReturn(ledgerHome(), turnPlan);
+      raw: flags.raw === true, keepTurn: flags['keep-turn'] === true}, {readEntries: readSendLedgerNarrow});
+    // 책임자 계산은 확정 인계만 본다. 전송 길과 같은 좁은 읽기를 쓰고, 잠금 안 재판정은 지금처럼 새로 읽는다.
+    turnClaim = claimTurnReturn(ledgerHome(), turnPlan, {readEntries: readSendLedgerNarrow});
     const outgoing = turnClaim ? message + turnReturnTail(turnClaim) : message;
     try {
       sendCalled = true;
@@ -195,7 +196,7 @@ function deliverMessage(argv, flags, command) {
         allowOldRunner:flags["allow-old-runner"],
         recordedPid: expectedPid,
         busyMail: true,
-        readEntries: readSendLedger,
+        readEntries: readSendLedgerNarrow,
         ...(peer ? {notificationGuard:{humanIdleMs:humanIdleMsFor(lastStartFor(session,entries))}} : {}),
       });
     } catch (error) {

@@ -1,6 +1,7 @@
 // 우편 한 통(cmdMail)이 원장 전체 읽기(readLedgerState)를 몇 번, 어디서 하는지 센다. 자식 프로세스 전용 도구.
 // 사용: node send-ledger-reads-child.mjs <저장소 절대경로> <경우>. 결과는 표준 출력의 JSON 한 줄이다.
 // 세기: 읽기 함수 이름이 아니라 모든 읽기가 지나는 readLedgerState 입구에 계수기를 끼운다(직접 readLedger() 호출까지 센다).
+// 우편함 명령의 좁은 읽기(src/ledger.mjs readNarrow)는 readLedgerState를 지나지 않으므로 그 입구에도 같은 계수기를 끼운다.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +27,11 @@ registerHooks({load(url, context, nextLoad) {
     const entry = /export function readLedgerState\(home,\{domain=null[^)]*\}=\{\}\) \{/;
     if (!entry.test(source)) throw new Error('readLedgerState 입구를 찾지 못함');
     source = source.replace(entry, found => `${found} globalThis.kadanCountRead(domain);`);
+  }
+  if (url.endsWith('/src/ledger.mjs') && source.includes('readNarrow')) {
+    const entry = /function readNarrow\(home, domain, plan\) \{/;
+    if (!entry.test(source)) throw new Error('readNarrow 입구를 찾지 못함');
+    source = source.replace(entry, found => `${found} globalThis.kadanCountRead(domain ?? 'send');`);
   }
   // 준비 단계와 guardedSend 사이에 일을 끼워 넣는 시험용 자리. 코드 모양이 바뀌어 못 찾으면 조용히 넘기지 않고 멈춘다.
   if (url.endsWith('/src/commands/send.mjs')) {
