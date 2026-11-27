@@ -56,8 +56,8 @@ export const VALIDATOR_KEYS = ['kind', 'broken', '_ledgerOrder', 'mailId', 'disp
 //  1) 그 줄만 뺀 나머지 줄로 원장을 만든다(우편 ID 중복 검사와 완료 우편 계산이 실제 원장을 보게).
 //  2) 바뀐 줄을 appendLedger에 넣는다. 저장 함수가 스스로 매기는 칸은 빼고 넣는다: 순번(_ledgerOrder — 호출자가 주면 거절),
 //     그리고 바꾸기 전 줄에 달려 있던 값 그대로인 completionMailId(저장 함수가 done에 달아 주는 값 — 호출자가 주면 거절).
-//  3) 저장 함수가 거절하면 모델 밖. 받았더라도 그 영역에 기록된 줄이 바뀐 줄과 다르면(저장 함수가 칸을 채우거나 덮어쓰거나,
-//     다른 영역에 기록하면) 저장 함수가 만들 수 없는 줄이므로 모델 밖. 칸·값이 그대로 기록되면 모델 안이다.
+//  3) 저장 함수가 거절하면 모델 밖. 받았더라도 그 영역에 기록된 줄이 바뀐 줄과 다르면(저장 함수가 우편 ID를 채우거나 발령 ID를
+//     덮어쓰거나 완료 우편 ID를 달지 않거나, 다른 영역에 기록하면) 저장 함수가 만들 수 없는 줄이므로 모델 밖. 칸·값이 그대로 기록되면 모델 안이다.
 //  4) 순번은 저장 함수가 매기므로 2)에서 뺐다. 바뀐 줄의 순번 값 자체는 저장 함수가 저장 직전에 부르는 줄 검증
 //     (validateDomainEvent — 양의 정수)에 바뀐 줄을 그대로 넣어 본다. 순번이 다른 줄과 겹치거나 뒤바뀐 것은 모델 안이다(줄 변형).
 // 그래서 호출자가 줄 수 없는 꼴(kind가 dispatch, systemGenerated가 task-completion, 새로 달거나 바꾼 completionMailId)은
@@ -74,7 +74,8 @@ export function storedAs(rows, at, mutated) {
   const home = build(rows.filter((_, k) => k !== at));
   try {
     const before = readStream(home, stream, {optional: true}).length;
-    appendLedger(strip(mutated), home);
+    // 시각(t)은 저장 함수가 기본값으로 채우지만 호출자가 비워 주면(t: undefined) 채우지 않는다. 바뀐 줄에 t가 없으면 그렇게 넣는다.
+    appendLedger({t: undefined, ...strip(mutated)}, home);
     const fresh = readStream(home, stream, {optional: true}).slice(before);
     const stored = fresh.find(row => isDeepStrictEqual(strip(row), strip(mutated))
       && assigned.every(key => Object.hasOwn(row, key) === Object.hasOwn(mutated, key)));

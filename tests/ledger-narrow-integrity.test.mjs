@@ -259,9 +259,12 @@ test('모델 분류는 저장 함수의 실제 수용·거절과 같다: 바꾸�
   // 순번은 저장 함수가 매긴다: 다른 줄과 겹치는 정수는 모델 안(줄 변형), 정수가 아니면 모델 밖.
   assert.ok(change(reminder, {_ledgerOrder: rows[done].value._ledgerOrder}).stored);
   assert.equal(change(reminder, {_ledgerOrder: 'x'}).error, `도메인 원장 순번 손상: ${SYSTEM}`);
-  // 저장 함수가 늘 채우는 칸(t)이 없는 줄, 완료 우편을 만들 수 없는 done에 달린 completionMailId는 저장 함수가 만들 수 없는 줄이다.
+  // 시각(t)이 없는 줄도 저장 함수가 기록한다(호출자가 t를 비워 주면 기본값을 채우지 않는다). 모델 안이다.
   const {t, ...timeless} = rows[reminder].value;
-  assert.equal(storedAs(rows, reminder, timeless).error, '저장 함수가 기록한 줄이 바뀐 줄과 다름');
+  assert.ok(storedAs(rows, reminder, timeless).stored);
+  // 저장 함수가 채우거나 달아 주는 칸은 다르게 둘 수 없다: 우편 ID가 없는 send, 완료 우편을 만들 수 없는 done에 달린 completionMailId.
+  const {mailId, ...unnamed} = rows[plain].value;
+  assert.equal(storedAs(rows, plain, unnamed).error, '저장 함수가 기록한 줄이 바뀐 줄과 다름');
   assert.equal(change(done, {result: 'unknown'}).error, '저장 함수가 기록한 줄이 바뀐 줄과 다름');
 });
 
