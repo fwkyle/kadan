@@ -200,6 +200,8 @@ function readNarrow(home, domain, plan) {
   return storageSnapshot(home, db => {
     const legacy = readStream(home, 'ledger.jsonl', {optional: true});
     const project = domainProjector(domain), kept = [];
+    // 검사는 모두 투영 전의 원본 줄로 한다(본문을 푼 줄은 풀어 낸 객체, 풀지 않은 줄은 SQL로 꺼낸 원본 칸).
+    // 투영(domainProjector)은 출력용 줄을 다듬으면서 칸을 뺄 수 있다(예: 넣은 알림의 작업 주소). 투영 결과는 kept(출력)에만 쓴다.
     // mails: 우편 ID → {order, entry}. 완료 우편 연결 확인용(과거 원문의 우편은 순번이 없다).
     const mailIds = new Set(), mails = new Map();
     for (const row of legacy) {
@@ -231,28 +233,19 @@ function readNarrow(home, domain, plan) {
           if (mailIds.has(value.mailId)) throw new Error('도메인 원장 중복 mailId');
           mailIds.add(value.mailId);
         }
-        const task = read && taskSend(value);
+        const task = taskSend(value);
         orders.push(order);
         shapes.push(value.kind === 'dispatch' ? SHAPE_DISPATCH : value.kind !== 'send' ? SHAPE_OTHER : task ? SHAPE_TASK_SEND : SHAPE_MAIL);
         if (task) pairs.set(at, JSON.stringify(dispatchFor(value)));
         else if (value.kind === 'dispatch') pairs.set(at, JSON.stringify(dispatchFor({...value, kind: 'send'})));
-        // 줄마다 바로 투영해 해석한 원본을 쥐고 있지 않는다(정점 메모리).
-        let projected = null;
-        if (read) for (const entry of project.rows([value])) {
-          const item = {order, at, entry};
-          kept.push(item);
-          projected = entry;
-          if (plan.links && value.kind === 'send') mails.set(value.mailId, item);
-        }
+        // 출력: 줄마다 바로 투영한다. 검사에 쓰지 않는 원본은 여기서 놓인다(정점 메모리).
+        if (read) for (const entry of project.rows([value])) kept.push({order, at, entry});
         if (!plan.links) continue;
-        // 원발령 재계산에 쓰는 줄: 결과에 남는 줄은 그 객체를(우편은 mails와 같은 객체여야 한다), 아니면 주소 칸만 남긴다.
+        // 완료 우편 연결 확인에 쓰는 원본 줄만 쥔다: 우편(send), 그리고 작업 주소가 적힌 줄·인계·done(원발령 재계산용).
+        if (value.kind === 'send') mails.set(value.mailId, {order, entry: value});
         if (value.taskId != null || value.kind === 'handover' || value.kind === 'done') {
-          const ref = projected ?? {kind: value.kind, role: value.role, taskId: value.taskId,
-            ...(value.executionKey == null ? {} : {executionKey: value.executionKey})};
-          taskRows.push({order, at, ref});
-          if (read && value.kind === 'done' && value.completionMailId) {
-            dones.push({order, ref, role: value.role, taskId: value.taskId, result: value.result, completionMailId: value.completionMailId});
-          }
+          taskRows.push({order, at, ref: value});
+          if (value.kind === 'done' && value.completionMailId) dones.push({order, ref: value});
         }
         // 완료 우편 표지는 본문을 풀지 않는 줄에 붙어 있어도 본다(전체 읽기는 모든 줄에서 본다).
         if (value.systemGenerated === 'task-completion') completions.push({kind: value.kind, mailId: value.mailId});
@@ -297,12 +290,12 @@ function assertNarrowCompletions(dones, completions, mails, legacy, taskRows) {
   for (const row of legacy) lookup.add(row);
   for (const row of taskRows.sort((a, b) => a.order - b.order || a.at - b.at)) lookup.add(row.ref);
   const linked = new Set();
-  for (const done of dones) {
+  for (const {order, ref: done} of dones) {
     const found = mails.get(done.completionMailId), mail = found?.entry, request = mail && mails.get(mail.replyTo)?.entry;
     if (!mail || mail.systemGenerated !== 'task-completion' || !mail.completion || !mail.replyFinal || mail.transport !== 'mailbox'
-      || Object.hasOwn(mail, 'taskId') || found.order !== done.order + 1 || mail.by !== done.role
+      || Object.hasOwn(mail, 'taskId') || found.order !== order + 1 || mail.by !== done.role
       || mail.completionTaskId !== done.taskId || mail.result !== done.result
-      || !request || request !== completionRequest(done.ref, lookup.before(done.ref))
+      || !request || request !== completionRequest(done, lookup.before(done))
       || request.by !== mail.role || !request.by || request.by === '모름') throw new Error('도메인 원장 완료 우편 연결 손상');
     if (linked.has(mail.mailId)) throw new Error('도메인 원장 완료 우편 중복');
     linked.add(mail.mailId);
