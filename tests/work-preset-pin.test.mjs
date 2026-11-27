@@ -164,6 +164,19 @@ test('발령 검사와 미리 보기: 고정 업무는 기본 전환 뒤에도 �
   const favorite = runnersCommand(['favorite'], {set: 'codex:gpt-6-sol:high', revision: String(readSettings(home).revision), reason: '즐겨찾기'}, runnersCtx);
   assert.equal('relaunchPreview' in favorite, false);
 
+  // 대체 후보 목록을 비우면(runners fallback) 대체 후보로 뜬 세션이 다시 띄울 목록으로 옮겨 가고,
+  // 내보내 둔 프리셋을 같은 이름으로 다시 가져오면(import --replace) 대체 후보 통과로 돌아온다.
+  const exported = path.join(repo, 'preset-b.json');
+  fs.writeFileSync(exported, JSON.stringify(exportPreset(home, {name: 'B'})));
+  const emptied = runnersCommand(['fallback', 'worker'], {set: '', preset: 'B', revision: String(readSettings(home).revision), reason: '후보 비움'}, runnersCtx);
+  assert.ok(pairs(emptied.relaunchPreview.relaunch).includes('pf@pin/w-pinned'));
+  assert.deepEqual(emptied.relaunchPreview.fallbackOk, []);
+  assert.throws(() => sendCard(home, card('c-fb2', 'pf', 'fix', 'pin/w-pinned'), viaFallback, 'pin/w-pinned'), staleRunner(/프리셋 B worker 기본값/));
+  const restored = runnersCommand(['import', exported], {replace: true, revision: String(readSettings(home).revision), reason: '되돌림'}, runnersCtx);
+  assert.equal(restored.imported, 'B');
+  assert.deepEqual(pairs(restored.relaunchPreview.fallbackOk), ['pf@pin/w-pinned']);
+  assert.equal(pairs(restored.relaunchPreview.relaunch).includes('pf@pin/w-pinned'), false);
+
   // B 안의 작업자 모델을 바꾸면 B 고정 업무의 옛 세션이 거절되고, 바꾸는 명령 결과의 다시 띄울 목록에 나온다.
   const edited = runnersCommand(['set', 'worker'], {runner: 'codex', model: 'gpt-6-astra', effort: 'high', preset: 'B',
     revision: String(readSettings(home).revision), reason: '모델 변경'}, runnersCtx);
