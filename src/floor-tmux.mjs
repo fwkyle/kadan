@@ -807,14 +807,18 @@ export function hasTrustPrompt(screen) {
 // 안내 줄(`↑/↓ Navigate · enter Confirm`)이 비지 않은 마지막 줄이거나 그 아래에 상태 글 꼴 한 줄만 있고, 안내 줄 바로 위 두 줄이
 // Yes·No 선택지일 때만 창이다 — 인용만 한 글은 아래에 입력창·대화가 이어지므로 창으로 보지 않는다.
 // 기본 선택이 Yes라 여기에 우편이 들어가면 Enter가 신뢰를 승인한다(2026-11-24 검수).
-// 상태 글 꼴은 모델 이름 없이 구조로만 본다: 깊은 들여쓰기(8칸 이상) + ` · `로 나뉜 영문·숫자 칸 2~3개, 글자 80자 이하.
+// 상태 글 꼴은 모델 이름을 박지 않고 구조로 본다: 깊은 들여쓰기(8칸 이상) + `[auto · ]<모델> · <강도>`, 글자 80자 이하.
+// 앞의 모드 칸은 실측한 `auto`뿐이고, 마지막 칸은 강도 닫힌 목록이다 — 구조만 보면 들여쓴 일반 문장(`Review notes · See above`)도
+// 상태 글이 된다(2026-11-27 검수). 강도 근거: 카단이 띄운 agy 모델 이름 끝말(medium·high·xhigh)과 low(`gemini-3.8-flash-low`).
+// `mediu`는 2026-09-29 폭 80 신뢰 창에서 `Gemini 3.8 Flash · medium`의 끝 글자가 잘려 그려진 실측 꼴이다.
 // 입력창 바닥 줄(`? for shortcuts …`·`esc to cancel …`)은 줄 처음에서 시작해 들여쓰기에서 걸린다.
-// 한계: 폭이 `상태 글 길이 + 8`보다 좁거나 상태 글에 이 밖의 글자·칸 수가 생기면 창을 못 알아본다(실측 최소 폭 80, 들여쓰기 60).
+// 한계: 폭이 `상태 글 길이 + 8`보다 좁거나, 새 모드·강도 낱말이나 다른 칸이 생기면 창을 못 알아본다(실측 최소 폭 80, 들여쓰기 55).
 // 반환: 창이 아니면 null, 맞으면 { path, pathAmbiguous, selected }(의미는 trust-accept.mjs의 readTrustSelection과 같다).
 const AGY_QUESTION = "Doyoutrustthecontentsofthisproject?", AGY_FOOTER = "↑/↓Navigate·enterConfirm", AGY_WORKSPACE = "Accessingworkspace:";
 const AGY_MARK = /^\s*[>❯]/u;
 const AGY_STATUS_CELL = String.raw`[A-Za-z0-9._()+/-]+(?: [A-Za-z0-9._()+/-]+)*`;
-const AGY_STATUS = new RegExp(`^ {8,}${AGY_STATUS_CELL}(?: · ${AGY_STATUS_CELL}){1,2} *$`, "u");
+const AGY_STATUS_EFFORT = "(?:low|medium|mediu|high|xhigh)";
+const AGY_STATUS = new RegExp(`^ {8,}(?:auto · )?${AGY_STATUS_CELL} · ${AGY_STATUS_EFFORT} *$`, "u");
 const AGY_STATUS_MAX = 80;
 export function readAgyTrustSelection(screen) {
   if (typeof screen !== "string") return null;

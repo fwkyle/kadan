@@ -11,7 +11,7 @@ import {spawnSync} from 'node:child_process';
 import {autoAcceptTrust, hasAgyTrustPrompt, readAgyTrustSelection} from '../src/trust-accept.mjs';
 import {hasTrustPrompt, sendTmux} from '../src/floor-tmux.mjs';
 import {readLedger} from '../src/ledger.mjs';
-import {ANSWERING_TAIL, FULL_120, FULL_152, HALF_120, HALF_80, INPUT_TAIL} from './fixtures/agy-trust-screens.mjs';
+import {ANSWERING_TAIL, FULL_120, FULL_152, HALF_120, HALF_80, INPUT_TAIL, TRUNCATED_80} from './fixtures/agy-trust-screens.mjs';
 
 const CLI = path.resolve(import.meta.dirname, '../src/cli.mjs');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-auto-trust-agy-')));
@@ -256,6 +256,49 @@ test('상태 글 꼴 음성: 안내 줄 아래에 상태 글이 아닌 줄이 �
   }
   for (const rest of [`${status}\n> `, `${status}\n${status}`, `  hello\n${status}`]) {
     assert.equal(readAgyTrustSelection(`${window}\n${rest}`), null, rest);
+  }
+});
+
+test("상태 글 꼴: 강도 끝이 잘린 실제 화면('mediu', 경로 두 줄)은 창이라 우편은 키 0회, 경로가 모호해 자동 통과도 키 0개", () => {
+  const screen = TRUNCATED_80(`${WORK}-first-half`, 'second-half/work');
+  assert.deepEqual(readAgyTrustSelection(screen), {path: null, pathAmbiguous: true, selected: 'yes'});
+  const {result, keys} = run(screen);
+  assert.deepEqual(keys, []);
+  assert.deepEqual([result.result, result.reason], ['skipped', 'path-ambiguous']);
+  const calls = [];
+  assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT');
+  assert.equal(keysSent(calls), 0);
+});
+
+test('상태 글 꼴: 강도 낱말(low·medium·high·xhigh)은 모드가 있든 없든 창이다(시니어 시험 꼴 포함)', () => {
+  for (const status of ['Gemini 3.8 Flash · low', 'auto · Fake Model · medium', 'Gemini 4 Neon · high', 'auto · Gemini 4 Neon · xhigh']) {
+    const screen = `${agyScreen()}\n${' '.repeat(60)}${status}`;
+    assert.deepEqual(readAgyTrustSelection(screen), {path: WORK, pathAmbiguous: false, selected: 'yes'}, status);
+  }
+});
+
+// 검수 exec-07d2fdf3의 반례: 상태 글 없이 인용한 창 뒤에 들여쓴 일반 문장이 화면 끝에 있다.
+test('상태 글 꼴 음성: 인용한 창 뒤의 들여쓴 일반 문장은 창이 아니라 우편이 가고 자동 통과 키 0개, 입력창이 이어져도 같다', () => {
+  const quoted = FULL_152(WORK).trimEnd().split('\n').slice(0, -1).join('\n');
+  const prose = `${quoted}\n        Review notes · See above`;
+  for (const screen of [prose, `${prose}\n${INPUT_TAIL}`]) {
+    assert.equal(readAgyTrustSelection(screen), null, screen);
+    const {result, keys} = run(screen);
+    assert.equal(result, null);
+    assert.deepEqual(keys, []);
+    const calls = [];
+    assert.equal(sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}).keyDelivery, 'sent');
+    assert.equal(calls.filter(c => c[0] === 'send-keys').length, 1);
+  }
+});
+
+test('상태 글 꼴 음성: 마지막 칸이 강도 낱말이 아니거나 칸이 셋인데 첫 칸이 모드 낱말이 아니면 창이 아니다', () => {
+  for (const status of [
+    'Review notes · See above', 'Gemini 4 Neon · fast', 'auto · Gemini 4 Neon · ready', 'Gemini 4 Neon · High',
+    'Gemini 4 Neon · highest', 'Gemini 4 Neon · high.', 'Gemini 4 Neon · mediums', 'Gemini 4 Neon · medi',
+    'high · Gemini 4 Neon', 'Review · Gemini 4 Neon · high', 'automatic · Gemini 4 Neon · high',
+  ]) {
+    assert.equal(readAgyTrustSelection(`${agyScreen()}\n${' '.repeat(60)}${status}`), null, status);
   }
 });
 
