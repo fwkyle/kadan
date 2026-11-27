@@ -76,3 +76,117 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           PUBLIC_RESULT: ${{ needs.public-strings.result }}
         run: test "$TEST_RESULT" = success && test "$PUBLIC_RESULT" = success
+  # TEMP(exec-7e66f8e6): 맥에서 잠금 시험만 단독으로 돌려 기존 잡과 대조하는 측정용 잡이다. 대조 뒤 지운다.
+  lock-measure:
+    name: TEMP lock-measure (macos)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: runner process class (read-only)
+        run: |
+          set +e
+          echo "== system"; sw_vers; sysctl -n hw.ncpu; uptime
+          echo "== timer coalescing"; sysctl -a 2>/dev/null | grep -i coalesc
+          echo "== ancestor chain (pid ppid pri nice stat command)"
+          pid=$$
+          while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+            ps -o pid=,ppid=,pri=,nice=,stat=,command= -p "$pid" | cut -c1-180
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          echo "== coalition of this shell"
+          launchctl print "pid/$$" 2>&1 | grep -A7 -E "(resource|jetsam) coalition" | grep -E "ID|name|type"
+          echo "== node child"
+          node -e 'const e=Date.now()+400;while(Date.now()<e);setTimeout(()=>{},4000)' &
+          child=$!
+          sleep 1
+          ps -o pid=,ppid=,pri=,nice=,stat=,command= -p "$child" | cut -c1-120
+          echo "== taskinfo node child (sudo, read-only)"
+          sudo taskinfo "$child" 2>&1 | head -70
+          echo "== runner launchd labels"
+          launchctl list 2>/dev/null | grep -i -E "actions|runner" | head -5
+          sudo launchctl list 2>/dev/null | grep -i -E "actions|runner" | head -5
+          wait "$child"
+          exit 0
+      - name: lock test alone
+        run: npm test -- tests/sqlite-storage.test.mjs
+        env:
+          KADAN_HOME: ${{ runner.temp }}/kadan-home
+      - name: lock wait direct measure
+        run: |
+          cat > "$RUNNER_TEMP/ci-lock-measure.mjs" <<'KADAN_MEASURE_EOF'
+          // TEMP(exec-7e66f8e6): 잠금 대기 시간 직접 측정. 저장소 꼭대기에서: node <이 파일> <busyMs>...
+          // 격리 홈(os.tmpdir 아래 새 폴더)만 쓴다. 인자 'child'면 자식(잠긴 원장에 쓰기 시도) 역할이다.
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import path from 'node:path';
+          import {spawnSync} from 'node:child_process';
+          import {fileURLToPath, pathToFileURL} from 'node:url';
+          const repo = process.cwd(), self = fileURLToPath(import.meta.url);
+          const r = x => Math.round(x * 10) / 10;
+          if (process.argv[2] === 'child') {
+            const sqlite = process.getBuiltinModule('node:sqlite'), Orig = sqlite.DatabaseSync, log = [];
+            const timed = (label, fn) => {
+              const s = performance.now();
+              const done = extra => log.push({label, ms: r(performance.now() - s), ...extra});
+              try { const out = fn(); done(); return out; } catch (e) { done({threw: e.message, errcode: e.errcode ?? null}); throw e; }
+            };
+            const exec = Orig.prototype.exec;
+            Orig.prototype.exec = function (sql) {
+              const parts = /CREATE/i.test(sql) ? [sql] : sql.split(';').map(x => x.trim()).filter(Boolean);
+              for (const part of parts) timed('exec: ' + part.slice(0, 40), () => exec.call(this, part));
+            };
+            class Timed extends Orig { constructor(...a) { super(...a); log.push({label: 'open', ms: 0}); } }
+            sqlite.DatabaseSync = Timed;
+            const sleeps = () => {
+              const cell = new Int32Array(new SharedArrayBuffer(4)), out = [];
+              for (let i = 0; i < 10; i++) { const s = performance.now(); Atomics.wait(cell, 0, 0, 100); out.push(r(performance.now() - s)); }
+              return out;
+            };
+            const {appendLedger} = await import(pathToFileURL(path.join(repo, 'src/ledger.mjs')).href);
+            const sleep100ms = sleeps(), start = performance.now();
+            let message = null;
+            try { appendLedger({kind: 'blocked'}, process.argv[3]); } catch (e) { message = e.message; }
+            const elapsedMs = Math.round(performance.now() - start);
+            const slow = log.filter(s => s.ms > 50), opens = log.filter(s => s.label === 'open').length;
+            console.log(JSON.stringify({message, elapsedMs, opens, statements: log.length, slow, sleep100ms}));
+          } else {
+            const base = fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-lockmeasure-'));
+            process.env.KADAN_HOME = base;
+            delete process.env.KADAN_LITE_HOME;
+            delete process.env.KADAN_BUSY_TIMEOUT_MS;
+            process.env.KADAN_NOTIFY = 'off';
+            const storage = await import(pathToFileURL(path.join(repo, 'src/storage.mjs')).href);
+            console.log('LOCKMEASURE env ' + JSON.stringify({platform: process.platform, arch: process.arch, node: process.version,
+              sqlite: process.versions.sqlite, cpus: os.availableParallelism(), loadavg: os.loadavg().map(r), base}));
+            process.argv.slice(2).forEach((busy, i) => {
+              const home = path.join(base, `run-${i}`);
+              storage.createDatabase(home);
+              storage.writeStorageMarker(home, 'sqlite');
+              const db = storage.openDatabase(home);
+              db.exec('BEGIN IMMEDIATE');
+              let out;
+              try {
+                out = spawnSync(process.execPath, [self, 'child', home], {cwd: repo, encoding: 'utf8', timeout: 120000,
+                  env: {...process.env, KADAN_HOME: home, KADAN_BUSY_TIMEOUT_MS: busy}});
+              } finally { db.exec('ROLLBACK'); db.close(); }
+              let data;
+              try { data = JSON.parse(out.stdout); } catch { data = {raw: String(out.stdout).slice(0, 300), stderr: String(out.stderr).slice(0, 300)}; }
+              const ratio = data.elapsedMs ? Math.round(data.elapsedMs / Number(busy) * 100) / 100 : null;
+              console.log(`LOCKMEASURE busy=${busy} ratio=${ratio} ` + JSON.stringify(data));
+            });
+          }
+          KADAN_MEASURE_EOF
+          echo "== as-is (runner default class)"
+          node "$RUNNER_TEMP/ci-lock-measure.mjs" 2000 15000 2000 15000
+          echo "== taskpolicy -a (app policies)"
+          /usr/sbin/taskpolicy -a node "$RUNNER_TEMP/ci-lock-measure.mjs" 2000 2000 || true
+          echo "== taskpolicy -b (background)"
+          /usr/sbin/taskpolicy -b node "$RUNNER_TEMP/ci-lock-measure.mjs" 2000 2000 || true
+          echo "== taskpolicy -c utility (utility clamp)"
+          /usr/sbin/taskpolicy -c utility node "$RUNNER_TEMP/ci-lock-measure.mjs" 2000 2000 || true
