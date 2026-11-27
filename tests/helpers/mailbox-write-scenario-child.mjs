@@ -2,7 +2,7 @@
 // 사용: node mailbox-write-scenario-child.mjs <저장소 절대경로> <narrow|full> [붙은 줄을 적을 파일]
 // Why: 우편함 명령의 읽기를 좁혀도 쓰기 길(우편 저장·읽음·취소·최종 답장·차례 반환)이 원장에 붙이는 줄은 바이트까지 같아야 한다.
 //  - narrow: 저장소 코드 그대로.
-//  - full: 같은 코드에서 좁은 읽기 두 함수만 전체 읽기(readMailboxLedger·readSendLedger)로 바꿔 끼운다(좁히기 전과 같은 읽기).
+//  - full: 같은 코드에서 좁은 읽기 세 함수만 전체 읽기(readMailboxLedger·readSendLedger·readLedger)로 바꿔 끼운다(좁히기 전과 같은 읽기).
 //    좁은 읽기가 없는 옛 저장소에서는 바꿀 것이 없어 그대로 돈다.
 // 시각과 우편 ID는 고정한다: Date는 단계마다 1초씩만 흐르는 가짜 시계, randomUUID는 차례 번호다. 두 실행의 차이는 읽기뿐이다.
 // 결과는 표준 출력의 JSON 한 줄이다({rows, sha256, kinds, steps, homeReplaced}).
@@ -39,7 +39,8 @@ registerHooks({load(url, context, nextLoad) {
   if (mode !== 'full' || !url.endsWith('/src/ledger.mjs')) return result;
   let source = String(result.source);
   if (!source.includes('LedgerNarrow')) return result; // 좁은 읽기가 없는 옛 코드
-  for (const [narrow, full] of [['readMailboxLedgerNarrow', 'readMailboxLedger'], ['readSendLedgerNarrow', 'readSendLedger']]) {
+  for (const [narrow, full] of [['readMailboxLedgerNarrow', 'readMailboxLedger'], ['readSendLedgerNarrow', 'readSendLedger'],
+    ['readHandoverLedger', 'readLedger']]) {
     const entry = new RegExp(`export function ${narrow}\\(home = ledgerHome\\(\\)\\) \\{`);
     if (!entry.test(source)) throw new Error(`${narrow} 입구를 찾지 못함`);
     source = source.replace(entry, found => `${found} return ${full}(home);`);
@@ -55,7 +56,7 @@ const {createDatabase, writeStorageMarker} = await src('storage.mjs');
 const {cmdMail, cmdSend} = await src('commands/send.mjs');
 const {Mailbox, inboxCommand} = await src('mailbox.mjs');
 const {WorkStore} = await src('work-store.mjs');
-if (mode === 'full' && fs.readFileSync(path.join(root, 'src/ledger.mjs'), 'utf8').includes('LedgerNarrow') && replaced !== 2) {
+if (mode === 'full' && fs.readFileSync(path.join(root, 'src/ledger.mjs'), 'utf8').includes('LedgerNarrow') && replaced !== 3) {
   throw new Error('좁은 읽기를 전체 읽기로 바꿔 끼우지 못함');
 }
 

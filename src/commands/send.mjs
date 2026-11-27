@@ -16,7 +16,7 @@ import { planTurnReturn, claimTurnReturn, turnReturnTail, turnReturnReceipt, rev
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { floor } from "../floor.mjs";
-import { ledgerHome, readSendLedgerNarrow, resolveLedgerBy } from "../ledger.mjs";
+import { ledgerHome, readSendLedgerNarrow, readHandoverLedger, resolveLedgerBy } from "../ledger.mjs";
 import { tmux } from "../floor-tmux.mjs";
 import { die, sessionName, lastStartFor, recordedPid } from "../cli-basics.mjs";
 import { guardedSend } from "../cli-guarded-send.mjs";
@@ -179,9 +179,9 @@ function deliverMessage(argv, flags, command) {
     // 위임받은 쪽이 업무 owner에게 보내는 결과 우편이면 보내기 전에 업무 잠금 안에서 판정·쓰기를 하고(놀고 있음 PR-3),
     // 쓰기가 성공했을 때만 실제 revision의 꼬리를 붙인다. 업무 잠금은 여기서 놓이고 우편은 그 뒤에 시작한다(잠금이 겹치지 않는다).
     const turnPlan = planTurnReturn(ledgerHome(), {sender: process.env.KADAN_ROLE, by, recipient, workKey: mailContext.workKey, taskId,
-      raw: flags.raw === true, keepTurn: flags['keep-turn'] === true}, {readEntries: readSendLedgerNarrow});
-    // 책임자 계산은 확정 인계만 본다. 전송 길과 같은 좁은 읽기를 쓰고, 잠금 안 재판정은 지금처럼 새로 읽는다.
-    turnClaim = claimTurnReturn(ledgerHome(), turnPlan, {readEntries: readSendLedgerNarrow});
+      raw: flags.raw === true, keepTurn: flags['keep-turn'] === true}, {readEntries: readHandoverLedger});
+    // 책임자 계산은 확정 인계만 본다. 원장 전체 대신 인계 줄만 읽고, 잠금 안 재판정은 지금처럼 새로 읽는다.
+    turnClaim = claimTurnReturn(ledgerHome(), turnPlan, {readEntries: readHandoverLedger});
     const outgoing = turnClaim ? message + turnReturnTail(turnClaim) : message;
     try {
       sendCalled = true;

@@ -30,6 +30,14 @@ SQLite에서는 같은 `kadan.sqlite` 안의 스트림을 구분한다. 별도 D
 - `readMailLedger(home)`는 우편 사건에 더해 책임 계산용 확정 `handover/transferred`와 `completionMailId`가 있는 `done`을 원래 저장 순서로 반환한다. 완료 근거는 짧은 실행 ID와 정식 주소가 섞인 자동 결과 우편도 원본 발령에 대한 유효한 최종 답변인지 검증하는 데 사용한다. `done`은 작업 원장, 확정 인계는 시스템 원장에 각각 한 번만 저장하며 우편 원장에 사본을 저장하지 않는다.
 - `readLedger(home)`는 기존 호출자를 위한 통합 호환 조회다. 작업 발령은 기존 `send` 형태로 한 번 노출하며 새 `dispatch`를 중복 노출하지 않는다. 원장별 건수를 더한 값은 호환 조회 건수와 다를 수 있다.
 - `readSendLedger(home)`는 우편 전송 길(`send`·`mail`·`dispatch`) 전용 통합 조회다. `readLedger`와 똑같이 원장 전체를 읽고 검증하며(손상 감지가 같다), 결과에서 전송 길이 읽지 않는 감시 사건 여섯 종류(`watch-cycle`·`watch-ai-request`·`watch-ai-call`·`watch-ai-report`·`watch-scope`·`watch-ai-retired`)만 뺀다. 나머지 줄의 내용과 순서는 같다. 우편함 세대 판정이 읽는 `watch-mail-reminder`는 남긴다. 전송 길의 코드가 뺀 종류를 읽게 되면 목록(`SEND_UNUSED_KINDS`)에서 빼야 하고, `tests/send-ledger-narrow.test.mjs`가 소비 모듈을 지킨다.
+- 우편함 명령(`inbox`·`mail`·`send`)은 위 조회를 통째로 읽지 않고 **같은 결과를 내는 좁은 읽기**를 쓴다(2026-11-27).
+  `readMailboxLedgerNarrow(home)`는 `readMailboxLedger`와, `readSendLedgerNarrow(home)`는 `readSendLedger`와 같은 줄·같은 순서를 낸다.
+  `readHandoverLedger(home)`는 `readLedger` 결과의 인계 줄만 낸다(차례 반환의 업무 책임자 계산용).
+  SQL로 필요한 영역·종류의 줄만 골라 저장 순번(`_ledgerOrder`)으로 합치고, 과거 원문 영역은 통째로 읽는다. 시각으로 재정렬하지 않는다.
+  읽은 줄에 한해 줄 모양·영역 안 순번 역전·순번 중복·우편 ID 중복·과거 원문 손상(우편함)은 계속 막는다.
+  읽지 않은 줄의 손상, 순번 빠짐, send/dispatch 짝, 완료 우편과 `done`의 연결은 이 명령들에서 확인하지 않는다.
+  그 검증은 전체 읽기(`readLedger` 계열)·감시기 시작·`kadan storage verify`가 맡는다(복원 조회 `readRecoveryLedger`와 같은 타협).
+  두 읽기의 결과가 같은지는 `tests/ledger-narrow-read.test.mjs`가, 좁혀도 원장에 붙는 줄이 같은지는 `tests/mailbox-narrow-write.test.mjs`가 지킨다.
 - 감시기의 전송(`createWatchSenders`)은 이미 보관한 감시 원문 배열을 이어 읽는다.
   경보·미확인 우편 재알림·429 재개는 시작 기록 선택과 `guardedSend` 양쪽에서,
   입력 큐 재개는 시작 기록 선택에서 호출 시점의 새 사건을 확인한다.

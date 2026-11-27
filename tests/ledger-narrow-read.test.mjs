@@ -10,12 +10,13 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {appendLedger, readLedger, readMailboxLedger, readSendLedger,
-  readMailboxLedgerNarrow, readSendLedgerNarrow} from '../src/ledger.mjs';
+  readMailboxLedgerNarrow, readSendLedgerNarrow, readHandoverLedger} from '../src/ledger.mjs';
 import {createDatabase, writeStorageMarker} from '../src/storage.mjs';
 import {Mailbox, mailboxLetters} from '../src/mailbox.mjs';
 import {CardStore} from '../src/card-store.mjs';
 import {inferDispatchTask, resolveWorkMail} from '../src/work-mail.mjs';
-import {effectiveCardRole} from '../src/handover-state.mjs';
+import {effectiveCardRole, effectiveWorkOwner} from '../src/handover-state.mjs';
+import {WorkStore} from '../src/work-store.mjs';
 import {composeRoleInstructions} from '../src/role-instructions.mjs';
 
 const freshHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-narrow-'));
@@ -236,11 +237,30 @@ test('발령 검사·답장 연결 결과가 두 읽기에서 같다', () => {
   assert.match(outcome(() => resolveWorkMail(home, {...input, replyFinal: true})).error, /이미 최종 답변/);
 });
 
+test('인계 읽기: 전체 읽기의 인계 줄과 같고, 업무 책임자 계산 결과가 같다', () => {
+  const {home} = fixture();
+  const full = readLedger(home), handovers = readHandoverLedger(home);
+  assert.deepEqual(handovers, full.filter(entry => entry.kind === 'handover'));
+  assert.equal(print(handovers), print(full.filter(entry => entry.kind === 'handover')));
+  assert.equal(handovers.length, 3, '과거 원문 1 + 새 영역 2(요청·확정)');
+  const store = new WorkStore(home);
+  store.create({key: 'r/w-a', title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'a', repoPath: home, by: 'a'});
+  store.create({key: 'r/w-b', title: '업무', goal: '결과', scope: '범위', acceptance: '조건', owner: 'b', repoPath: home, by: 'b'});
+  // 업무 등록 뒤의 확정 인계만 책임자를 옮긴다(a → c).
+  appendLedger({kind: 'handover', phase: 'transferred', handoverId: 'h3', from: 'a', to: 'c', by: 'a'}, home);
+  for (const key of ['r/w-a', 'r/w-b']) {
+    assert.equal(effectiveWorkOwner(store.get(key), readHandoverLedger(home)), effectiveWorkOwner(store.get(key), readLedger(home)), key);
+  }
+  assert.equal(effectiveWorkOwner(store.get('r/w-a'), readHandoverLedger(home)), 'c');
+  assert.equal(effectiveWorkOwner(store.get('r/w-b'), readHandoverLedger(home)), 'b');
+});
+
 test('빈 저장소·사건 없는 저장소: 두 읽기 모두 빈 목록', () => {
   const none = freshHome();
   assert.deepEqual(readMailboxLedgerNarrow(none), readMailboxLedger(none));
   assert.deepEqual(readSendLedgerNarrow(none), readSendLedger(none));
   assert.deepEqual(readMailboxLedgerNarrow(none), []);
+  assert.deepEqual(readHandoverLedger(none), []);
   const empty = freshHome();
   createDatabase(empty); writeStorageMarker(empty, 'sqlite');
   assert.deepEqual(readMailboxLedgerNarrow(empty), []);

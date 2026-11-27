@@ -64,7 +64,8 @@ export function readMailBody(digestValue, home = ledgerHome()) {
 export function readLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home));
 }
-// 우편 전송 길(send·mail·dispatch) 전용 통합 조회. readLedger와 똑같이 원장 전체를 읽고 검증한다(손상 감지가 같다).
+// 우편 전송 길(send·mail·dispatch)의 통합 조회. readLedger와 똑같이 원장 전체를 읽고 검증한다(손상 감지가 같다).
+// 2026-11-27부터 명령은 같은 결과를 내는 좁은 읽기(readSendLedgerNarrow)를 쓰고, 이 함수는 그 비교 기준으로 남는다.
 // 다른 점은 결과에서 전송 길이 읽지 않는 감시 사건 여섯 종류를 뺀다는 것 하나다. 나머지 줄의 내용과 순서는 readLedger와 같다.
 // 이 여섯 종류가 통합 조회 결과의 절반 가까이를 차지한다(2026-11-13 실측: 91MB 중 약 43MB).
 // 우편 재알림(watch-mail-reminder)은 우편함의 세대 판정(mail-rule.mjs)이 읽으므로 빼지 않는다.
@@ -83,6 +84,7 @@ export function readMailLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home,{domain:'mail'}),'mail');
 }
 // 우편함 계산용: 우편 영역 + 역할 세대(start·stop) 기록. mail-generation.mjs가 같은 이름의 새 세션을 가른다.
+// 원장 전체를 읽고 검증한다. 우편함 명령은 같은 결과를 내는 좁은 읽기(readMailboxLedgerNarrow)를 쓰고, 이 함수는 그 비교 기준으로 남는다.
 export function readMailboxLedger(home = ledgerHome()) {
   return projectLedger(readLedgerState(home,{domain:'mailbox'}),'mailbox');
 }
@@ -168,6 +170,10 @@ const SEND_NARROW = [
     + ` THEN json_remove(payload,${SLIM_DROPPABLE.map(key => `'$.${key}'`).join(',')}) ELSE payload END AS payload`
     + ` FROM events WHERE stream=? AND (${RECOVERY_KIND} IS NULL OR ${RECOVERY_KIND} NOT IN (${NARROW_KINDS(SEND_UNUSED_KINDS)})) ORDER BY seq`],
 ];
+// 책임자 계산용: 통합 조회의 인계(handover) 줄만 같은 순서로 낸다.
+const HANDOVER_NARROW = [
+  [ledgerStreams.system, `SELECT payload FROM events WHERE stream=? AND ${RECOVERY_KIND}='handover' ORDER BY seq`],
+];
 function readNarrow(home, domain, plan) {
   if (storageMode(home) === 'none') return [];
   return storageSnapshot(home, db => {
@@ -205,6 +211,11 @@ export function readMailboxLedgerNarrow(home = ledgerHome()) {
 export function readSendLedgerNarrow(home = ledgerHome()) {
   const unused = new Set(SEND_UNUSED_KINDS);
   return readNarrow(home, null, SEND_NARROW).filter(entry => !unused.has(entry?.kind));
+}
+// readLedger 결과에서 인계(handover) 줄만 고른 것과 같다. 업무 책임자 계산(effectiveWorkOwner)은 확정 인계만 보므로
+// 우편의 차례 반환 판정이 원장 전체 대신 이것을 읽는다(운영 원장에 인계 줄은 수십 건이다).
+export function readHandoverLedger(home = ledgerHome()) {
+  return readNarrow(home, null, HANDOVER_NARROW).filter(entry => entry?.kind === 'handover');
 }
 const LIFECYCLE_KINDS = new Set(['start', 'stop', 'window']);
 // 한 세션의 현재 세대 수명 사건(마지막 start부터의 start·stop·window)만 최신 쪽부터 거꾸로 읽는다(up --auto의 has-tab 빠른 길).
