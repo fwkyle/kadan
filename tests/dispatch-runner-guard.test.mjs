@@ -278,7 +278,8 @@ test('카드 단계를 하나로 정할 수 없으면(묶음 단계 review·업�
   assert.equal(r.sent,1);assert.equal(r.sends()[0].runnerGuard,undefined);
  }
  const old=ambiguous({cmd:OLD_OPUS_CMD,roleProfile:'worker'});
- assert.throws(()=>old.call(),e=>{assert.ok(stale(e));assert.match(e.message,/옛 실행기·모델 세션이다 — 지금 worker 기본값/);return true;});
+ // 업무를 만들 때 그 시점의 기본 프리셋이 업무에 고정되므로 기대값 문구에 프리셋 이름이 붙는다(판정은 같다).
+ assert.throws(()=>old.call(),e=>{assert.ok(stale(e));assert.match(e.message,/옛 실행기·모델 세션이다 — 지금 프리셋 \S+ worker 기본값/);return true;});
  // 단계 인자를 안 넘기면 검사 함수도 예전과 같다
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'kadan-runner-guard-nophase-'));
  fs.writeFileSync(path.join(home,'runner-settings.json'),JSON.stringify(settingsDoc()));

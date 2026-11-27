@@ -31,6 +31,7 @@ import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger} from './ledger.mjs';
 import {readLedgerIncremental} from './ledger-incremental.mjs';
+import {previewAfterSettingsChange,settingsBefore} from './relaunch-preview.mjs';
 import {addPreset,changedRunnerFields,editFallback,readSettings,removePreset,removeRunnerModel,renamePreset,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {compareState, setCompare} from './runner-compare.mjs';
@@ -387,6 +388,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
       if (f.replace !== undefined && f.replace !== '' && f.replace !== '1') throw new Error('같은 이름 바꾸기 값이 올바르지 않다');
       return importPreset(home, {data: parseExportText(text, MAX_UPLOAD_BYTES), as: f.as?.trim() || undefined, replace: f.replace === '1', ...meta});
     };
+    // 저장 뒤 "다시 띄워야 할 살아 있는 작업자·검수자"를 응답 데이터에 싣는다(CLI와 같은 계산, 화면 표시는 아직 없다).
+    const settingsWas = settingsBefore(home);
     const next = url.pathname === '/runners/preset-save' ? presetSave()
       : url.pathname === '/runners/preset-add' ? addPreset(home, {name: f.preset, from: f.from || undefined, ...meta})
       : url.pathname === '/runners/preset-rename' ? renamePreset(home, {from: f.from, to: f.preset, ...meta})
@@ -403,8 +406,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
       : url.pathname === '/runners/model-remove'
         ? removeRunnerModel(home, {runner: f.runner, model: f.model, ...meta})
         : setActivePreset(home, {preset: f.preset, ...meta});
+    const relaunch = previewAfterSettingsChange(home, settingsWas, {floor, readEntries: readLedgerIncremental});
     saved('/?runnersSaved='+next.revision+'#runner-settings',{
       revision: next.revision, warnings: next.warnings ?? [], ...(next.imported ? {imported: next.imported, next: next.next} : {}),
+      ...(relaunch ? {relaunchPreview: relaunch} : {}),
     });return true;
    }
    if(url.pathname.startsWith('/works/')){
@@ -422,7 +427,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
     // 마감·취소는 닫지 못한 실행 카드가 있어도 업무가 저장된 성공(200·303)이다. 응답에 닫은 수와 남은 카드·이유를 함께 싣는다.
     const close=work.cardClose;
     saved(`/?collection=work&card=${encodeURIComponent('work:'+work.key)}&detail=1${cardCloseQuery(close?.failed)}#detail`,
-     {key:'work:'+work.key,revision:work.revision,...(close?{cardClose:{closed:close.closed.length,failed:close.failed}}:{})});return true;
+     {key:'work:'+work.key,revision:work.revision,...(close?{cardClose:{closed:close.closed.length,failed:close.failed}}:{}),
+      ...(work.presetWarning?{presetWarning:work.presetWarning}:{})});return true;
    }
    const card=url.pathname.endsWith('create')?store.create({...f,by:'사람'}):store.update(f.key,{...(f.turnOwner?.trim()?{turnOwner:f.turnOwner.trim()}:{}),...(f.status==='superseded'&&f.replacedBy?{replacedBy:f.replacedBy}:{}),...(f.status==='superseded'&&f.replacedByText?{replacedByText:f.replacedByText}:{}),...(f.rallyId!==undefined?{rallyId:f.rallyId,rallyTitle:f.rallyTitle,rallyRound:f.rallyRound,rallyStep:f.rallyStep}:{}),title:f.title,status:f.status,scope:f.scope,...(f.statusReason?{statusReason:f.statusReason}:{}),...(f.resolutionOwner!==undefined?{resolutionOwner:f.resolutionOwner||null}:{}),...(f.nextAction!==undefined?{nextAction:f.nextAction||null}:{}),...(f.workType?{workType:f.workType}:{}),board:f.board||null,role:f.role||null},{revision:f.revision,by:'사람',noteKind:f.noteKind,note:f.note});
    saved(`/?card=${encodeURIComponent(card.key)}#detail`,{key:card.key,revision:card.revision});

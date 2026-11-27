@@ -6,12 +6,25 @@ import {detectRunners} from './quickstart.mjs';
 import {compareState, setCompare} from './runner-compare.mjs';
 import {compareReport, formatCompareReport} from './compare-report.mjs';
 import {isUserActor} from './actors.mjs';
+import {previewAfterSettingsChange, relaunchLines, settingsBefore} from './relaunch-preview.mjs';
 
 const MAX_QUOTE = 4000;
 
 export const RUNNERS_USAGE = 'kadan runners show | init --reason 이유 | set <worker|reviewer|conductor|super|watch|senior|explain|worker-hard|secretary> --runner 실행기 --model 모델 [--effort 강도] --revision N --reason 이유 [--preset 이름] (worker-hard는 어려운 일 작업자 자리 — 선택 칸이고 start --profile worker --difficulty hard [--fallback N]이 쓴다. 비우기: set worker-hard --clear --revision N --reason 이유(그 자리의 대체 후보도 함께 지운다). secretary는 비서 자리 — 선택 칸이고 codex만 받는다. 비서를 새로 띄울 때가 아니라 같은 대화로 다시 열 때(restart 비서·up 복원·로티 탭 복원) 저장된 명령의 모델·강도만 이 값으로 바꾼다. 대체 후보는 없고 비우기는 set secretary --clear --revision N --reason 이유. senior는 --set "실행기:모델[:강도],…"로 최대 2명, 한 명이면 --runner/--model. 질문하면 등록된 전원에게 동시에 묻는다) | runner <실행기> [--spawn 명령틀] [--table JSON(resume·fork·exec·execField·version·update·listModels·conversation 칸. listModels는 모델 목록을 내는 명령, 자리 없음)] --revision N --reason 이유 | model <실행기> <모델> (--efforts a,b | --remove) --revision N --reason 이유 (--remove는 어디서도 안 쓰는 모델만 목록에서 뺀다) | block <모델> [--roles reviewer,...] --revision N --reason 이유 | preset <이름> --revision N --reason 이유 (활성 프리셋 전환) | preset add <이름> [--from 원본] --revision N --reason 이유 (원본, 기본은 활성 프리셋을 복사) | preset rename <옛> <새> --revision N --reason 이유 | preset remove <이름> --revision N --reason 이유 (활성 프리셋은 거절) | export <프리셋> [--out 파일] (프리셋 한 벌을 JSON으로 내보낸다. 기본은 표준 출력, --out은 KADAN_HOME 밖의 없는 파일만. 설정·원장은 바꾸지 않는다) | import <파일> [--as 이름] [--replace] --revision N --reason 이유 (프리셋 한 벌만 더한다. --replace는 기존 이름 한 벌을 교체한다. 이 기계에 없는 실행기·모델·강도가 있으면 전체 거절하고 등록 명령을 알려 준다. 활성 프리셋은 그대로) | fallback <worker|worker-hard|reviewer|conductor|super|watch|explain> --set "실행기:모델[:강도],…" --revision N --reason 이유 [--preset 이름] (빈 글이면 목록 비움, senior·secretary는 폴백 없음, worker-hard는 자리가 채워져 있을 때만, explain은 대체 후보 1개까지) | favorite --set "실행기:모델[:강도],…" --revision N --reason 이유 (화면에서 한 번에 고르는 즐겨찾기, 빈 글이면 비움). 상세: docs/runner-settings.md';
 
-export function runnersCommand([action, role, model, extra], flags, {home, by, record, detect = detectRunners}) {
+// 설정을 바꾼 명령 뒤에 "다시 띄워야 할 살아 있는 작업자·검수자"를 덧붙인다(막지 않는다). 발령 검사가 읽는 값이 그대로면 아무것도 붙이지 않는다.
+// 바닥(floor)을 받은 호출(CLI)에서만 계산한다. 사람이 읽는 줄은 stderr, 같은 내용이 결과의 relaunchPreview 칸에 실린다.
+export function runnersCommand(argv, flags, context) {
+  if (!context.floor || flags.help) return runnersCommandInner(argv, flags, context);
+  const before = settingsBefore(context.home);
+  const result = runnersCommandInner(argv, flags, context);
+  const preview = previewAfterSettingsChange(context.home, before, {floor: context.floor});
+  if (!preview || !result || typeof result !== 'object') return result;
+  for (const line of relaunchLines(preview)) process.stderr.write(`${line}\n`);
+  return {...result, relaunchPreview: preview};
+}
+
+function runnersCommandInner([action, role, model, extra], flags, {home, by, record, detect = detectRunners}) {
   flags = {...flags, _model: model};
   // 역할 세션(사람 아님)이 --quote로 kyle 원문을 가져오면 설정 변경 사건에 원문과 viaChat을 남긴다(autopilot repo와 같은 모양). 사람 쓰기는 그대로다.
   const quote = !isUserActor(by) && typeof flags.quote === 'string' ? flags.quote.trim() : '';
