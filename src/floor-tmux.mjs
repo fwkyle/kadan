@@ -799,19 +799,29 @@ export function hasTrustPrompt(screen) {
   return no >= 0 && group.lastIndexOf(TRUST_QUESTION, no) >= 0;
 }
 
-// agy(Antigravity CLI)의 폴더 신뢰 창(2026-11-24 실측 화면 꼴, 공백은 모두 걷고 비교한다):
+// agy(Antigravity CLI)의 폴더 신뢰 창(2026-11-24·11-26 실측 화면 꼴, 상태 글을 뺀 줄은 공백을 모두 걷고 비교한다):
 //   Accessing workspace: / <경로 한 줄> / Do you trust the contents of this project? / <설명 줄들> /
-//   > Yes, I trust this folder / No, exit / ↑/↓ Navigate · enter Confirm
-// 안내 줄(`↑/↓ Navigate · enter Confirm`)이 비지 않은 마지막 줄이고 그 바로 위 두 줄이 Yes·No 선택지일 때만 창이다 — 인용만 한 글은 아래에
-// 입력창·상태 줄이 이어지므로 창으로 보지 않는다. 기본 선택이 Yes라 여기에 우편이 들어가면 Enter가 신뢰를 승인한다(2026-11-24 검수).
+//   > Yes, I trust this folder / No, exit / ↑/↓ Navigate · enter Confirm / [상태 글]
+// 상태 글(2026-11-26 실행 기록 part-aaaaaa 재생 캡처, 고정 입력 tests/fixtures/agy-trust-screens.mjs): 안내 줄과 같은 줄이 아니라
+// 아래 줄에 오른쪽 정렬로 그린다(`auto · <모델> · high`, 그리는 중에는 `<모델> · high`). 11-24 꼴에는 없다.
+// 안내 줄(`↑/↓ Navigate · enter Confirm`)이 비지 않은 마지막 줄이거나 그 아래에 상태 글 꼴 한 줄만 있고, 안내 줄 바로 위 두 줄이
+// Yes·No 선택지일 때만 창이다 — 인용만 한 글은 아래에 입력창·대화가 이어지므로 창으로 보지 않는다.
+// 기본 선택이 Yes라 여기에 우편이 들어가면 Enter가 신뢰를 승인한다(2026-11-24 검수).
+// 상태 글 꼴은 모델 이름 없이 구조로만 본다: 깊은 들여쓰기(8칸 이상) + ` · `로 나뉜 영문·숫자 칸 2~3개, 글자 80자 이하.
+// 입력창 바닥 줄(`? for shortcuts …`·`esc to cancel …`)은 줄 처음에서 시작해 들여쓰기에서 걸린다.
+// 한계: 폭이 `상태 글 길이 + 8`보다 좁거나 상태 글에 이 밖의 글자·칸 수가 생기면 창을 못 알아본다(실측 최소 폭 80, 들여쓰기 60).
 // 반환: 창이 아니면 null, 맞으면 { path, pathAmbiguous, selected }(의미는 trust-accept.mjs의 readTrustSelection과 같다).
 const AGY_QUESTION = "Doyoutrustthecontentsofthisproject?", AGY_FOOTER = "↑/↓Navigate·enterConfirm", AGY_WORKSPACE = "Accessingworkspace:";
 const AGY_MARK = /^\s*[>❯]/u;
+const AGY_STATUS_CELL = String.raw`[A-Za-z0-9._()+/-]+(?: [A-Za-z0-9._()+/-]+)*`;
+const AGY_STATUS = new RegExp(`^ {8,}${AGY_STATUS_CELL}(?: · ${AGY_STATUS_CELL}){1,2} *$`, "u");
+const AGY_STATUS_MAX = 80;
 export function readAgyTrustSelection(screen) {
   if (typeof screen !== "string") return null;
   const squash = text => text.replace(/\s+/gu, "");
   const rows = screen.replace(CONTROL_SEQUENCES, "").split("\n").filter(line => squash(line));
-  const footer = rows.length - 1;
+  const last = rows.length - 1;
+  const footer = AGY_STATUS.test(rows[last] ?? "") && rows[last].trim().length <= AGY_STATUS_MAX ? last - 1 : last;
   if (footer < 3 || squash(rows[footer]) !== AGY_FOOTER) return null;
   const option = line => squash(line).replace(/^[>❯]/u, "");
   const [first, second] = [rows[footer - 2], rows[footer - 1]].map(option);

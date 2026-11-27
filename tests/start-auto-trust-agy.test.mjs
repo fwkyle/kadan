@@ -11,6 +11,7 @@ import {spawnSync} from 'node:child_process';
 import {autoAcceptTrust, hasAgyTrustPrompt, readAgyTrustSelection} from '../src/trust-accept.mjs';
 import {hasTrustPrompt, sendTmux} from '../src/floor-tmux.mjs';
 import {readLedger} from '../src/ledger.mjs';
+import {ANSWERING_TAIL, FULL_120, FULL_152, HALF_120, HALF_80, INPUT_TAIL} from './fixtures/agy-trust-screens.mjs';
 
 const CLI = path.resolve(import.meta.dirname, '../src/cli.mjs');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kadan-auto-trust-agy-')));
@@ -195,6 +196,67 @@ test('sendTmux: agy 보통 입력창·창 문구를 인용한 화면은 그대�
   const calls = [];
   assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(CLAUDE_SCREEN, calls), spawn: noopSpawn}), e => e.code === 'KADAN_TRUST_PROMPT' && /Claude/.test(e.message));
   assert.equal(keysSent(calls), 0);
+});
+
+// ---- 안내 줄 아래에 상태 글이 있는 꼴(2026-11-26 실제 화면, tests/fixtures/agy-trust-screens.mjs) ----
+const REAL_SCREENS = {HALF_80, HALF_120, FULL_120, FULL_152};
+
+test('상태 글 꼴: 실제 화면(폭별·그리는 중·완성)은 agy 창이고 경로·선택을 읽어 Enter 1회로 통과, 우편은 키 0회로 멈춘다', () => {
+  for (const [name, build] of Object.entries(REAL_SCREENS)) {
+    const screen = build(WORK);
+    assert.deepEqual(readAgyTrustSelection(screen), {path: WORK, pathAmbiguous: false, selected: 'yes'}, name);
+    const {result, keys} = run(screen);
+    assert.deepEqual(keys, ['Enter'], name);
+    assert.deepEqual([result.result, result.path], ['accepted', WORK], name);
+    const calls = [];
+    assert.throws(() => sendTmux('kadan-trust', '본문', {run: fakeRun(screen, calls), spawn: noopSpawn}),
+      e => e.code === 'KADAN_TRUST_PROMPT' && e.delivery === 'not-sent', name);
+    assert.equal(keysSent(calls), 0, name);
+  }
+});
+
+test('상태 글 꼴: 선택이 No면 selected no로 읽어 키 0개, 경로 줄이 둘이면 pathAmbiguous', () => {
+  const no = FULL_152(WORK).replace('> Yes, I trust', '  Yes, I trust').replace('  No, exit', '> No, exit');
+  assert.deepEqual(readAgyTrustSelection(no), {path: WORK, pathAmbiguous: false, selected: 'no'});
+  const {result, keys} = run(no, {selected: 'no'});
+  assert.deepEqual(keys, []);
+  assert.deepEqual([result.result, result.reason], ['skipped', 'selection-not-yes']);
+  assert.deepEqual(readAgyTrustSelection(FULL_152(`${WORK}\n/other`)), {path: null, pathAmbiguous: true, selected: 'yes'});
+});
+
+test('상태 글 꼴 음성: 창 문구를 인용한 뒤 입력창·답 쓰는 중 화면이 이어지면 창이 아니다', () => {
+  const quoted = FULL_152(WORK).trimEnd();
+  for (const [name, tail] of Object.entries({INPUT_TAIL, ANSWERING_TAIL})) {
+    // 입력창 전체가 이어지는 꼴과, 바닥 안내+상태 글 한 줄만 안내 줄 바로 아래에 오는 더 가까운 꼴.
+    for (const screen of [`${quoted}\n${tail}`, `${FULL_152(WORK).split('\n').slice(0, 12).join('\n')}\n${tail.split('\n').at(-1)}`]) {
+      assert.equal(readAgyTrustSelection(screen), null, `${name}\n${screen}`);
+    }
+  }
+});
+
+test('상태 글 꼴 음성: 안내 줄 아래에 상태 글이 아닌 줄이 있거나 상태 글 뒤에 줄이 더 있으면 창이 아니다', () => {
+  const window = agyScreen();
+  const status = `${' '.repeat(60)}auto · Gemini 4 Neon · high`;
+  assert.notEqual(readAgyTrustSelection(`${window}\n${status}`), null, '대조군');
+  const wide = ' '.repeat(60);
+  for (const line of [
+    'Enter to confirm · Esc to cancel',
+    '  ↑/↓ Navigate · enter Confirm',
+    '? for shortcuts          auto · Gemini 4 Neon · high',
+    'auto · Gemini 4 Neon · high',
+    '    auto · Gemini 4 Neon · high',
+    `${wide}Gemini 4 Neon`,
+    `${wide}? for shortcuts · high`,
+    `${wide}esc to cancel     auto · high`,
+    `${wide}위 창은 · 인용입니다`,
+    `${wide}one · two · three · four`,
+    `${wide}${'word '.repeat(16)}end · high`,
+  ]) {
+    assert.equal(readAgyTrustSelection(`${window}\n${line}`), null, line);
+  }
+  for (const rest of [`${status}\n> `, `${status}\n${status}`, `  hello\n${status}`]) {
+    assert.equal(readAgyTrustSelection(`${window}\n${rest}`), null, rest);
+  }
 });
 
 // ---- 격리 tmux: 가짜 agy가 받은 키 이름을 파일로 남긴다 ----
