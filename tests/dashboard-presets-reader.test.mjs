@@ -48,7 +48,7 @@ function makeHome(settings = baseSettings()) {
   return home;
 }
 
-// main의 WorkStore는 presetAuto를 쓰지 않고, 완료·없는 프리셋 상태도 만들기 번거로워 다음 판을 직접 붙인다.
+// 완료·없는 프리셋 상태는 만들기 번거로워 다음 판을 직접 붙인다.
 function amend(home, key, fields) {
   const {history, ...latest} = new WorkStore(home).get(key);
   appendStream(home, `works/${key}/events.jsonl`,
@@ -58,7 +58,9 @@ function amend(home, key, fields) {
 function makeWork(home, id, owner, fields = {}) {
   new WorkStore(home).create({key: `demo/${id}`, title: `업무 ${id}`, goal: '목표', scope: '범위',
     acceptance: '조건', owner, repoPath: home});
-  if (Object.keys(fields).length) amend(home, `demo/${id}`, fields);
+  // WorkStore.create는 프리셋을 안 주면 그때의 기본 프리셋을 자동 고정한다(preset·presetAuto). 이 시험은 업무의 프리셋 칸을
+  // 직접 정하므로 자동 고정한 값을 걷어내고 fields만 얹는다(fields에 프리셋이 없으면 preset 칸이 없는 업무가 된다).
+  amend(home, `demo/${id}`, {preset: undefined, presetAuto: undefined, ...fields});
 }
 
 const urlOf = (...sessions) => {

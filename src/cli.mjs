@@ -196,6 +196,8 @@ export {
 function printWorkResult(args,result){
   if(args[0]==='create'&&Number.isInteger(result?.ownerOpenWorks))
     console.error(`책임 감독 ${result.owner}의 열린 업무 ${result.ownerOpenWorks}건 (이 업무 포함)`);
+  if(args[0]==='create'&&result?.presetAuto)
+    console.error(`기본 프리셋 ${result.preset}을(를) 이 업무에 고정했다 — 기본 프리셋을 바꿔도 이 업무는 ${result.preset} 기준이다(바꾸려면 kadan work update ${result.key} --revision ${result.revision} --preset <이름> --note <이유>)`);
   console.log(JSON.stringify(result,null,2));
 }
 
@@ -246,7 +248,7 @@ export const COMMANDS = {
   // 옛 이름(2026-10-05 advisor→senior 개명). 이미 떠 있는 감독이 옛 지침대로 불러도 같은 명령이 돈다.
   advise: (argv,flags) => COMMANDS.senior(argv,flags),
   runners: (argv,flags) => {
-    const result = runnersCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),
+    const result = runnersCommand(argv,flags,{home:ledgerHome(),by:resolveLedgerBy({env:process.env}),floor,
       record:entry=>appendLedger({...entry,t:new Date().toISOString()})});
     console.log(argv[0] === 'report' && !flags.json ? result : JSON.stringify(result,null,2));
   },
