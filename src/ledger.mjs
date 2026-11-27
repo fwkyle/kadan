@@ -158,14 +158,18 @@ export function readRecoveryLedger(home = ledgerHome(), kinds = RECOVERY_KINDS) 
 // 일부러 남긴 차이(전체 읽기만 막는다):
 //  - 인계 읽기(readHandoverLedger)는 우편·완료 줄을 풀지 않아 완료 우편 연결을 보지 않는다(책임자 계산은 확정 인계만 쓴다.
 //    같은 명령이 전송 길 읽기를 먼저 하므로 완료 우편 연결 손상은 거기서 먼저 막힌다).
-//  - 본문을 받지 않은 줄의 그 밖의 칸 내용(예: 읽지 않는 줄에 붙은 systemGenerated 표지).
+//  - 한 줄의 JSON에 같은 칸이 두 번 적힌 줄(JSON.stringify로는 만들 수 없다): 본문을 받지 않은 줄에서 SQL은 첫 값을,
+//    전체 읽기는 마지막 값을 본다. 이를 SQL로 알아내려면 읽기 한 번에 약 0.3~0.45초가 더 들어 넣지 않았다(2026-11-27 실측).
+//  - 본문을 받지 않은 줄에서 전체 읽기 검사가 읽지 않는 칸(결과에도 판정에도 쓰이지 않는다).
 // 비용: 본문을 받지 않는 줄도 SQL이 JSON으로 풀어 순번을 꺼낸다(시간이 들고 JS 메모리는 거의 들지 않는다).
 //  2026-11-27 실측 16만 줄에 약 0.4~0.7초. 원장이 10배면 이 검사도 10배다(줄 수에 비례).
 // 원장이 10배면: 우편함 읽기의 메모리는 우편 영역 줄 수 + 작업 영역 줄 수 + start·stop 수 + 과거 원문 줄 수에 비례한다.
 // 전송 길 읽기의 메모리는 여섯 감시 종류를 뺀 줄 수에 비례한다. 둘 다 여전히 원장과 함께 자란다(증분 읽기는 후속 D2).
 const NARROW_KINDS = list => list.map(kind => `'${kind}'`).join(',');
-// 본문을 받지 않는 줄에서 꺼내는 것: [저장 순번, broken, 종류, 우편 ID, 작업 ID, 실행 주소]
-const NARROW_META = `json_extract(payload,'$._ledgerOrder','$.broken','$.kind','$.mailId','$.taskId','$.executionKey')`;
+// 본문을 받지 않는 줄에서 꺼내는 것: [저장 순번, broken, 종류, 우편 ID, 작업 ID, 실행 주소, 자동 생성 표지].
+// 전체 읽기 검사가 "어느 종류의 줄에서든" 읽는 칸 전부다. 종류에 따라서만 읽는 칸(send·dispatch·done·handover의 칸)은
+// 그 종류의 줄을 본문째 풀어서 본다. 칸 목록과 근거는 tests/ledger-narrow-integrity.test.mjs의 칸 변형 시험이 지킨다.
+const NARROW_META = `json_extract(payload,'$._ledgerOrder','$.broken','$.kind','$.mailId','$.taskId','$.executionKey','$.systemGenerated')`;
 const narrowScan = (wanted, payload = 'payload') => `SELECT CASE WHEN ${wanted} THEN ${payload} END AS payload,`
   + ` CASE WHEN ${wanted} THEN NULL ELSE ${NARROW_META} END AS meta FROM events WHERE stream=? ORDER BY seq`;
 const NARROW_ALL = narrowScan('1');
@@ -195,7 +199,6 @@ function readNarrow(home, domain, plan) {
   if (storageMode(home) === 'none') return [];
   return storageSnapshot(home, db => {
     const legacy = readStream(home, 'ledger.jsonl', {optional: true});
-    if (domain && legacyCorrupt(legacy)) throw new Error('과거 원장 손상: 도메인 조회 불가');
     const project = domainProjector(domain), kept = [];
     // mails: 우편 ID → {order, entry}. 완료 우편 연결 확인용(과거 원문의 우편은 순번이 없다).
     const mailIds = new Set(), mails = new Map();
@@ -215,9 +218,10 @@ function readNarrow(home, domain, plan) {
         if (read) value = JSON.parse(row.payload);
         else {
           // 본문을 받지 않은 줄: 검증이 보는 칸만으로 같은 모양 검사를 받는다.
-          const [order, broken, kind, mailId, taskId, executionKey] = JSON.parse(row.meta);
+          const [order, broken, kind, mailId, taskId, executionKey, systemGenerated] = JSON.parse(row.meta);
           value = {kind, _ledgerOrder: order, ...(broken == null ? {} : {broken}), ...(mailId == null ? {} : {mailId}),
-            ...(taskId == null ? {} : {taskId}), ...(executionKey == null ? {} : {executionKey})};
+            ...(taskId == null ? {} : {taskId}), ...(executionKey == null ? {} : {executionKey}),
+            ...(systemGenerated == null ? {} : {systemGenerated})};
         }
         validateDomainEvent(stream, value);
         const order = value._ledgerOrder, at = orders.length;
@@ -250,11 +254,14 @@ function readNarrow(home, domain, plan) {
             dones.push({order, ref, role: value.role, taskId: value.taskId, result: value.result, completionMailId: value.completionMailId});
           }
         }
-        if (read && value.systemGenerated === 'task-completion') completions.push({kind: value.kind, mailId: value.mailId});
+        // 완료 우편 표지는 본문을 풀지 않는 줄에 붙어 있어도 본다(전체 읽기는 모든 줄에서 본다).
+        if (value.systemGenerated === 'task-completion') completions.push({kind: value.kind, mailId: value.mailId});
       }
     }
     assertNarrowOrders(orders, shapes, pairs);
     if (plan.links) assertNarrowCompletions(dones, completions, mails, legacy, taskRows);
+    // 과거 원문 손상은 전체 읽기처럼 새 영역 검증 뒤(투영 때)에 본다. 둘 다 손상이면 같은 문구가 먼저 나온다.
+    if (domain && legacyCorrupt(legacy)) throw new Error('과거 원장 손상: 도메인 조회 불가');
     kept.sort((a, b) => a.order - b.order || a.at - b.at);
     return uniqueDone([...project.legacy(legacy), ...kept.map(item => item.entry)]);
   });
