@@ -221,6 +221,74 @@ test('설정 없음과 설정 읽기 실패를 구분하고 파일 내용은 오
   }
 });
 
+test('채운 역할 값과 대체 후보에 runner·model 글자가 없으면 설정 손상이고 위치만 알린다', () => {
+  const home = makeHome(null);
+  makeWork(home, 'work-a', 'writer', {preset: 'gone'});
+  const read = createDashboardPresetsReader(home);
+  const seatAt = (preset, slot) => `프리셋 ${preset}의 ${slot} 자리`;
+  const fallbackAt = (slot, number) => `프리셋 B의 ${slot} 대체 후보 ${number}번`;
+  const cases = [
+    [s => {delete s.presets.B.roles.worker.model;}, seatAt('B', 'worker')],
+    [s => {delete s.presets.B.roles.conductor.runner;}, seatAt('B', 'conductor')],
+    [s => {s.presets.B.roles.reviewer.model = {command: SECRET_COMMAND};},
+      seatAt('B', 'reviewer')],
+    [s => {s.presets.B.roles['worker-hard'].runner = 7;}, seatAt('B', 'worker-hard')],
+    [s => {s.presets.B.roles.worker.runner = '';}, seatAt('B', 'worker')],
+    [s => {s.presets.B.roles.worker.model = '   ';}, seatAt('B', 'worker')],
+    [s => {s.presets.B.roles.worker = SECRET_COMMAND;}, seatAt('B', 'worker')],
+    [s => {s.presets.B.roles.worker = '';}, seatAt('B', 'worker')],
+    [s => {s.presets.B.roles.worker = false;}, seatAt('B', 'worker')],
+    // 쓰지 않는 프리셋도 응답에 실리므로 같이 본다.
+    [s => {delete s.presets['B-agy'].roles.worker.model;}, seatAt('B-agy', 'worker')],
+    [s => {delete s.presets.B.fallback['worker-hard'][1].model;}, fallbackAt('worker-hard', 2)],
+    [s => {delete s.presets.B.fallback.reviewer[0].runner;}, fallbackAt('reviewer', 1)],
+    [s => {s.presets.B.fallback.reviewer.push(null);}, fallbackAt('reviewer', 2)],
+  ];
+  for (const [damage, where] of cases) {
+    const settings = baseSettings();
+    damage(settings);
+    writeSettings(home, settings);
+    const result = read(urlOf('kadan-writer'));
+    assert.equal(result.settings, null, where);
+    assert.equal(result.settingsError,
+      `실행 모델 설정 손상: ${where}에 runner·model 글자가 필요합니다`);
+    assert.equal(result.sessions[0].works[0].presetMissing, false, where);
+  }
+});
+
+test('정상 빈 자리와 네 자리 밖의 값은 설정 손상으로 보지 않는다', () => {
+  const settings = baseSettings();
+  const {roles, fallback} = settings.presets.B;
+  roles.conductor = null;
+  delete roles.reviewer;
+  // 실제 설정의 시니어는 목록이다. 응답에 싣지 않는 자리는 모양을 보지 않는다.
+  roles.senior = [seat('demo', 'senior-1', 'high')];
+  roles.watch = {runner: 'demo'};
+  fallback.watch = [null];
+  fallback.super = 'unused';
+  fallback.conductor = null;
+  const result = createDashboardPresetsReader(makeHome(settings))(urlOf());
+  assert.equal('settingsError' in result, false, result.settingsError);
+  const [first] = result.settings.presets;
+  assert.equal(first.roles.conductor, null);
+  assert.equal(first.roles.reviewer, null);
+  assert.deepEqual(Object.keys(first.fallback), ['worker-hard', 'reviewer']);
+});
+
+test('모델이 빠진 설정은 HTTP에서도 200과 설정 오류이고 불완전한 객체를 싣지 않는다', async () => {
+  const settings = baseSettings();
+  delete settings.presets.B.roles.worker.model;
+  const app = await serve(makeHome(settings));
+  try {
+    const response = await app.call(pathOf());
+    assert.equal(response.status, 200);
+    const body = JSON.parse(response.text);
+    assert.equal(body.settings, null);
+    assert.ok(body.settingsError);
+    assert.deepEqual(body.sessions, []);
+  } finally { app.close(); }
+});
+
 test('kadan wall과 같은 읽기 연결은 화면 수집·업무 전체 읽기 없이 답하고 304를 준다', async t => {
   const home = makeHome();
   makeWork(home, 'work-a', 'writer', {preset: 'B'});

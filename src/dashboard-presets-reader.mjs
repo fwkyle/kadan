@@ -20,17 +20,30 @@ export function roleOfSession(session) {
 }
 
 // 설정 값은 통째로 펼치지 않고 보일 칸만 고른다(실행 명령 틀은 싣지 않는다).
-const pick = value => value
-  ? {runner: value.runner, model: value.model, effort: value.effort} : null;
+// 응답의 필수 칸(runner·model)이 없는 값은 내보내지 않고 설정 손상으로 알린다. 오류에는 위치만 적는다.
+function pick(value, where) {
+  const {runner, model, effort} = value ?? {};
+  if (![runner, model].every(text => typeof text === 'string' && text.trim())) {
+    throw new Error(`실행 모델 설정 손상: ${where}에 runner·model 글자가 필요합니다`);
+  }
+  return {runner, model, effort};
+}
 
 function presetView(name, preset, activePreset) {
+  // 역할 자리만 비어 있을 수 있다(없음·null). 대체 후보 목록 안의 값은 모두 채워져 있어야 한다.
+  const roles = Object.fromEntries(SLOTS.map(slot => {
+    const value = preset.roles?.[slot] ?? null;
+    return [slot, value === null ? null : pick(value, `프리셋 ${name}의 ${slot} 자리`)];
+  }));
   const fallback = {};
   for (const slot of SLOTS) {
     const list = preset.fallback?.[slot];
-    if (list?.length) fallback[slot] = list.map(pick);
+    if (list?.length) {
+      fallback[slot] = list.map((item, index) =>
+        pick(item, `프리셋 ${name}의 ${slot} 대체 후보 ${index + 1}번`));
+    }
   }
-  return {name, label: preset.label ?? name, active: name === activePreset,
-    roles: Object.fromEntries(SLOTS.map(slot => [slot, pick(preset.roles?.[slot])])), fallback};
+  return {name, label: preset.label ?? name, active: name === activePreset, roles, fallback};
 }
 
 // names는 지금 설정의 프리셋 이름이다. 설정 파일이 없으면 빈 집합, 못 읽었으면 null(모름).

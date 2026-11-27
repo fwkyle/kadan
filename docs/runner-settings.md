@@ -442,6 +442,7 @@ curl 'http://127.0.0.1:8790/api/dashboard/presets?session=kadan-<역할>&session
 - **요청**: `session`은 여러 번 줄 수 있고 최대 64개다(중복을 합치기 전 개수. 넘으면 400). 안 주면 `sessions`는 빈 배열이다.
 - **`settings`**: `revision`, `activePreset`, `compare`(`enabled`·`presets`. 비교 설정이 없으면 꺼짐·빈 목록), `presets`(설정 순서 그대로)다. 설정 파일이 없으면 `null`, 읽지 못하면 `null`과 한 줄짜리 `settingsError`다(둘 다 200).
 - **`presets[]`**: `name`, `label`(없으면 이름), `active`, `roles`, `fallback`. `roles`는 `conductor`·`worker`·`worker-hard`·`reviewer` 네 자리이고 빈 자리는 `null`이다. `fallback`은 네 자리 중 후보가 있는 자리만 담는다. 자리 값은 `runner`·`model`·`effort`뿐이며, `effort`는 설정에 없으면 생략하고 `null`이면 `null`이다.
+- **역할 값 필수 칸 빠짐도 `settingsError`**: 네 자리의 채운 값이나 그 대체 후보에 `runner`·`model` 글자가 없으면(빈 글자 포함) `settings`는 `null`이고, `settingsError`는 프리셋·자리(대체 후보는 번호까지)를 알린다.
 - **`sessions[]`**: 준 순서대로 한 칸씩이며 같은 값은 한 번만 나온다. `kadan-<역할>` 규칙에 맞지 않는 이름은 그 칸만 `role: null`·`works: []`·`error: "세션 이름 규칙 밖"`이다.
 - **`works[]`**: 그 역할이 지금 책임자(역할 인계 반영)인 `open`·`hold` 업무를 업무 키 순으로 모두 준다. 칸은 `key`, `title`, `status`, `preset`(지정이 없으면 `null`), `presetSource`, `presetMissing`이다. 세션이 살아 있는지는 확인하지 않는다.
 - **`presetSource`**: `explicit`(업무에 `preset`이 있고 `presetAuto` 표시가 없음) · `auto`(`preset`이 있고 `presetAuto: true`) · `default`(`preset` 없음, 기본을 따름. 비교 모드인지는 `settings.compare.enabled`로 본다).
