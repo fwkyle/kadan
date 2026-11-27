@@ -14,7 +14,7 @@ import {withStopHook} from './stop-hook-settings.mjs';
 import {assertExecBound} from './exec-agent.mjs';
 import {RUNNER_CANDIDATES} from './quickstart.mjs';
 import {openWorksUsingPresets} from './work-heads.mjs';
-import {storageMode, transaction} from './storage.mjs';
+import {transaction} from './storage.mjs';
 import {
   NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
 } from './runner-table.mjs';
@@ -395,10 +395,13 @@ function assertNoOpenWorkUses(home, gone) {
 //   업무 쪽이 먼저 → 여기서 그 업무를 보고 거절한다.  여기가 먼저 → 업무 쪽은 바뀐 설정을 읽는다(새 이름에 고정되거나 "없는 프리셋" 거절).
 // 잠금 순서는 언제나 설정 폴더 잠금 → 업무 저장소다(pickCompareLaunch도 같다). 업무 쪽은 설정 폴더 잠금을 쥐지 않는다:
 // 멈춘 설정 잠금이 업무 생성을 막는 새 실패를 만들지 않으려는 것이다.
-// 이름이 사라지지 않는 변경은 저장소를 열지 않는다. 저장소가 없는 홈(storageMode 'none')은 업무가 없으므로 그대로 쓴다.
+// 이름이 사라지지 않는 변경은 저장소를 열지 않는다.
+// 저장소가 아직 없는 홈에서도 이름이 사라지는 변경은 같은 트랜잭션을 연다(그 순간 저장소가 만들어진다). 건너뛰면 다른 프로세스의
+// 첫 업무 생성이 확인과 쓰기 사이에 끼어 사라질 이름을 적는다. 저장소 첫 생성은 여럿이 동시에 해도 SQLite 잠금에서 줄을 서고
+// (storage.mjs initDatabase), 설정 변경 바로 뒤의 원장 기록이 어차피 저장소를 만들므로 조금 먼저 만들 뿐이다.
 function writeKeepingOpenWorkPresets(home, current, next) {
   const gone = Object.keys(current.presets).filter(name => !Object.hasOwn(next.presets, name));
-  if (!gone.length || storageMode(home) === 'none') return write(home, next);
+  if (!gone.length) return write(home, next);
   return transaction(home, () => { assertNoOpenWorkUses(home, gone); write(home, next); });
 }
 
