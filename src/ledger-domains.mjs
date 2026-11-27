@@ -146,7 +146,7 @@ const explicitTaskKey = value => value.executionKey || (value.taskId?.includes('
 // 완료마다 전체 감시·우편 이력을 다시 훑지 않는다. 같은 짧은 ID의 다른 정식 주소도 함께
 // 보존해야 별칭 충돌을 판정할 수 있다. 인계는 다른 카드의 사건도 보존한다(중복 인계 ID).
 // 조회마다 새로 만들고 완료 이전 행만 넘기므로 미래 주소나 인계가 과거 판정을 바꾸지 않는다.
-function createCompletionIndex() {
+export function createCompletionIndex() {
   const positions=new Map(),tasks=new Map(),transfers=[],doneByMail=new Map();
   let count=0;
   return {positions,doneByMail,add(entry){
@@ -170,7 +170,7 @@ function completionHistory(history) {
   history.forEach(entry=>index.add(entry));
   return index;
 }
-function completionRequest(done,history) {
+export function completionRequest(done,history) {
   // 우편 책임과 달리 작업은 확정 인계의 taskIds에 적힌 실행만 옮긴다.
   // 원장 안의 정식 주소로 같은 taskIdentity 별칭 규칙을 적용하며 모호하면 통지하지 않는다.
   const keys=new Set([done,...history].flatMap(row=>[

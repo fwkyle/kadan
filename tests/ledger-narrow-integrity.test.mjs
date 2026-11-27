@@ -36,10 +36,17 @@ const READERS = [
 const HANDOVER_SKIPS = /완료 우편|완료 사건/;
 
 // 고정 원장: 세대·인계·발령 짝·읽지 않는 감시 줄·넣은 알림을 담고, 마지막 두 줄이 done과 자동 결과 우편이다.
+// 과거 원문 영역(순번 없음)에는 발령과 확정 인계를 두고, 새 영역에서 그 후임이 완료한다(완료 우편의 원발령이 과거 원문에 걸린다).
+const LEGACY = 'ledger.jsonl';
 function fixtureRows() {
   const home = freshHome();
+  const old = '2026-08-01T00:00:00.000Z';
+  appendStream(home, LEGACY, {t: old, kind: 'start', role: 'w1', session: 'kadan-w1', panePid: 1});
+  appendStream(home, LEGACY, {t: old, kind: 'send', role: 'w1', by: 'a', taskId: 'L1', expectReply: true, mailId: 'legacy-question', digest: 'lq', bytes: 1});
+  appendStream(home, LEGACY, {t: old, kind: 'handover', phase: 'transferred', handoverId: 'hl', from: 'w1', to: 'w2', by: 'w1', taskIds: ['L1']});
   const start = (role, extra = {}) => appendLedger({kind: 'start', role, session: `kadan-${role}`, panePid: 11, ...extra}, home);
   start('a'); start('b');
+  appendLedger({kind: 'done', role: 'w2', taskId: 'L1', result: 'ok', by: 'a'}, home);
   appendLedger({kind: 'watch-cycle', by: 'watch', cycle: 1, timing: {steps: [{name: 'x', ms: 1}]}}, home);
   appendLedger({kind: 'send', role: 'w', by: 'a', taskId: 'r/t1', executionKey: 'r/t1', digest: 'dd', bytes: 3}, home);
   const asked = new Mailbox(home, 'b').send({by: 'a', message: '질문?', expectReply: true});
@@ -55,26 +62,27 @@ function fixtureRows() {
   appendLedger({kind: 'done', role: 'w', taskId: 'r/t1', executionKey: 'r/t1', result: 'ok', by: 'a'}, home);
   const rows = STREAMS.flatMap(stream => readStream(home, stream, {optional: true}).map(value => ({stream, value})))
     .sort((x, y) => x.value._ledgerOrder - y.value._ledgerOrder || STREAMS.indexOf(x.stream) - STREAMS.indexOf(y.stream));
-  return rows;
+  return [...readStream(home, LEGACY).map(value => ({stream: LEGACY, value})), ...rows];
 }
 function build(rows) {
   const home = freshHome();
   for (const {stream, value} of rows) appendStream(home, stream, value);
   return home;
 }
-const label = row => `${row.stream.split('/')[0]}:${row.value.kind}#${row.value._ledgerOrder}`;
+const label = row => row.stream === LEGACY ? `과거 원문:${row.value.kind}` : `${row.stream.split('/')[0]}:${row.value.kind}#${row.value._ledgerOrder}`;
 
+// 빼기는 과거 원문 줄까지 전부, 순번 겹치기·맞바꾸기는 순번이 있는 새 영역 줄끼리 만든다.
 function variants(rows) {
   const out = [];
   rows.forEach((row, i) => out.push({name: `빼기 ${label(row)}`, rows: rows.filter((_, k) => k !== i)}));
   rows.forEach((row, i) => rows.forEach((other, j) => {
-    if (i === j || row.value._ledgerOrder === other.value._ledgerOrder) return;
+    if (i === j || row.stream === LEGACY || other.stream === LEGACY || row.value._ledgerOrder === other.value._ledgerOrder) return;
     out.push({name: `겹치기 ${label(row)} → ${other.value._ledgerOrder}`,
       rows: rows.map((r, k) => k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: other.value._ledgerOrder}} : r)});
   }));
   for (let i = 0; i + 1 < rows.length; i++) {
     const a = rows[i], b = rows[i + 1];
-    if (a.value._ledgerOrder === b.value._ledgerOrder) continue;
+    if (a.stream === LEGACY || b.stream === LEGACY || a.value._ledgerOrder === b.value._ledgerOrder) continue;
     out.push({name: `맞바꾸기 ${label(a)} ↔ ${label(b)}`, rows: rows.map((r, k) =>
       k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: b.value._ledgerOrder}}
         : k === i + 1 ? {stream: r.stream, value: {...r.value, _ledgerOrder: a.value._ledgerOrder}} : r)});
@@ -90,7 +98,9 @@ test('고정 원장의 변형 전부: 전체 읽기가 거절하면 좁은 읽�
   for (const kind of ['dispatch', 'watch-cycle', 'watch-ai-request', 'plan', 'alert', 'mail-read', 'watch-mail-reminder']) {
     assert.ok(rows.some(row => row.value.kind === kind), kind);
   }
-  assert.deepEqual(rows.filter(row => row.value.kind === 'handover').map(row => row.value.phase), ['requested', 'transferred']);
+  assert.deepEqual(rows.filter(row => row.value.kind === 'handover').map(row => `${row.stream === LEGACY ? '과거 ' : ''}${row.value.phase}`),
+    ['과거 transferred', 'requested', 'transferred']);
+  assert.equal(rows.filter(row => row.value.systemGenerated === 'task-completion').length, 2, '자동 결과 우편 둘(하나는 원발령이 과거 원문)');
   // 대조군: 고치지 않은 원장은 모두 받고 결과가 같다.
   const control = build(rows);
   for (const [name, narrow, full] of READERS) assert.deepEqual(narrow(control), full(control), `대조군 ${name}`);
@@ -117,8 +127,8 @@ test('고정 원장의 변형 전부: 전체 읽기가 거절하면 좁은 읽�
     fs.rmSync(home, {recursive: true, force: true});
   }
   // 헛통과 방지: 변형이 실제로 만들어졌고 전체 읽기가 거절한 경우가 충분히 있다.
-  assert.ok(all.length > 300, `변형 수 ${all.length}`);
-  assert.ok(counts.rejected > 600, `전체 읽기가 거절한 경우 ${counts.rejected}`);
+  assert.equal(all.length, rows.length + 340 + 17, '변형 수: 빼기(줄 수) + 겹치기 340 + 맞바꾸기 17');
+  assert.ok(counts.rejected > 900, `전체 읽기가 거절한 경우 ${counts.rejected}`);
   assert.deepEqual(escapes, [], `전체 읽기는 거절하는데 좁은 읽기가 받은 변형 ${escapes.length}건`);
   assert.deepEqual(differs, [], `거절 문구가 다르거나 좁은 읽기만 거절한 변형 ${differs.length}건`);
   // 일부러 남긴 차이는 인계 읽기의 완료 우편 연결뿐이고, 실제로 그 경우가 변형에 들어 있다.
@@ -196,6 +206,37 @@ test('읽고 투영에서 빠지는 줄과 순번이 겹친 원장: 읽음을 �
   const expected = message(() => readMailboxLedger(home));
   assert.equal(expected, '도메인 원장 순번 중복');
   const observed = attempt(home, () => new Mailbox(home, 'fixture-worker').acknowledge(QUESTION, 'fixture-worker'));
+  assert.equal(observed.error, expected);
+  assert.equal(observed.appended, 0);
+});
+
+test('과거 원문의 확정 인계가 빠진 원장(순번 빠짐이 없다): 후임의 완료로 답이 온 질문의 취소를 막고 새 줄 0건', () => {
+  const id = '00000000-0000-4000-8000-000000000222';
+  const question = {t: T, kind: 'send', role: 'fixture-w1', by: 'fixture-owner', taskId: 'fixture-T', expectReply: true, mailId: id,
+    digest: 'fixture-body', bytes: 10};
+  const handover = {t: T, kind: 'handover', phase: 'transferred', handoverId: 'fixture-h', from: 'fixture-w1', to: 'fixture-w2',
+    by: 'fixture-w1', taskIds: ['fixture-T']};
+  const legacyHome = rows => {
+    const home = freshHome();
+    saveMailBody('fixture-body', '격리 시험 질문', home);
+    for (const row of rows) appendStream(home, LEGACY, row);
+    return home;
+  };
+  const healthy = legacyHome([question, handover]);
+  appendLedger({kind: 'done', t: T, role: 'fixture-w2', taskId: 'fixture-T', result: 'ok'}, healthy);
+  const done = readStream(healthy, 'tasks/events.jsonl').at(-1), completion = readStream(healthy, MAIL).at(-1);
+  assert.equal(completion.systemGenerated, 'task-completion');
+  assert.deepEqual(readMailboxLedgerNarrow(healthy), readMailboxLedger(healthy));
+  const control = attempt(healthy, () => new Mailbox(healthy, 'fixture-owner').cancel(id, 'fixture-owner'));
+  assert.match(control.error, /이미 최종 답변/);
+  // 새 영역의 줄(순번 1·2)은 그대로 두고 과거 원문의 확정 인계만 없는 원장.
+  const broken = legacyHome([question]);
+  appendStream(broken, 'tasks/events.jsonl', done);
+  appendStream(broken, MAIL, completion);
+  const expected = message(() => readMailboxLedger(broken));
+  assert.equal(expected, '도메인 원장 완료 우편 연결 손상');
+  assert.equal(message(() => readSendLedgerNarrow(broken)), expected);
+  const observed = attempt(broken, () => new Mailbox(broken, 'fixture-owner').cancel(id, 'fixture-owner'));
   assert.equal(observed.error, expected);
   assert.equal(observed.appended, 0);
 });

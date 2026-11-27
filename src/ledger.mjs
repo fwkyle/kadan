@@ -1,6 +1,6 @@
 import {storageMode,storagePath,storageSnapshot,readStream} from './storage.mjs';
 import {appendDomainLedger,readLedgerState,projectLedger,domainProjector,ledgerStreams,validateDomainEvent,uniqueDone,legacyCorrupt,
-  taskSend,dispatchFor,SLIM_DROPPABLE} from './ledger-domains.mjs';
+  taskSend,dispatchFor,createCompletionIndex,completionRequest,SLIM_DROPPABLE} from './ledger-domains.mjs';
 import {assertTestHome} from './test-home-guard.mjs';
 import {hydrateWatchRequest} from './watch-request-context.mjs';
 export {classifyLedgerEntry} from './ledger-domains.mjs';
@@ -153,18 +153,19 @@ export function readRecoveryLedger(home = ledgerHome(), kinds = RECOVERY_KINDS) 
 // 무결성 경계: 이 읽기의 결과로 읽음·취소·우편 저장·최종 답장·차례 반환이 원장에 줄을 붙인다. 붙은 줄은 되돌릴 수 없으므로
 // 전체 읽기(validateDomainStreams)가 막는 손상은 여기서도 같은 문구로 막는다(tests/ledger-narrow-integrity.test.mjs).
 //  - 모든 줄: 줄 모양(종류·영역·순번·broken), 영역 안 순번 역전, 순번 빠짐, 순번 중복, send/dispatch 짝, 우편 ID 중복.
-//  - 우편함·전송 길 읽기: 완료 우편과 done의 연결(없는 우편·어긋난 칸·중복·done 없는 완료 우편).
+//  - 우편함·전송 길 읽기: 완료 우편과 done의 연결(없는 우편·어긋난 칸·중복·done 없는 완료 우편,
+//    완료 우편이 답하는 발령이 인계·별칭 규칙으로 다시 계산한 원발령과 같은지). 순번이 없는 과거 원문의 인계 줄이 빠진 경우가 여기서 잡힌다.
 // 일부러 남긴 차이(전체 읽기만 막는다):
-//  - 완료 우편이 답하는 발령이 인계·별칭 규칙으로 다시 계산한 원발령과 같은지(줄이 빠지거나 겹쳐서는 생기지 않는 칸 내용 불일치).
-//  - 인계 읽기(readHandoverLedger)는 우편·완료 줄을 풀지 않아 완료 우편 연결을 보지 않는다(책임자 계산은 확정 인계만 쓴다).
+//  - 인계 읽기(readHandoverLedger)는 우편·완료 줄을 풀지 않아 완료 우편 연결을 보지 않는다(책임자 계산은 확정 인계만 쓴다.
+//    같은 명령이 전송 길 읽기를 먼저 하므로 완료 우편 연결 손상은 거기서 먼저 막힌다).
 //  - 본문을 받지 않은 줄의 그 밖의 칸 내용(예: 읽지 않는 줄에 붙은 systemGenerated 표지).
 // 비용: 본문을 받지 않는 줄도 SQL이 JSON으로 풀어 순번을 꺼낸다(시간이 들고 JS 메모리는 거의 들지 않는다).
 //  2026-11-27 실측 16만 줄에 약 0.4~0.7초. 원장이 10배면 이 검사도 10배다(줄 수에 비례).
 // 원장이 10배면: 우편함 읽기의 메모리는 우편 영역 줄 수 + 작업 영역 줄 수 + start·stop 수 + 과거 원문 줄 수에 비례한다.
 // 전송 길 읽기의 메모리는 여섯 감시 종류를 뺀 줄 수에 비례한다. 둘 다 여전히 원장과 함께 자란다(증분 읽기는 후속 D2).
 const NARROW_KINDS = list => list.map(kind => `'${kind}'`).join(',');
-// 본문을 받지 않는 줄에서 꺼내는 것: [저장 순번, broken, 종류, 우편 ID]
-const NARROW_META = `json_extract(payload,'$._ledgerOrder','$.broken','$.kind','$.mailId')`;
+// 본문을 받지 않는 줄에서 꺼내는 것: [저장 순번, broken, 종류, 우편 ID, 작업 ID, 실행 주소]
+const NARROW_META = `json_extract(payload,'$._ledgerOrder','$.broken','$.kind','$.mailId','$.taskId','$.executionKey')`;
 const narrowScan = (wanted, payload = 'payload') => `SELECT CASE WHEN ${wanted} THEN ${payload} END AS payload,`
   + ` CASE WHEN ${wanted} THEN NULL ELSE ${NARROW_META} END AS meta FROM events WHERE stream=? ORDER BY seq`;
 const NARROW_ALL = narrowScan('1');
@@ -204,7 +205,8 @@ function readNarrow(home, domain, plan) {
       if (plan.links) mails.set(row.mailId, {order: undefined, entry: row});
     }
     // 줄마다 순번과 꼴만 납작한 배열에 남긴다(줄 수만큼의 숫자). pairs는 발령 짝 대조용 지문이다.
-    const orders = [], shapes = [], pairs = new Map(), dones = [], completions = [];
+    // taskRows: 작업 주소가 적힌 줄과 인계 줄(완료 우편의 원발령을 다시 계산하는 데 쓰는 줄만).
+    const orders = [], shapes = [], pairs = new Map(), dones = [], completions = [], taskRows = [];
     for (const [stream, sql] of plan.scans) {
       let previous = 0;
       for (const row of db.prepare(sql).iterate(stream)) {
@@ -213,8 +215,9 @@ function readNarrow(home, domain, plan) {
         if (read) value = JSON.parse(row.payload);
         else {
           // 본문을 받지 않은 줄: 검증이 보는 칸만으로 같은 모양 검사를 받는다.
-          const [order, broken, kind, mailId] = JSON.parse(row.meta);
-          value = {kind, _ledgerOrder: order, ...(broken == null ? {} : {broken}), ...(mailId == null ? {} : {mailId})};
+          const [order, broken, kind, mailId, taskId, executionKey] = JSON.parse(row.meta);
+          value = {kind, _ledgerOrder: order, ...(broken == null ? {} : {broken}), ...(mailId == null ? {} : {mailId}),
+            ...(taskId == null ? {} : {taskId}), ...(executionKey == null ? {} : {executionKey})};
         }
         validateDomainEvent(stream, value);
         const order = value._ledgerOrder, at = orders.length;
@@ -229,23 +232,29 @@ function readNarrow(home, domain, plan) {
         shapes.push(value.kind === 'dispatch' ? SHAPE_DISPATCH : value.kind !== 'send' ? SHAPE_OTHER : task ? SHAPE_TASK_SEND : SHAPE_MAIL);
         if (task) pairs.set(at, JSON.stringify(dispatchFor(value)));
         else if (value.kind === 'dispatch') pairs.set(at, JSON.stringify(dispatchFor({...value, kind: 'send'})));
-        if (!read) continue;
-        if (plan.links) {
-          if (value.kind === 'done' && value.completionMailId) {
-            dones.push({order, role: value.role, taskId: value.taskId, result: value.result, completionMailId: value.completionMailId});
-          }
-          if (value.systemGenerated === 'task-completion') completions.push({kind: value.kind, mailId: value.mailId});
-        }
         // 줄마다 바로 투영해 해석한 원본을 쥐고 있지 않는다(정점 메모리).
-        for (const entry of project.rows([value])) {
+        let projected = null;
+        if (read) for (const entry of project.rows([value])) {
           const item = {order, at, entry};
           kept.push(item);
+          projected = entry;
           if (plan.links && value.kind === 'send') mails.set(value.mailId, item);
         }
+        if (!plan.links) continue;
+        // 원발령 재계산에 쓰는 줄: 결과에 남는 줄은 그 객체를(우편은 mails와 같은 객체여야 한다), 아니면 주소 칸만 남긴다.
+        if (value.taskId != null || value.kind === 'handover' || value.kind === 'done') {
+          const ref = projected ?? {kind: value.kind, role: value.role, taskId: value.taskId,
+            ...(value.executionKey == null ? {} : {executionKey: value.executionKey})};
+          taskRows.push({order, at, ref});
+          if (read && value.kind === 'done' && value.completionMailId) {
+            dones.push({order, ref, role: value.role, taskId: value.taskId, result: value.result, completionMailId: value.completionMailId});
+          }
+        }
+        if (read && value.systemGenerated === 'task-completion') completions.push({kind: value.kind, mailId: value.mailId});
       }
     }
     assertNarrowOrders(orders, shapes, pairs);
-    if (plan.links) assertNarrowCompletions(dones, completions, mails);
+    if (plan.links) assertNarrowCompletions(dones, completions, mails, legacy, taskRows);
     kept.sort((a, b) => a.order - b.order || a.at - b.at);
     return uniqueDone([...project.legacy(legacy), ...kept.map(item => item.entry)]);
   });
@@ -274,16 +283,20 @@ function assertNarrowOrders(orders, shapes, pairs) {
     } else if (group.length !== 1) throw new Error('도메인 원장 순번 중복');
   }
 }
-// 완료 우편과 done의 연결. 전체 읽기의 같은 검사에서 "답하는 발령이 다시 계산한 원발령과 같은지"만 뺀 것이다
-// (그 계산은 작업 주소가 적힌 모든 줄의 색인이 필요하다. src/ledger-domains.mjs createDomainValidator 참고).
-function assertNarrowCompletions(dones, completions, mails) {
+// 완료 우편과 done의 연결. 전체 읽기(src/ledger-domains.mjs createDomainValidator)와 같은 조건이다.
+// 원발령 재계산은 같은 함수(createCompletionIndex·completionRequest)에 과거 원문 전부와 작업 주소가 적힌 줄을 저장 순서로 넣어 한다.
+function assertNarrowCompletions(dones, completions, mails, legacy, taskRows) {
+  const lookup = createCompletionIndex();
+  for (const row of legacy) lookup.add(row);
+  for (const row of taskRows.sort((a, b) => a.order - b.order || a.at - b.at)) lookup.add(row.ref);
   const linked = new Set();
   for (const done of dones) {
     const found = mails.get(done.completionMailId), mail = found?.entry, request = mail && mails.get(mail.replyTo)?.entry;
     if (!mail || mail.systemGenerated !== 'task-completion' || !mail.completion || !mail.replyFinal || mail.transport !== 'mailbox'
       || Object.hasOwn(mail, 'taskId') || found.order !== done.order + 1 || mail.by !== done.role
       || mail.completionTaskId !== done.taskId || mail.result !== done.result
-      || !request || request.by !== mail.role || !request.by || request.by === '모름') throw new Error('도메인 원장 완료 우편 연결 손상');
+      || !request || request !== completionRequest(done.ref, lookup.before(done.ref))
+      || request.by !== mail.role || !request.by || request.by === '모름') throw new Error('도메인 원장 완료 우편 연결 손상');
     if (linked.has(mail.mailId)) throw new Error('도메인 원장 완료 우편 중복');
     linked.add(mail.mailId);
   }
