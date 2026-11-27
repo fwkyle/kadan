@@ -153,17 +153,19 @@ test('업무 프리셋: create/update/list/show 저장·변경·비우기 및 �
   const ctx = {home, by: 'boss'};
   const base = {title: '업무', goal: '목표', scope: '범위', acceptance: '조건', owner: 'boss', 'repo-path': repo, board: '판'};
 
-  // 미지정 업무는 preset 키가 생기지 않는다(기존 호환).
+  // 프리셋을 안 준 업무는 그때의 기본(활성) 프리셋이 자동으로 고정된다(tests/work-preset-pin.test.mjs가 자세히 본다).
   const plain = workCommand(['create', 'repo-a/w-plain'], base, ctx);
-  assert.equal('preset' in plain, false);
+  assert.equal(plain.preset, 'B');
+  assert.equal(plain.presetAuto, true);
 
   // 지정 업무는 preset이 저장되고 show·list에 보인다.
   const neon = workCommand(['create', 'repo-a/w-neon'], {...base, preset: 'neon-루프'}, ctx);
   assert.equal(neon.preset, 'neon-루프');
+  assert.equal('presetAuto' in neon, false);
   assert.equal(workCommand(['show', 'repo-a/w-neon'], {}, ctx).preset, 'neon-루프');
   const listed = workCommand(['list'], {}, ctx);
   assert.equal(listed.find(w => w.key === 'repo-a/w-neon').preset, 'neon-루프');
-  assert.equal('preset' in listed.find(w => w.key === 'repo-a/w-plain'), false);
+  assert.equal(listed.find(w => w.key === 'repo-a/w-plain').presetAuto, true);
 
   // update로 변경 및 ""로 비우기.
   const changed = workCommand(['update', 'repo-a/w-neon'], {revision: '1', preset: 'B', note: '변경'}, ctx);
@@ -224,8 +226,11 @@ test('실물 CLI+격리 tmux: neon-루프 업무의 감독·작업자·어려움
       '--scope', '범위', '--acceptance', '조건', '--owner', 'wp-cond', '--board', 'wp', '--repo-path', f.repo,
       '--preset', 'neon-루프').stdout);
     assert.equal(neonWork.preset, 'neon-루프');
-    const defaultWork = JSON.parse(r.ok('work', 'create', 'repo-p/w-default', '--title', '기본 업무', '--goal', '목표',
-      '--scope', '범위', '--acceptance', '조건', '--owner', 'wp-cond', '--board', 'wp', '--repo-path', f.repo).stdout);
+    // 프리셋 없는 옛 업무(자동 고정 전에 만든 업무)를 만든다: 만든 뒤 프리셋을 비우면 지금처럼 활성 프리셋을 따른다.
+    r.ok('work', 'create', 'repo-p/w-default', '--title', '기본 업무', '--goal', '목표',
+      '--scope', '범위', '--acceptance', '조건', '--owner', 'wp-cond', '--board', 'wp', '--repo-path', f.repo);
+    const defaultWork = JSON.parse(r.ok('work', 'update', 'repo-p/w-default', '--revision', '1', '--preset', '',
+      '--note', '프리셋 없는 옛 업무 재현').stdout);
     assert.equal('preset' in defaultWork, false);
 
     // (2) 감독·작업자·어려움 작업자·검수자(--for 상속) 띄우기
@@ -391,8 +396,12 @@ test('실물 CLI+격리 tmux: neon-루프 업무의 감독·작업자·어려움
       assert.equal(startsOf(f.home, role).length, 0, role);
     }
 
-    // (8) 지정 후 프리셋 삭제 시 start --work와 발령 검사 모두 실패 닫힘
-    removePreset(f.home, {name: 'neon-루프', revision: readSettings(f.home).revision, by: 'test', reason: '삭제 시험', record: () => {}});
+    // (8) 열린 업무가 쓰는 프리셋은 지울 수 없다. 설정 파일을 손으로 고쳐 이름이 사라진 경우에는 start --work와 발령 검사 모두 실패 닫힘
+    assert.throws(() => removePreset(f.home, {name: 'neon-루프', revision: readSettings(f.home).revision, by: 'test', reason: '삭제 시험', record: () => {}}),
+      /열린 업무 1건이 쓰고 있어.*repo-p\/w-neon/);
+    const edited = readSettings(f.home);
+    delete edited.presets['neon-루프'];
+    fs.writeFileSync(path.join(f.home, 'runner-settings.json'), JSON.stringify(edited, null, 2));
     const deletedStart = r.run('start', 'wp-deleted', '--hidden', '--no-prompt', '--profile', 'worker', '--work', 'repo-p/w-neon');
     assert.equal(deletedStart.status, 2);
     assert.match(deletedStart.stderr, /없는 프리셋: neon-루프/);

@@ -31,6 +31,7 @@ import { CardStore } from './card-store.mjs';
 import {statusLabel} from './status-labels.mjs';
 import {appendLedger} from './ledger.mjs';
 import {readLedgerIncremental} from './ledger-incremental.mjs';
+import {previewAfterSettingsChange,settingsBefore} from './relaunch-preview.mjs';
 import {addPreset,changedRunnerFields,editFallback,readSettings,removePreset,removeRunnerModel,renamePreset,seniorList,setActivePreset,setFallback,setFavorites,setRole,setSeniors,setRunner,setRunnerModel} from './runner-settings.mjs';
 import {listRunnerModels} from './runner-model-list.mjs';
 import {compareState, setCompare} from './runner-compare.mjs';
@@ -387,6 +388,8 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
       if (f.replace !== undefined && f.replace !== '' && f.replace !== '1') throw new Error('같은 이름 바꾸기 값이 올바르지 않다');
       return importPreset(home, {data: parseExportText(text, MAX_UPLOAD_BYTES), as: f.as?.trim() || undefined, replace: f.replace === '1', ...meta});
     };
+    // 저장 뒤 "다시 띄워야 할 살아 있는 작업자·검수자"를 응답 데이터에 싣는다(CLI와 같은 계산, 화면 표시는 아직 없다).
+    const settingsWas = settingsBefore(home);
     const next = url.pathname === '/runners/preset-save' ? presetSave()
       : url.pathname === '/runners/preset-add' ? addPreset(home, {name: f.preset, from: f.from || undefined, ...meta})
       : url.pathname === '/runners/preset-rename' ? renamePreset(home, {from: f.from, to: f.preset, ...meta})
@@ -403,8 +406,10 @@ export function createCenterHandler(home, {notify,startSecretary=startSecretaryD
       : url.pathname === '/runners/model-remove'
         ? removeRunnerModel(home, {runner: f.runner, model: f.model, ...meta})
         : setActivePreset(home, {preset: f.preset, ...meta});
+    const relaunch = previewAfterSettingsChange(home, settingsWas, {floor, readEntries: readLedgerIncremental});
     saved('/?runnersSaved='+next.revision+'#runner-settings',{
       revision: next.revision, warnings: next.warnings ?? [], ...(next.imported ? {imported: next.imported, next: next.next} : {}),
+      ...(relaunch ? {relaunchPreview: relaunch} : {}),
     });return true;
    }
    if(url.pathname.startsWith('/works/')){

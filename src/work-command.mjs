@@ -12,6 +12,7 @@ import {latestPassReview} from './merge-check.mjs';
 import {closeWorkRoles} from './work-role-cleanup.mjs';
 import {cardCloseLines} from './work-card-close.mjs';
 import {backfillCloseCards,backfillLines} from './work-card-backfill.mjs';
+import {relaunchPreview,relaunchLines} from './relaunch-preview.mjs';
 
 const RALLY_STEPS=new Set(['implementation','fix','review','research']);
 
@@ -163,7 +164,7 @@ function workCommandInner(args,flags,context){
  if(flags.help&&action.startsWith('auto-'))return 'kadan work auto-configure <업무키> --revision N --implementation 원본카드키 --review 검수원본키 --worker 작업자 --reviewer 검수자 [--notify 감독 --deadline 기존시한 --next-block] | auto-show <업무키> | auto-report <업무키> --execution 현재실행키 --outcome implemented|pass|changes|exception [--result-file 기존절대경로] | auto-step <업무키> | auto-run <업무키> [--interval 초]. 상세: docs/automatic-review.md';
  if(action.startsWith('auto-'))return automaticReviewCommand(args,flags,context);
  if(flags.help)return 'kadan work create <저장소/업무ID> --title 제목 --goal 결과 --scope 전체범위 --acceptance 완료조건 --owner 책임감독 --repo-path 절대경로 [--board 판] [--preset 프리셋] | list [--repo 저장소] [--status open|hold|done|cancelled | --open (끝나지 않은 업무 = open·hold, --status와 함께 쓰지 않음)] | show <키> | update <키> --revision N --note 이유 [--preset 프리셋|""] [--progress 처리수·남은항목·재개위치] [--next-action 다음행동] [--turn-owner 현재차례] [--wait-until 24시간 안의 ISO 시각|none (그 시각까지 이 업무를 감독의 할 일로 세지 않음)] | execute <키> --revision N --phase implementation|review|fix|release|research|other --round N --title 실행제목 --body-file 지시문 --note 이유 [--difficulty hard (작업자 단계 실행만)] [--assign <역할> [--dispatch "<지시>"]] | link/unlink <키> --execution 저장소/실행ID --revision N --note 이유 [--phase 단계 --round N] | mail <키> --mail 우편ID --revision N --note 이유 | complete <키> --revision N --result 결과와근거 --note 이유 [--keep-roles] | cancel <키> --revision N --result 결과와근거 --note 이유 | reopen <키> --revision N --note 이유 | backfill-close [--apply] (끝난 업무에 남은 실행 카드 소급 닫기. 업무 키를 받지 않고, --apply가 없으면 미리보기만). 실행은 별도 ID로 발령하며 업무 완료로 세지 않습니다.';
- if(action==='list'){const works=listWorks(store,flags),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions,preset})=>({key,title,owner,status,revision,...(preset?{preset}:{}),executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
+ if(action==='list'){const works=listWorks(store,flags),summaries=operationsFlowSummaries(home,works);return works.map(({key,title,owner,status,revision,executions,preset,presetAuto})=>({key,title,owner,status,revision,...(preset?{preset,...(presetAuto?{presetAuto:true}:{})}:{}),executions:executions.length,followup:(({executions,...summary})=>summary)(summaries.get(key).followup),timing:summaries.get(key).timing}));}
  if(action==='show'){const work=store.get(key);return {...work,...operationsFlowSummaries(home,[work]).get(key),latestPassReviewSha:latestPassReview(home,work)};}
  if(action==='backfill-close')return backfillClose(args,flags,context);
  if(action==='create'){
@@ -193,5 +194,17 @@ function workCommandInner(args,flags,context){
    throw error;
   }
  }
- return store.change(key,action,fields,{revision:flags.revision,by,note:flags.note});
+ const changed=store.change(key,action,fields,{revision:flags.revision,by,note:flags.note});
+ return action==='update'&&flags.preset!==undefined?withRelaunchPreview(changed,context):changed;
+}
+
+// 업무 프리셋을 바꾼 뒤, 이 업무에 붙은 살아 있는 작업자·검수자 가운데 다시 띄워야 할 것을 덧붙인다(막지 않는다).
+// 업무 기록을 쓴 뒤(트랜잭션 밖)에 계산하고, 계산이 실패해도 업무 수정 결과는 그대로다. 바닥을 받은 호출(CLI)에서만 한다.
+function withRelaunchPreview(work,{home,floor}){
+ if(!floor||(work.history.at(-2)?.preset??null)===(work.preset??null))return work;
+ let preview;
+ try{preview=relaunchPreview({home,floor,workKey:work.key});}
+ catch(error){preview={error:error.message};}
+ for(const line of relaunchLines(preview))process.stderr.write(`${line}\n`);
+ return {...work,relaunchPreview:preview};
 }

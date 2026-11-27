@@ -22,6 +22,18 @@ function validatePreset(home,value){
  if(!Object.hasOwn(settings.presets,name))throw Object.assign(new Error(`없는 프리셋: ${name}`),{exitCode:2});
  return name;
 }
+// 업무를 만들 때 프리셋을 안 주면 그 시점의 기본(활성) 프리셋 이름을 업무에 고정한다(2026-11-27 [kyle] "새 업무부터").
+// 기본 프리셋을 바꿔도 이미 만든 업무의 떠 있는 작업자·검수자는 그대로 쓰고, 새로 만드는 업무부터 새 기본을 따른다.
+// 고정하지 않는 경우(지금처럼 preset 없이 만든다): 설정 파일이 없다, 비교 모드가 켜져 있다(적으면 start --work가 비교 예약을
+// 건너뛴다), 설정을 읽지 못한다(고정 때문에 업무 생성이 새로 실패하면 안 된다), 기본 프리셋에 작업자·검수자 값이 다 있지 않다
+// (값이 빈 프리셋을 고정하면, 지금은 "역할 값 없음"으로 검사 없이 가던 발령이 지정 프리셋 규칙에 따라 거절된다).
+function activePresetToPin(home){
+ let settings;
+ try{settings=readSettings(home);}catch{return null;}
+ if(!settings||settings.compare?.enabled===true)return null;
+ const roles=settings.presets[settings.activePreset].roles;
+ return roles.worker&&roles.reviewer?settings.activePreset:null;
+}
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
 // 보류(archived)는 시작 전에 미뤄 둔 카드라 끝이 아니다(status-labels.mjs·docs/card-center.md).
@@ -68,7 +80,10 @@ export class WorkStore {
    const stream=keyStream(key);if(readStream(this.home,stream,{optional:true}).length)throw new Error('이미 있는 업무 ID');
    if(typeof repoPath!=='string'||!path.isAbsolute(repoPath)||!fs.statSync(repoPath).isDirectory())throw new Error('저장소 절대경로 필요');
    const validatedPreset=preset===undefined?undefined:validatePreset(this.home,preset);
-   const record={key,repo:key.split('/')[0],id:key.split('/')[1],repoPath,title:required(title,'업무 제목',200),goal:required(goal,'약속한 결과'),scope:required(scope,'전체 대상 범위'),acceptance:required(acceptance,'완료 조건'),owner:required(owner,'책임 감독',160),board:String(board),...(validatedPreset?{preset:validatedPreset}:{}),status:'open',executions:[],mailRefs:[],progress:'',nextAction:'',turnOwner:'',result:'',revision:1,at:new Date().toISOString(),by,note:'업무 등록',action:'create'};
+   // 자동으로 고정한 것만 presetAuto를 남긴다(사람이 --preset으로 준 것과 구분). 이 칸은 저장소가 정하고 호출자 입력으로 받지 않는다.
+   const auto=validatedPreset?null:activePresetToPin(this.home);
+   const pinned=validatedPreset?{preset:validatedPreset}:auto?{preset:auto,presetAuto:true}:{};
+   const record={key,repo:key.split('/')[0],id:key.split('/')[1],repoPath,title:required(title,'업무 제목',200),goal:required(goal,'약속한 결과'),scope:required(scope,'전체 대상 범위'),acceptance:required(acceptance,'완료 조건'),owner:required(owner,'책임 감독',160),board:String(board),...pinned,status:'open',executions:[],mailRefs:[],progress:'',nextAction:'',turnOwner:'',result:'',revision:1,at:new Date().toISOString(),by,note:'업무 등록',action:'create'};
    appendStream(this.home,stream,record);return this.get(key);
   });
  }
@@ -108,6 +123,8 @@ export class WorkStore {
      if(typeof preset!=='string')throw Object.assign(new Error('--preset에는 프리셋 이름(비우려면 "")이 필요합니다'),{exitCode:2});
      if(preset==='')delete next.preset;
      else next.preset=validatePreset(this.home,preset);
+     // 사람이 프리셋을 바꾸거나 비웠으면 더는 자동 고정이 아니다.
+     delete next.presetAuto;
     }
     if(Object.hasOwn(fields,'turnOwner')){next.turnAt=next.at;next.turnBy=by;}
     // 대기 시각(보류와 별개의 칸): 열린 업무 하나가 그 시각까지 감독의 할 일이 아니게 한다. 틀리는 방향은 조용함이라 쓸 때도 엄격하다.

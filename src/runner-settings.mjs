@@ -13,6 +13,7 @@ import {withInlineScreen} from './inline-screen.mjs';
 import {withStopHook} from './stop-hook-settings.mjs';
 import {assertExecBound} from './exec-agent.mjs';
 import {RUNNER_CANDIDATES} from './quickstart.mjs';
+import {openWorksUsingPresets} from './work-heads.mjs';
 import {
   NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
 } from './runner-table.mjs';
@@ -371,7 +372,25 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
   });
 }
 
-// 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 계열 확인 → 저장 → 원장 사건.
+// 열린 업무가 적어 둔 프리셋 이름은 사라질 수 없다(2026-11-27 [kyle] 업무 생성 때 기본 프리셋 고정).
+// 이름이 사라지면 그 업무의 다음 발령이 "없는 프리셋"으로 거절된다. 삭제·이름 변경을 따로 막지 않고 저장 공통 경로에서
+// "바뀌기 전에 있던 이름이 바뀐 뒤에 없는가"로 보므로, CLI·대시보드·가져오기 어느 길로 와도 같은 거절이 난다.
+// 이름이 사라지는 변경일 때만 업무를 읽는다(업무마다 최신 판 한 줄). 닫힌 업무(완료·취소)만 쓰면 허용한다.
+const SHOWN_WORKS = 5;
+function assertNoOpenWorkLosesPreset(home, current, next) {
+  const gone = Object.keys(current.presets).filter(name => !Object.hasOwn(next.presets, name));
+  if (!gone.length) return;
+  const users = openWorksUsingPresets(home, gone);
+  if (!users.length) return;
+  const name = users[0].preset, mine = users.filter(work => work.preset === name);
+  const keys = mine.slice(0, SHOWN_WORKS).map(work => work.key).join(', ')
+    + (mine.length > SHOWN_WORKS ? ` 외 ${mine.length - SHOWN_WORKS}건` : '');
+  throw new Error(`프리셋 ${name}은(는) 열린 업무 ${mine.length}건이 쓰고 있어 이름을 바꾸거나 지울 수 없다 — 쓰는 업무: ${keys}`
+    + ` — 푸는 법: 업무마다 kadan work update <업무> --revision N --preset <다른 이름> --note <이유>로 바꾸거나(비우려면 --preset "")`
+    + ` 업무를 마감한 뒤 다시 한다`);
+}
+
+// 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 열린 업무 참조 확인 → 계열 확인 → 저장 → 원장 사건.
 export function change(home, {revision, by, reason, record, action}, apply) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
   return lockedSettings(home, () => {
@@ -382,6 +401,7 @@ export function change(home, {revision, by, reason, record, action}, apply) {
     }
     const next = structuredClone(current);
     const detail = apply(next);
+    assertNoOpenWorkLosesPreset(home, current, next);
     assertCompareUnchanged(current, next, action, detail);
     const warnings = detail?.preset && next.presets[detail.preset]
       ? checkPresetFamilies(next.presets[detail.preset], next.families) : [];
