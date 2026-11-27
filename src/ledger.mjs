@@ -150,6 +150,7 @@ export function readRecoveryLedger(home = ledgerHome(), kinds = RECOVERY_KINDS) 
 //  - 과거 원문 영역(ledger.jsonl)은 통째로 읽는다. 종류 없는 줄·broken 줄의 판정(legacyCorrupt·.broken)이 전체 읽기와 같아야 해서다.
 //  - 고른 줄은 저장 순번(_ledgerOrder)으로 합친다. 시각으로 재정렬하지 않는다.
 //  - 시스템 영역은 본문을 받을지를 줄 앞머리의 종류로 정한다(RECOVERY_KIND).
+//  - 검사는 모두 투영 전의 원본 줄로 한다. 투영(출력용 다듬기)은 칸을 뺄 수 있어 결과에만 쓴다.
 // 무결성 경계: 이 읽기의 결과로 읽음·취소·우편 저장·최종 답장·차례 반환이 원장에 줄을 붙인다. 붙은 줄은 되돌릴 수 없으므로
 // 전체 읽기(validateDomainStreams)가 막는 손상은 여기서도 같은 문구로 막는다(tests/ledger-narrow-integrity.test.mjs).
 //  - 모든 줄: 줄 모양(종류·영역·순번·broken), 영역 안 순번 역전, 순번 빠짐, 순번 중복, send/dispatch 짝, 우편 ID 중복.

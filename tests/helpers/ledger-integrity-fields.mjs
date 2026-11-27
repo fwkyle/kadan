@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {appendLedger} from '../../src/ledger.mjs';
 import {appendStream, readStream} from '../../src/storage.mjs';
 import {Mailbox} from '../../src/mailbox.mjs';
-import {STREAMS, LEGACY, freshHome, build, label, READERS, VALIDATOR_KEYS, modelOf, compareAll} from './ledger-integrity-rig.mjs';
+import {STREAMS, LEGACY, freshHome, build, label, READERS, VALIDATOR_KEYS, modelOf, rowVariants, compareAll} from './ledger-integrity-rig.mjs';
 
 // 제품이 원장에 쓰는 사건 종류. 모은 방법: (1) 운영 원장의 새 영역 세 곳에 실제로 적힌 종류 전부(2026-11-27 조사, 37종),
 // (2) src의 `kind: '…'` 리터럴 가운데 원장 기록 호출(appendLedger·record)에 쓰이는데 (1)에 없던 것(watch-judgment 등).
@@ -143,7 +143,9 @@ export function runFieldFamily(t, families, {part = 0, of = 1} = {}) {
   assert.equal(rows.filter(row => row.value.systemGenerated === 'task-completion').length, 3, '자동 결과 우편 셋');
   const control = build(rows);
   for (const [name, narrow, full] of READERS) assert.deepEqual(narrow(control), full(control), `대조군 ${name}`);
-  const all = fieldVariants(rows).filter(variant => families.includes(variant.family)).filter((_, index) => index % of === part);
+  // 'rows' 갈래는 칸이 아니라 줄 변형(빼기·순번 겹치기·이웃 맞바꾸기)을 이 큰 고정 원장에 돌린다.
+  const pool = families.includes('rows') ? rowVariants(rows).map(variant => ({family: 'rows', ...variant})) : fieldVariants(rows);
+  const all = pool.filter(variant => families.includes(variant.family)).filter((_, index) => index % of === part);
   const {escapes, differs, outside, counts} = compareAll(all);
   t.diagnostic(`${families.join('·')}${of > 1 ? ` ${part + 1}/${of}` : ''}: 변형 ${all.length}개(모델 안 ${counts.variants.in}, 모델 밖 ${counts.variants.out}, 과거 원문 ${counts.variants.legacy}) × 읽기 3종.`
     + ` 모델 안·과거 원문: 전체 읽기 거절 ${counts.rejected}건, 수용 ${counts.accepted}건, 인계 읽기 예외 ${counts.skipped}건·계산 중 죽음 ${counts.crashSkipped}건.`

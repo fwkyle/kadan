@@ -13,7 +13,7 @@ import {appendLedger, saveMailBody, readMailboxLedger, readSendLedger,
   readMailboxLedgerNarrow, readSendLedgerNarrow, readHandoverLedger} from '../src/ledger.mjs';
 import {appendStream, readStream} from '../src/storage.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
-import {STREAMS, LEGACY, freshHome, build, message, label, READERS, compareAll} from './helpers/ledger-integrity-rig.mjs';
+import {STREAMS, LEGACY, freshHome, build, message, READERS, rowVariants, compareAll} from './helpers/ledger-integrity-rig.mjs';
 
 const MAIL = 'mail/events.jsonl', SYSTEM = 'system/events.jsonl';
 
@@ -45,25 +45,6 @@ function fixtureRows() {
     .sort((x, y) => x.value._ledgerOrder - y.value._ledgerOrder || STREAMS.indexOf(x.stream) - STREAMS.indexOf(y.stream));
   return [...readStream(home, LEGACY).map(value => ({stream: LEGACY, value})), ...rows];
 }
-// 빼기는 과거 원문 줄까지 전부, 순번 겹치기·맞바꾸기는 순번이 있는 새 영역 줄끼리 만든다.
-function variants(rows) {
-  const out = [];
-  rows.forEach((row, i) => out.push({name: `빼기 ${label(row)}`, rows: rows.filter((_, k) => k !== i)}));
-  rows.forEach((row, i) => rows.forEach((other, j) => {
-    if (i === j || row.stream === LEGACY || other.stream === LEGACY || row.value._ledgerOrder === other.value._ledgerOrder) return;
-    out.push({name: `겹치기 ${label(row)} → ${other.value._ledgerOrder}`,
-      rows: rows.map((r, k) => k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: other.value._ledgerOrder}} : r)});
-  }));
-  for (let i = 0; i + 1 < rows.length; i++) {
-    const a = rows[i], b = rows[i + 1];
-    if (a.stream === LEGACY || b.stream === LEGACY || a.value._ledgerOrder === b.value._ledgerOrder) continue;
-    out.push({name: `맞바꾸기 ${label(a)} ↔ ${label(b)}`, rows: rows.map((r, k) =>
-      k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: b.value._ledgerOrder}}
-        : k === i + 1 ? {stream: r.stream, value: {...r.value, _ledgerOrder: a.value._ledgerOrder}} : r)});
-  }
-  return out;
-}
-
 test('고정 원장의 변형 전부: 전체 읽기가 거절하면 좁은 읽기도 거절하고, 받으면 결과가 같다', () => {
   const rows = fixtureRows();
   // 자료가 겨냥한 줄을 담았는지: 발령 짝, 마지막 두 줄이 done과 자동 결과 우편, 확정·요청 인계, 읽지 않는 감시 줄.
@@ -79,7 +60,7 @@ test('고정 원장의 변형 전부: 전체 읽기가 거절하면 좁은 읽�
   const control = build(rows);
   for (const [name, narrow, full] of READERS) assert.deepEqual(narrow(control), full(control), `대조군 ${name}`);
 
-  const all = variants(rows), {escapes, differs, counts} = compareAll(all);
+  const all = rowVariants(rows), {escapes, differs, counts} = compareAll(all);
   // 헛통과 방지: 변형이 실제로 만들어졌고 전체 읽기가 거절한 경우가 충분히 있다.
   assert.equal(all.length, rows.length + 340 + 17, '변형 수: 빼기(줄 수) + 겹치기 340 + 맞바꾸기 17');
   assert.ok(counts.rejected > 900, `전체 읽기가 거절한 경우 ${counts.rejected}`);

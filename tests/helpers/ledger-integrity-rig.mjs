@@ -66,6 +66,25 @@ export function modelOf(rows, at, mutated) {
   return 'in';
 }
 
+// 줄 변형(손상 모델 안): 줄 하나 빼기(과거 원문 줄 포함), 한 줄의 순번을 다른 줄과 겹치기(모든 줄 짝), 이웃한 두 줄의 순번 맞바꾸기.
+export function rowVariants(rows) {
+  const out = [];
+  rows.forEach((row, i) => out.push({name: `빼기 ${label(row)}`, rows: rows.filter((_, k) => k !== i), model: row.stream === LEGACY ? 'legacy' : 'in'}));
+  rows.forEach((row, i) => rows.forEach((other, j) => {
+    if (i === j || row.stream === LEGACY || other.stream === LEGACY || row.value._ledgerOrder === other.value._ledgerOrder) return;
+    out.push({name: `겹치기 ${label(row)} → ${other.value._ledgerOrder}`,
+      rows: rows.map((r, k) => k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: other.value._ledgerOrder}} : r)});
+  }));
+  for (let i = 0; i + 1 < rows.length; i++) {
+    const a = rows[i], b = rows[i + 1];
+    if (a.stream === LEGACY || b.stream === LEGACY || a.value._ledgerOrder === b.value._ledgerOrder) continue;
+    out.push({name: `맞바꾸기 ${label(a)} ↔ ${label(b)}`, rows: rows.map((r, k) =>
+      k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: b.value._ledgerOrder}}
+        : k === i + 1 ? {stream: r.stream, value: {...r.value, _ledgerOrder: a.value._ledgerOrder}} : r)});
+  }
+  return out;
+}
+
 // 변형마다 읽기 3종을 전체 읽기와 대조한다. variant.model이 'out'이면 차이를 세기만 하고, 그 밖('in'·'legacy'·없음)은 엄격하게 본다.
 // escapes = 전체는 거절하는데 좁은 읽기가 받음, differs = 문구가 다르거나 좁은 읽기만 거절.
 export function compareAll(all) {
