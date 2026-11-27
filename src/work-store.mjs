@@ -27,12 +27,21 @@ function validatePreset(home,value){
 // 고정하지 않는 경우(지금처럼 preset 없이 만든다): 설정 파일이 없다, 비교 모드가 켜져 있다(적으면 start --work가 비교 예약을
 // 건너뛴다), 설정을 읽지 못한다(고정 때문에 업무 생성이 새로 실패하면 안 된다), 기본 프리셋에 작업자·검수자 값이 다 있지 않다
 // (값이 빈 프리셋을 고정하면, 지금은 "역할 값 없음"으로 검사 없이 가던 발령이 지정 프리셋 규칙에 따라 거절된다).
-function activePresetToPin(home){
+export function activePresetToPin(home){
  let settings;
  try{settings=readSettings(home);}catch{return null;}
  if(!settings||settings.compare?.enabled===true)return null;
  const roles=settings.presets[settings.activePreset].roles;
  return roles.worker&&roles.reviewer?settings.activePreset:null;
+}
+
+// 업무가 적어 둔 프리셋이 지금 설정에 없으면 사람이 읽는 경고 한 줄, 있으면 null. 던지지 않는다.
+function missingPresetWarning(home,work){
+ if(!work.preset)return null;
+ let why=null;
+ try{const settings=readSettings(home);if(!settings)why='실행 모델 설정이 없다';else if(!Object.hasOwn(settings.presets,work.preset))why=`프리셋 ${work.preset}이(가) 없다`;}
+ catch(error){why=`실행 모델 설정을 읽을 수 없다(${error.message})`;}
+ return why&&`${why} — 이 업무의 발령은 프리셋 ${work.preset} 기준이라 거절된다. kadan work update ${work.key} --revision ${work.revision} --preset <이름|""> --note <이유>로 바꾼다`;
 }
 
 export const workPhases={implementation:'구현',review:'검수',fix:'수정',release:'배포·연결',research:'조사',other:'기타'};
@@ -92,7 +101,15 @@ export class WorkStore {
  change(key,action,fields,opts={}){
   let close=null;
   const onClosePlan=(plan,version)=>{close={plan,version};};
-  const saved=this.locked(()=>this.#change(this.get(key),action,fields,{...opts,onClosePlan}));
+  let presetWarning=null;
+  const saved=this.locked(()=>{
+   const work=this.#change(this.get(key),action,fields,{...opts,onClosePlan});
+   // 다시 연 업무의 프리셋이 그사이 지워졌을 수 있다(닫힌 업무만 쓰는 프리셋은 지울 수 있다). 닫힌 업무는 수정할 수 없어
+   // 다시 열기를 거절하면 막다른 길이므로 그대로 열고, 같은 트랜잭션 안에서 확인해 경고만 남긴다.
+   if(action==='reopen')presetWarning=missingPresetWarning(this.home,work);
+   return work;
+  });
+  if(presetWarning)return {...saved,presetWarning};
   if(!close)return saved;
   const cardClose=closeWorkCards(this.home,close.plan,{workKey:key,action,by:opts.by??'사람',version:close.version});
   return {...saved,cardClose};

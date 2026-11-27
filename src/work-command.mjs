@@ -88,6 +88,7 @@ export function workCommand(args,flags,context){
  chatDecisionsAfter(args,flags,context,revisionBefore,failure);
  if(failure)throw failure;
  for(const line of cardCloseLines(result?.cardClose))process.stderr.write(`${line}\n`);
+ if(result?.presetWarning)process.stderr.write(`경고: ${result.presetWarning}\n`);
  if(args[0]==='backfill-close'&&!flags.help)for(const line of backfillLines(result))process.stderr.write(`${line}\n`);
  return closeRolesAfterComplete(args,flags,context,result);
 }

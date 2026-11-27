@@ -14,6 +14,7 @@ import {withStopHook} from './stop-hook-settings.mjs';
 import {assertExecBound} from './exec-agent.mjs';
 import {RUNNER_CANDIDATES} from './quickstart.mjs';
 import {openWorksUsingPresets} from './work-heads.mjs';
+import {storageMode, transaction} from './storage.mjs';
 import {
   NAME_PATTERN, TABLE_KEYS, checkConversationSpec, checkExecTemplate, runnerTemplate, tailOf,
 } from './runner-table.mjs';
@@ -377,9 +378,7 @@ export function initSettings(home, {runnersFile = path.join(home, 'agent-runners
 // "바뀌기 전에 있던 이름이 바뀐 뒤에 없는가"로 보므로, CLI·대시보드·가져오기 어느 길로 와도 같은 거절이 난다.
 // 이름이 사라지는 변경일 때만 업무를 읽는다(업무마다 최신 판 한 줄). 닫힌 업무(완료·취소)만 쓰면 허용한다.
 const SHOWN_WORKS = 5;
-function assertNoOpenWorkLosesPreset(home, current, next) {
-  const gone = Object.keys(current.presets).filter(name => !Object.hasOwn(next.presets, name));
-  if (!gone.length) return;
+function assertNoOpenWorkUses(home, gone) {
   const users = openWorksUsingPresets(home, gone);
   if (!users.length) return;
   const name = users[0].preset, mine = users.filter(work => work.preset === name);
@@ -390,7 +389,20 @@ function assertNoOpenWorkLosesPreset(home, current, next) {
     + ` 업무를 마감한 뒤 다시 한다`);
 }
 
-// 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 열린 업무 참조 확인 → 계열 확인 → 저장 → 원장 사건.
+// 설정 파일을 쓴다. 프리셋 이름이 사라지는 변경(삭제·이름 변경)이면 "열린 업무 확인 + 파일 쓰기"를 업무 저장소의 쓰기
+// 트랜잭션 하나 안에서 한다. 업무 생성·업무 프리셋 수정·업무 다시 열기는 같은 저장소의 쓰기 트랜잭션 안에서 설정 파일을 읽으므로
+// (work-store.mjs), 그 둘이 이 확인과 쓰기 사이에 끼어들 수 없다: 먼저 시작한 쪽이 끝난 뒤에 다른 쪽이 본다.
+//   업무 쪽이 먼저 → 여기서 그 업무를 보고 거절한다.  여기가 먼저 → 업무 쪽은 바뀐 설정을 읽는다(새 이름에 고정되거나 "없는 프리셋" 거절).
+// 잠금 순서는 언제나 설정 폴더 잠금 → 업무 저장소다(pickCompareLaunch도 같다). 업무 쪽은 설정 폴더 잠금을 쥐지 않는다:
+// 멈춘 설정 잠금이 업무 생성을 막는 새 실패를 만들지 않으려는 것이다.
+// 이름이 사라지지 않는 변경은 저장소를 열지 않는다. 저장소가 없는 홈(storageMode 'none')은 업무가 없으므로 그대로 쓴다.
+function writeKeepingOpenWorkPresets(home, current, next) {
+  const gone = Object.keys(current.presets).filter(name => !Object.hasOwn(next.presets, name));
+  if (!gone.length || storageMode(home) === 'none') return write(home, next);
+  return transaction(home, () => { assertNoOpenWorkUses(home, gone); write(home, next); });
+}
+
+// 설정 한 곳을 고치는 공통 경로: revision 대조 → 변경 → 계열 확인 → (이름이 사라지면 열린 업무 참조 확인과 함께) 저장 → 원장 사건.
 export function change(home, {revision, by, reason, record, action}, apply) {
   if (!reason?.trim()) throw new Error('이유가 필요하다 (--reason)');
   return lockedSettings(home, () => {
@@ -401,12 +413,11 @@ export function change(home, {revision, by, reason, record, action}, apply) {
     }
     const next = structuredClone(current);
     const detail = apply(next);
-    assertNoOpenWorkLosesPreset(home, current, next);
     assertCompareUnchanged(current, next, action, detail);
     const warnings = detail?.preset && next.presets[detail.preset]
       ? checkPresetFamilies(next.presets[detail.preset], next.families) : [];
     next.revision = current.revision + 1;
-    write(home, next);
+    writeKeepingOpenWorkPresets(home, current, next);
     record({kind: 'runner-settings', action, by, reason: reason.trim(), revision: next.revision,
       ...detail, ...(warnings.length ? {warnings} : {})});
     return warnings.length ? {...next, warnings} : next;

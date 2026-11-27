@@ -5,20 +5,29 @@
 // 발령이 넘기는 것과 같은 재료(업무의 프리셋, 업무 연결 여부)를 넘기므로 여기서 "다시 띄워야 함"이면 발령도 거절된다.
 // 카드 한 장을 정하지 않고 보므로 카드 단계 대조(작업 카드를 검수자 세션에 보냄)는 여기서 보지 않는다.
 //
-// 보는 짝: (살아 있는 작업자·검수자 세션, 그 세션이 붙은 열린 업무). 붙었다는 것은 그 업무의 실행 카드에 배정됐거나
-// `start --work <업무>`로 띄운 것이다. 열린 업무가 하나도 없는 세션은 "업무 밖 카드" 기준으로 한 번 본다.
+// 보는 짝: (살아 있는 작업자·검수자 세션, 그 세션이 붙은 열린 업무). 붙었다는 것은 그 업무 실행 카드의 현재 담당이거나
+// `start --work <업무>`로 띄운 것이다. 현재 담당은 발령 확인(CardStore.checkSend)과 같은 계산(effectiveCardRole)으로 구한다:
+// 확정 인계가 있으면 카드에 적힌 선임이 아니라 넘겨받은 후임이 그 업무에 붙는다.
+// 열린 업무가 하나도 없는 세션은 "업무 밖 카드" 기준으로 한 번 본다.
 //
-// 비용(명령 한 번에 한 번, 상주 주기 경로가 아니다): 원장의 start·stop·window 사건 읽기 1번 + 업무마다 최신 판 한 줄
+// 비용(명령 한 번에 한 번, 상주 주기 경로가 아니다): 원장의 start·stop·handover 사건 읽기 1번 + 업무마다 최신 판 한 줄
 // + 열린 업무의 실행 카드마다 최신 판 한 줄 + 바닥 세션 목록 1번 + 살아 있는 작업자·검수자마다 PID 확인.
-// 업무가 10배면 읽는 업무·카드 줄이 10배다(이력 길이와는 무관). 원장이 10배면 시작·종료 사건 읽기가 10배다.
+// 업무가 10배면 읽는 업무·카드 줄이 10배다(이력 길이와는 무관). 원장이 10배면 시작·종료·인계 사건 읽기가 10배다.
+// 확정 인계가 하나라도 있으면 인계가 적은 카드 주소를 발령과 같은 규칙으로 풀려고 카드 요약 전체를 한 번 읽는다(발령마다 읽는 것과 같은 조회).
 import {readSettings} from './runner-settings.mjs';
 import {readRecoveryLedger} from './ledger.mjs';
 import {streamHeads} from './storage.mjs';
 import {readWorkHeads, isOpenWork} from './work-heads.mjs';
 import {inspectCardSendIdentity} from './ai-identity.mjs';
+import {CardStore} from './card-store.mjs';
+import {taskIdentity} from './task-identity.mjs';
+import {effectiveCardRole} from './handover-state.mjs';
+import {activePresetToPin} from './work-store.mjs';
 import {GUARDED_PROFILES, inspectDispatchRunnerGuard, resolveGuardPreset} from './dispatch-runner-guard.mjs';
 
 const WATCHED_ROLES = ['worker', 'reviewer', 'worker-hard'];
+// 미리 보기가 읽는 원장 사건: 세션 수명(start·stop)과 인계(handover). 원장 전체를 읽고 검증하지 않는다.
+const readPreviewLedger = home => readRecoveryLedger(home, ['start', 'stop', 'handover']);
 const HEADS_CHUNK = 500;
 
 // 발령 검사가 읽는 값만 뽑은 지문. 이 값이 그대로면(예: 즐겨찾기·감독 값만 바뀜) 미리 보기를 계산하지 않는다.
@@ -60,14 +69,17 @@ function liveSessions(entries, floor) {
   return live;
 }
 
-// 열린 업무의 실행 카드에 배정된 역할: 역할 → 업무 목록. 카드는 최신 판 한 줄만 읽는다.
-function assignedWorks(home, works) {
+// 열린 업무 실행 카드의 현재 담당: 역할 → 업무 목록. 카드는 최신 판 한 줄만 읽고, 담당은 발령과 같은 인계 반영 계산으로 구한다.
+function assignedWorks(home, works, entries) {
   const streamOf = key => `cards/${key}/events.jsonl`;
   const streams = [...new Set(works.flatMap(work => (work.executions ?? []).map(link => streamOf(link.key))))];
+  // 인계 기록의 카드 주소(짧은 ID 포함)는 발령과 같이 카드 요약 전체로 푼다. 확정 인계가 없으면 읽지 않는다.
+  const handedOver = entries.some(e => e?.kind === 'handover' && e.phase === 'transferred');
+  const identity = handedOver ? taskIdentity(new CardStore(home).listSummaries()) : null;
   const roles = new Map();
   for (let i = 0; i < streams.length; i += HEADS_CHUNK) {
     for (const [stream, head] of streamHeads(home, streams.slice(i, i + HEADS_CHUNK))) {
-      const role = JSON.parse(head.payload).role;
+      const role = effectiveCardRole(JSON.parse(head.payload), entries, identity);
       if (typeof role === 'string' && role.trim()) roles.set(stream, role.trim());
     }
   }
@@ -84,15 +96,16 @@ function assignedWorks(home, works) {
 }
 
 // workKey를 주면 그 업무에 붙은 세션만 본다(work update --preset).
-export function relaunchPreview({home, floor, workKey = null, readEntries = readRecoveryLedger}) {
+export function relaunchPreview({home, floor, workKey = null, readEntries = readPreviewLedger}) {
   let settings, settingsError = null;
   try { settings = readSettings(home); } catch (error) { settingsError = error; }
   const readSettingsFn = () => { if (settingsError) throw settingsError; return settings; };
   const works = readWorkHeads(home).filter(work => isOpenWork(work) && (!workKey || work.key === workKey));
   const byKey = new Map(works.map(work => [work.key, work]));
-  const assigned = assignedWorks(home, works);
+  const entries = readEntries(home);
+  const assigned = assignedWorks(home, works, entries);
   const out = {settingsRevision: settings?.revision ?? null, checked: 0, ok: 0, relaunch: [], fallbackOk: []};
-  for (const live of liveSessions(readEntries(home), floor)) {
+  for (const live of liveSessions(entries, floor)) {
     const identity = inspectCardSendIdentity({entries: live.entries, session: live.session, currentPid: live.pid});
     const profile = identity.ok ? identity.launch.roleProfile : null;
     if (!GUARDED_PROFILES.includes(profile)) continue;
@@ -132,8 +145,10 @@ export function previewAfterSettingsChange(home, before, {floor, readEntries} = 
     const after = readSettings(home);
     if (!after || dispatchBasis(before) === dispatchBasis(after)) return null;
     const preview = relaunchPreview({home, floor, ...(readEntries ? {readEntries} : {})});
-    return before.activePreset !== after.activePreset
-      ? {...preview, activeChanged: {from: before.activePreset, to: after.activePreset}} : preview;
+    if (before.activePreset === after.activePreset) return preview;
+    // pinsNewWorks: 지금부터 만드는 업무가 새 기본에 고정되는가. 업무 생성과 같은 함수로 본다(비교 모드·빈 역할 값이면 고정하지 않는다).
+    return {...preview, activeChanged: {from: before.activePreset, to: after.activePreset,
+      pinsNewWorks: activePresetToPin(home) === after.activePreset}};
   } catch (error) { return {error: error.message}; }
 }
 
@@ -148,8 +163,11 @@ export function relaunchLines(preview) {
   if (preview.error) return [`다시 띄울 세션 미리 보기 실패(저장은 끝났다): ${preview.error}`];
   const lines = [];
   if (preview.activeChanged) {
-    const {from, to} = preview.activeChanged;
-    lines.push(`기본 프리셋 ${from} → ${to}: 지금부터 만드는 업무는 ${to}에 고정된다. 이미 만든 업무는 적어 둔 프리셋 그대로다.`);
+    const {from, to, pinsNewWorks} = preview.activeChanged;
+    lines.push(pinsNewWorks
+      ? `기본 프리셋 ${from} → ${to}: 지금부터 만드는 업무는 ${to}에 고정된다. 이미 만든 업무는 적어 둔 프리셋 그대로다.`
+      : `기본 프리셋 ${from} → ${to}: 지금부터 만드는 업무는 고정되지 않는다(비교 모드가 켜져 있거나 ${to}에 작업자·검수자 값이 다 있지 않다)`
+        + ` — 프리셋 없이 만들어져 그때의 기본 프리셋·비교 모드를 따른다. 이미 만든 업무는 적어 둔 프리셋 그대로다.`);
   }
   const where = item => item.work ? `업무 ${item.work}` : '열린 업무 없음(업무 밖 카드 기준)';
   const head = item => `  ${item.role}(${item.profile} · ${item.have}) — ${where(item)} · 기준 프리셋 ${item.preset ?? '모름'}`;

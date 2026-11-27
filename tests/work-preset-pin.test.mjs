@@ -131,7 +131,7 @@ test('발령 검사와 미리 보기: 고정 업무는 기본 전환 뒤에도 �
   const switched = runnersCommand(['preset', 'C'], {revision: '1', reason: '전환'}, runnersCtx);
   assert.equal(switched.activePreset, 'C');
   const preview = switched.relaunchPreview;
-  assert.deepEqual(preview.activeChanged, {from: 'B', to: 'C'});
+  assert.deepEqual(preview.activeChanged, {from: 'B', to: 'C', pinsNewWorks: true});
   // 고정 업무의 B 세션은 그대로 쓰고, 프리셋 없는 옛 업무와 업무 밖 세션은 지금처럼 활성(C) 기준이라 다시 띄워야 한다.
   assert.deepEqual(pairs(preview.relaunch), ['ps@-', 'pw@pin/w-legacy']);
   assert.ok(preview.relaunch.every(item => item.code === 'runner-or-model' && item.preset === 'C'));
@@ -265,7 +265,7 @@ test('실물 CLI+격리 tmux: 고정 업무에 start --work·--fallback·--for�
     // 기본 프리셋 전환: CLI 결과에 미리 보기가 실리고 사람이 읽는 줄은 stderr로 나온다. 이 업무의 두 세션은 그대로 쓴다.
     const switched = r.ok('runners', 'preset', 'C', '--revision', '1', '--reason', '전환');
     const preview = JSON.parse(switched.stdout).relaunchPreview;
-    assert.deepEqual(preview.activeChanged, {from: 'B', to: 'C'});
+    assert.deepEqual(preview.activeChanged, {from: 'B', to: 'C', pinsNewWorks: true});
     assert.deepEqual(preview.relaunch, []);
     assert.equal(preview.ok, 2);
     assert.match(switched.stderr, /기본 프리셋 B → C/);
@@ -395,7 +395,7 @@ test('대시보드 길: 업무 생성도 고정하고, 프리셋 삭제·이름 
         const switched = await post('/runners/preset', {preset: 'C', revision: revision()});
         assert.equal(switched.status, 200, await switched.clone().text());
         const after = (await switched.json()).result.relaunchPreview;
-        assert.deepEqual(after.activeChanged, {from: 'B', to: 'C'});
+        assert.deepEqual(after.activeChanged, {from: 'B', to: 'C', pinsNewWorks: true});
         assert.deepEqual(after.relaunch.map(item => item.role), [role]);
 
         // 발령 검사가 읽지 않는 값(즐겨찾기)은 목록을 붙이지 않는다.
