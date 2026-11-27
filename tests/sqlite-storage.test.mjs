@@ -55,19 +55,41 @@ test('SQLite: 프로세스가 트랜잭션 도중 죽으면 상태·이력이 �
  const result=await child(`import {transaction} from './src/storage.mjs';import {CardStore} from './src/card-store.mjs';transaction(process.argv[1],()=>{new CardStore(process.argv[1]).update('r/a',{status:'hold'},{revision:1,note:'강제 중단'});process.kill(process.pid,'SIGKILL')})`,[home]);
  assert.notEqual(result.status,0);assert.equal(new CardStore(home).get('r/a').revision,1);assert.equal(verifyStorage(home).integrity,'ok');
 });
-test('SQLite: 다른 프로세스의 긴 잠금은 제한 시간 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:60000},async()=>{
+// 원장 쓰기 잠금을 두 번 기다리는지는 실제 시간이 아니라 BEGIN IMMEDIATE 시도 횟수로 본다.
+// SQLite는 요청한 잠자기의 합으로 busy_timeout을 세어, 타이머가 늦게 깨는 맥 CI에서는 한 번의 15초 대기가 30초에 닿는다.
+// DatabaseSync의 exec·prepare를 ledger를 불러오기 전에 감싼다. 끝없이 기다리는 경우는 자식 강제 종료와 시험 timeout이 막는다.
+const lockedAppend=`
+import {DatabaseSync} from 'node:sqlite';
+let attempts=0;
+for(const name of ['exec','prepare']){
+ const original=DatabaseSync.prototype[name];
+ DatabaseSync.prototype[name]=function(sql,...rest){
+  if(/BEGIN\\s+IMMEDIATE/i.test(sql))attempts++;
+  return original.call(this,sql,...rest);
+ };
+}
+const {appendLedger}=await import('./src/ledger.mjs');
+// Measure inside the child after imports, excluding process startup and module loading.
+const start=performance.now();
+try{appendLedger({kind:'blocked'},process.argv[1])}
+catch(e){
+ console.log(JSON.stringify({message:e.message,elapsedMs:performance.now()-start,attempts}));
+ process.exitCode=2;
+}
+`;
+test('SQLite: 다른 프로세스의 긴 잠금은 한 번 기다린 뒤 실패하며 새 이벤트가 생기지 않는다',{timeout:60000},async t=>{
  const home=setup(),db=openDatabase(home);db.exec('BEGIN IMMEDIATE');
  let result;
  try{
   assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout,15000);
-  // Measure inside the child after imports, excluding process startup and module loading.
-  result=await child(`import {appendLedger} from './src/ledger.mjs';const start=performance.now();try{appendLedger({kind:'blocked'},process.argv[1])}catch(e){console.log(JSON.stringify({message:e.message,elapsedMs:performance.now()-start}));process.exitCode=2}`,[home],{timeout:45000,killSignal:'SIGKILL'});
+  result=await child(lockedAppend,[home],{timeout:45000,killSignal:'SIGKILL'});
  }finally{db.exec('ROLLBACK');db.close()}
  assert.equal(result.status,2,result.stderr);
- const {message,elapsedMs}=JSON.parse(result.stdout);
+ const {message,elapsedMs,attempts}=JSON.parse(result.stdout);
+ t.diagnostic(`LOCKWAIT elapsedMs=${Math.round(elapsedMs)} attempts=${attempts}`);
  assert.match(message,/locked|busy/i);
+ assert.equal(attempts,1,`BEGIN IMMEDIATE 시도가 1번이 아님: ${attempts}번, ${elapsedMs}ms`);
  assert.ok(elapsedMs>=14000,`잠금 대기 없이 너무 빨리 실패함: ${elapsedMs}ms`);
- assert.ok(elapsedMs<30000,`잠금 작업이 제한 시간을 넘김: ${elapsedMs}ms`);
  assert.equal(readLedger(home).length,0);
 });
 test('SQLite: 전환 중 send는 실제 터미널 전송 전에 거절한다',async()=>{
