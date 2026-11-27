@@ -11,7 +11,7 @@ export const ledgerStreams = Object.freeze({tasks:'tasks/events.jsonl',mail:'mai
 const taskKinds = new Set(['plan','dispatch','done']);
 const taskFields = ['t','role','taskId','rawTaskId','executionKey','workKey','board','by'];
 const own = (value,key) => Object.hasOwn(value,key);
-const taskSend = value => value.kind === 'send' && value.taskId != null && value.transport !== 'mailbox' && !value.completion && !value.systemGenerated && !value.replyFinal;
+export const taskSend = value => value.kind === 'send' && value.taskId != null && value.transport !== 'mailbox' && !value.completion && !value.systemGenerated && !value.replyFinal;
 // 감시AI 호출 기록의 관계표(parents)·경로표(routes)는 건당 약 2만 자라 시스템 영역의 2/3를 차지한다(2026-10-16 실측).
 // 상태 판정은 쓰지 않으므로 읽기에서 뺀다. 원장 원본은 그대로이고, 필요한 곳은 readWatchRequest로 단건을 읽는다.
 // 빼도 되는 필드의 허용 목록(이 밖의 필드는 어떤 경우에도 빼지 않는다). 검증기가 읽는 필드와 겹치면 시험이 실패한다.
@@ -47,7 +47,7 @@ export function validateDomainEvent(stream,value) {
     throw new Error(`도메인 원장 dispatch 연결 손상: ${stream}`);
 }
 
-function dispatchFor(send) {
+export function dispatchFor(send) {
   // 발령 대상/작업 연결은 dispatch가 원본. 전달 내용/전송 영수증은 send가 원본이다.
   return {...Object.fromEntries(taskFields.filter(key => own(send,key)).map(key => [key,send[key]])),
     kind:'dispatch',mailId:send.mailId,dispatchId:send.mailId,_ledgerOrder:send._ledgerOrder};

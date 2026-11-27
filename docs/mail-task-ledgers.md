@@ -33,11 +33,16 @@ SQLite에서는 같은 `kadan.sqlite` 안의 스트림을 구분한다. 별도 D
 - 우편함 명령(`inbox`·`mail`·`send`)은 위 조회를 통째로 읽지 않고 **같은 결과를 내는 좁은 읽기**를 쓴다(2026-11-27).
   `readMailboxLedgerNarrow(home)`는 `readMailboxLedger`와, `readSendLedgerNarrow(home)`는 `readSendLedger`와 같은 줄·같은 순서를 낸다.
   `readHandoverLedger(home)`는 `readLedger` 결과의 인계 줄만 낸다(차례 반환의 업무 책임자 계산용).
-  SQL로 필요한 영역·종류의 줄만 골라 저장 순번(`_ledgerOrder`)으로 합치고, 과거 원문 영역은 통째로 읽는다. 시각으로 재정렬하지 않는다.
-  읽은 줄에 한해 줄 모양·영역 안 순번 역전·순번 중복·우편 ID 중복·과거 원문 손상(우편함)은 계속 막는다.
-  읽지 않은 줄의 손상, 순번 빠짐, send/dispatch 짝, 완료 우편과 `done`의 연결은 이 명령들에서 확인하지 않는다.
-  그 검증은 전체 읽기(`readLedger` 계열)·감시기 시작·`kadan storage verify`가 맡는다(복원 조회 `readRecoveryLedger`와 같은 타협).
-  두 읽기의 결과가 같은지는 `tests/ledger-narrow-read.test.mjs`가, 좁혀도 원장에 붙는 줄이 같은지는 `tests/mailbox-narrow-write.test.mjs`가 지킨다.
+  세 영역의 모든 줄을 한 번씩 훑되 판정에 쓰는 줄만 본문을 JS로 풀고, 나머지는 SQL이 저장 순번·종류만 꺼낸다.
+  고른 줄은 저장 순번(`_ledgerOrder`)으로 합치고, 과거 원문 영역은 통째로 읽는다. 시각으로 재정렬하지 않는다.
+  - **무결성 경계:** 이 읽기의 결과로 읽음·취소·우편 저장·최종 답장·차례 반환이 원장에 줄을 붙이므로, 전체 읽기가 막는 손상은 좁은 읽기도 같은 문구로 막는다.
+    본문을 풀지 않는 줄까지 포함해 모든 줄의 모양(종류·영역·순번·`broken`), 영역 안 순번 역전, 순번 빠짐, 순번 중복, send/dispatch 짝, 우편 ID 중복을 확인한다.
+    우편함·전송 길 읽기는 완료 우편과 `done`의 연결(없는 우편·어긋난 칸·중복·`done` 없는 완료 우편)도 확인한다. 과거 원문 손상은 우편함 조회가 막는다.
+  - **일부러 남긴 차이(전체 읽기만 막는다):** 완료 우편이 답하는 발령이 인계·별칭 규칙으로 다시 계산한 원발령과 같은지,
+    인계 읽기에서의 완료 우편 연결(우편·완료 줄을 풀지 않는다), 본문을 풀지 않는 줄의 그 밖의 칸 내용.
+  - 비용: 무결성 확인은 원장 줄 수에 비례하는 시간이 든다(JS 메모리는 거의 들지 않는다).
+  - 두 읽기의 결과가 같은지는 `tests/ledger-narrow-read.test.mjs`가, 손상 원장에서 같이 막히는지는 `tests/ledger-narrow-integrity.test.mjs`가,
+    정상 원장에서 붙는 줄이 같은지는 `tests/mailbox-narrow-write.test.mjs`가 지킨다.
 - 감시기의 전송(`createWatchSenders`)은 이미 보관한 감시 원문 배열을 이어 읽는다.
   경보·미확인 우편 재알림·429 재개는 시작 기록 선택과 `guardedSend` 양쪽에서,
   입력 큐 재개는 시작 기록 선택에서 호출 시점의 새 사건을 확인한다.

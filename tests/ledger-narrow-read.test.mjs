@@ -1,6 +1,7 @@
 // 우편함 명령의 좁은 읽기(readMailboxLedgerNarrow·readSendLedgerNarrow)가 전체 읽기(readMailboxLedger·readSendLedger)와
 // 같은 줄·같은 순서를 내는지 지문으로 맞춘다. 세대(같은 이름 새 대화·resume·inherit-mail)·인계·답장·중복 거르기·발령 검사를 포함한다.
-// 전체 검증을 건너뛰어 잃는 손상 감지와 남기는 손상 감지도 여기서 고정한다.
+// 손상 원장에서 전체 읽기와 같은 문구로 막히는지, 일부러 남긴 차이(인계 읽기의 완료 우편 연결)도 여기서 고정한다.
+// 줄을 빼거나 순번을 겹친 변형 전부는 tests/ledger-narrow-integrity.test.mjs가 본다.
 import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -270,7 +271,7 @@ test('빈 저장소·사건 없는 저장소: 두 읽기 모두 빈 목록', () 
 
 const message = (read, home) => { try { read(home); return null; } catch (error) { return error.message; } };
 
-test('남기는 손상 감지: 읽는 줄의 손상은 좁은 읽기도 막는다', () => {
+test('본문을 푸는 줄의 손상은 좁은 읽기도 전체 읽기와 같은 문구로 막는다', () => {
   // 과거 원문 손상: 우편함은 막고(같은 문구), 전송 길은 broken 줄을 그대로 낸다(전체 읽기와 같다).
   {
     const {home} = fixture();
@@ -317,32 +318,71 @@ test('남기는 손상 감지: 읽는 줄의 손상은 좁은 읽기도 막는�
   }
 });
 
-test('포기하는 손상 감지: 읽지 않는 줄의 손상과 순번 빠짐은 전체 읽기만 잡는다', () => {
-  // 읽지 않는 감시 줄 뒤의 순번 빠짐.
+test('읽지 않는 줄의 손상과 순번 빠짐도 전체 읽기와 같은 문구로 막는다', () => {
+  const readers = [readMailboxLedger, readSendLedger, readMailboxLedgerNarrow, readSendLedgerNarrow, readHandoverLedger];
+  const all = (home, expected) => { for (const read of readers) assert.equal(message(read, home), expected, read.name); };
+  // 본문을 풀지 않는 감시 줄 뒤의 순번 빠짐.
   {
     const {home} = fixture();
     insertRow(home, 'system/events.jsonl', {t: new Date().toISOString(), kind: 'watch-cycle', by: 'watch', _ledgerOrder: lastOrder(home) + 5});
-    assert.equal(message(readMailboxLedger, home), '도메인 원장 순번 누락');
-    assert.equal(message(readSendLedger, home), '도메인 원장 순번 누락');
-    assert.equal(message(readMailboxLedgerNarrow, home), null);
-    assert.equal(message(readSendLedgerNarrow, home), null);
+    all(home, '도메인 원장 순번 누락');
   }
-  // 읽는 줄 사이의 순번 빠짐도 영역을 다 읽지 않아 알 수 없다.
+  // 읽는 줄 사이의 순번 빠짐.
   {
     const {home} = fixture();
     insertRow(home, 'mail/events.jsonl', {t: new Date().toISOString(), kind: 'mail-read', role: 'b', mailId: 'x', by: 'b',
       _ledgerOrder: lastOrder(home) + 5});
-    assert.equal(message(readMailboxLedger, home), '도메인 원장 순번 누락');
-    assert.equal(message(readMailboxLedgerNarrow, home), null);
-    assert.equal(message(readSendLedgerNarrow, home), null);
+    all(home, '도메인 원장 순번 누락');
   }
-  // 짝 없는 dispatch(send/dispatch 연결 손상): 좁은 읽기는 dispatch 줄을 읽지 않는다.
+  // 짝 없는 dispatch(send/dispatch 연결 손상).
   {
     const {home} = fixture();
     insertRow(home, 'tasks/events.jsonl', {t: new Date().toISOString(), kind: 'dispatch', role: 'w', taskId: 'r/none', mailId: 'm-none',
       dispatchId: 'm-none', _ledgerOrder: lastOrder(home) + 1});
-    assert.equal(message(readSendLedger, home), '도메인 원장 send/dispatch 연결 손상');
-    assert.equal(message(readMailboxLedgerNarrow, home), null);
-    assert.equal(message(readSendLedgerNarrow, home), null);
+    all(home, '도메인 원장 send/dispatch 연결 손상');
+  }
+  // 본문을 풀지 않는 줄의 모양: 영역에 맞지 않는 종류, broken 표지, 순번 없음.
+  {
+    const {home} = fixture();
+    insertRow(home, 'system/events.jsonl', {t: new Date().toISOString(), kind: 'plan', board: 'p', taskId: 'x', _ledgerOrder: lastOrder(home) + 1});
+    all(home, '도메인 원장 종류 손상: system/events.jsonl');
+  }
+  {
+    const {home} = fixture();
+    insertRow(home, 'system/events.jsonl', {t: new Date().toISOString(), kind: 'watch-cycle', broken: '깨짐', _ledgerOrder: lastOrder(home) + 1});
+    all(home, '도메인 원장 종류 손상: system/events.jsonl');
+  }
+  {
+    const {home} = fixture();
+    insertRow(home, 'system/events.jsonl', {t: new Date().toISOString(), kind: 'watch-cycle', by: 'watch'});
+    all(home, '도메인 원장 순번 손상: system/events.jsonl');
+  }
+  // 본문을 풀지 않는 줄끼리의 순번 중복.
+  {
+    const {home} = fixture();
+    const order = lastOrder(home) + 1;
+    insertRow(home, 'system/events.jsonl', {t: new Date().toISOString(), kind: 'watch-cycle', by: 'watch', _ledgerOrder: order});
+    insertRow(home, 'tasks/events.jsonl', {t: new Date().toISOString(), kind: 'plan', board: 'p', taskId: 'x', _ledgerOrder: order});
+    all(home, '도메인 원장 순번 중복');
+  }
+});
+
+test('완료 우편 연결 손상: 우편함·전송 길 읽기는 전체 읽기와 같이 막고, 인계 읽기는 보지 않는다', () => {
+  const linked = [readMailboxLedger, readSendLedger, readMailboxLedgerNarrow, readSendLedgerNarrow];
+  // 완료 우편을 가리키는 done은 있는데 그 우편이 없다.
+  {
+    const {home} = fixture();
+    insertRow(home, 'tasks/events.jsonl', {t: new Date().toISOString(), kind: 'done', role: 'w', taskId: 'r/card-y', result: 'ok',
+      completionMailId: 'no-such-mail', _ledgerOrder: lastOrder(home) + 1});
+    for (const read of linked) assert.equal(message(read, home), '도메인 원장 완료 우편 연결 손상', read.name);
+    assert.equal(message(readHandoverLedger, home), null, '인계 읽기는 완료 우편 연결을 보지 않는다(일부러 남긴 차이)');
+  }
+  // done 없는 자동 결과 우편.
+  {
+    const {home} = fixture();
+    insertRow(home, 'mail/events.jsonl', {t: new Date().toISOString(), kind: 'send', mailId: 'orphan-completion', transport: 'mailbox',
+      systemGenerated: 'task-completion', completion: true, replyFinal: true, role: 'a', by: 'w', _ledgerOrder: lastOrder(home) + 1});
+    for (const read of linked) assert.equal(message(read, home), '도메인 원장 완료 사건 없는 우편', read.name);
+    assert.equal(message(readHandoverLedger, home), null);
   }
 });
