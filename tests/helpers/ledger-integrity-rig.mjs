@@ -38,6 +38,7 @@ export const READERS = [
 export const HANDOVER_SKIPS = /완료 우편|완료 사건/;
 // 같은 종류의 한 경우: 전체 읽기가 완료 우편의 원발령을 다시 계산하다가 죽는 손상(실행 주소·작업 ID가 글자가 아닌 줄).
 // 전체 읽기는 이 오류로 멈추고, 완료 우편 연결을 계산하지 않는 인계 읽기는 멈추지 않는다. 우편함·전송 길 읽기는 같은 오류로 멈춘다.
+// 칸 변형의 큰 고정 원장에서는 이 경우가 2건이다(완료 우편이 달린 done의 실행 주소·작업 ID를 글자가 아닌 값으로 바꾼 변형).
 // 두 예외 모두 "같은 명령의 준비 읽기(전송 길 좁은 읽기)가 같은 문구로 먼저 막는다"를 변형마다 단언한 뒤에만 넘어간다(compareAll).
 export const HANDOVER_SKIP_CRASH = /^address\?\.includes is not a function$/;
 
