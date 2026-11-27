@@ -128,12 +128,14 @@ const RECOVERY_KIND = (() => {
   const kindEnd = `instr(substr(payload,41,64),'"')`;
   return `CASE WHEN ${RECOVERY_HEAD} THEN substr(payload,41,${kindEnd}-1) ELSE json_extract(payload,'$.kind') END`;
 })();
-export function readRecoveryLedger(home = ledgerHome()) {
+// kinds: 읽을 사건 종류. 기본은 복원 조회의 start·stop·window다. 다시 띄울 세션 미리 보기는 start·stop·handover를 읽는다.
+const RECOVERY_KINDS = Object.freeze(['start','stop','window']);
+export function readRecoveryLedger(home = ledgerHome(), kinds = RECOVERY_KINDS) {
   if (storageMode(home) === 'none') return [];
   return storageSnapshot(home,db => {
     const read = db.prepare(`SELECT payload FROM events WHERE stream=?`
-      + ` AND ${RECOVERY_KIND} IN ('start','stop','window') ORDER BY seq`);
-    const rows = stream => read.all(stream).map(row => JSON.parse(row.payload));
+      + ` AND ${RECOVERY_KIND} IN (${kinds.map(() => '?').join(',')}) ORDER BY seq`);
+    const rows = stream => read.all(stream, ...kinds).map(row => JSON.parse(row.payload));
     const project = domainProjector('system');
     return [...project.legacy(rows('ledger.jsonl')),...project.rows(rows(ledgerStreams.system))];
   });

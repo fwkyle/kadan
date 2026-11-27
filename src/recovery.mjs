@@ -40,8 +40,10 @@ function latest(entries, session) {
   return start;
 }
 
-// Follow only the exact prior Rottie tab of this same role. Early recovery versions
+// Follow only the exact prior generation of this same role. Early recovery versions
 // omitted --effort from the new start; the original start still owns that option.
+// 원본 세대는 시작 지문(recoverySource)으로 찾는다. 탭 ID(restoredFrom)는 로티가 탭을 바꾸면 원장에 없는
+// 값일 수 있어, 지문 칸이 없는 옛 기록에서만 쓴다. 지문 칸이 있는데 그 기록이 없으면 탭 ID로 내려가지 않는다.
 function effortOf(start, entries, seen = new Set()) {
   if (seen.has(start) || seen.size >= 16) fail('추론 강도 복원 기록이 순환합니다.', REFUSED);
   seen.add(start);
@@ -60,9 +62,14 @@ function effortOf(start, entries, seen = new Set()) {
     }
   }
   if (effort) return effort;
-  if (!start.restoredFrom) return undefined;
-  const previous = entries.filter(e => e.kind === 'start' && e.session === start.session
-    && e.role === start.role && e.cwd === start.cwd && e.rottieTerminalId === start.restoredFrom);
+  // 칸이 있는지로 가른다: 빈 문자열·null도 "있는 칸"이라 탭 ID로 내려가지 않는다(맞는 지문이 없어 거절된다).
+  const hasSource = start.recoverySource !== undefined;
+  if (!hasSource && !start.restoredFrom) return undefined;
+  const sameRole = entries.filter(e => e.kind === 'start' && e.session === start.session
+    && e.role === start.role && e.cwd === start.cwd);
+  const previous = hasSource
+    ? sameRole.filter(e => digest(e) === start.recoverySource)
+    : sameRole.filter(e => e.rottieTerminalId === start.restoredFrom);
   if (previous.length !== 1) fail('추론 강도의 원본 역할 기록을 확인하지 못했습니다.', REFUSED);
   return effortOf(previous[0], entries, seen);
 }
@@ -132,6 +139,12 @@ function sharedLivePane(run = tmux) {
   };
 }
 
+// 원장이 이 탭 ID를 지금 쓰는 로티 창으로 적어 둔 세션들. 탭 ID는 역할의 신분이 아니라 참고값이다.
+function tabOwners(entries, terminalId) {
+  const sessions = [...new Set(entries.filter(e => e.rottieTerminalId === terminalId).map(e => e.session))];
+  return sessions.filter(session => currentRottieWindow(entries, session)?.rottieTerminalId === terminalId);
+}
+
 export function inspectRecovery(flags, deps = {}) {
   const home = deps.home || ledgerHome();
   const entries = deps.entries || readRecoveryLedger(home);
@@ -139,14 +152,19 @@ export function inspectRecovery(flags, deps = {}) {
   if (typeof terminalId !== 'string' || !terminalId) fail('원본 Rottie 탭 ID가 필요합니다.', INVALID);
   // 다른 카단 서버의 탭은 이 원장에 없다. 서버 경로를 먼저 대조해야 그 탭을 "교체됨"(거절)으로 답하지 않는다.
   if (flags['socket-path']) assertSocketPath(flags['socket-path']);
-  const sessions = [...new Set(entries.filter(e => e.rottieTerminalId === terminalId).map(e => e.session))];
-  const matches = sessions.filter(session => currentRottieWindow(entries, session)?.rottieTerminalId === terminalId);
-  if (matches.length !== 1) {
+  // 역할의 신분은 tmux 쪽(세션·pane PID·작업 폴더·시작 기록)이다. 원장이 이 탭을 한 세션의 현재 창으로 알면 그 세션이고,
+  // 어느 세션의 현재 창으로도 모르면(로티가 탭을 바꾸거나 다시 연 경우) 호출자가 세션과 pane PID를 함께 말했을 때만
+  // 그 세션의 최신 시작 기록과 살아 있는 pane으로 확인한다. 세션 이름만으로는 통과시키지 않는다.
+  const owners = tabOwners(entries, terminalId);
+  const named = owners.length === 0 && typeof flags.session === 'string' && flags.session && flags['pane-pid'];
+  if (owners.length !== 1) {
     // 원장 저장소가 아예 없는 홈(홈을 잘못 가리킨 호출)은 판단할 근거가 없다. 문구는 같고 종류만 unavailable이다.
     const judged = deps.entries || storageMode(home) !== 'none';
-    fail('이 탭의 현재 카단 역할을 확인하지 못했습니다. 새 역할로 교체됐을 수 있습니다.', judged ? REFUSED : undefined);
+    if (!judged || !named) {
+      fail('이 탭의 현재 카단 역할을 확인하지 못했습니다. 새 역할로 교체됐을 수 있습니다.', judged ? REFUSED : undefined);
+    }
   }
-  const session = matches[0];
+  const session = named ? flags.session : owners[0];
   const start = latest(entries, session);
   if (session !== `kadan-${start.role}` || (flags.session && flags.session !== session)) {
     fail('카단 역할 주소가 다릅니다.', REFUSED);
@@ -183,10 +201,18 @@ function validateContext(context, home, entries, command) {
   if (context.home !== server.home || context.socket !== server.socket || context.tmuxTmpdir !== server.tmuxTmpdir) {
     fail('카단 복원 저장소 또는 서버가 다릅니다.');
   }
+  if (typeof context.terminalId !== 'string' || !context.terminalId) fail('카단 복원 정보 형식이 잘못됐습니다.');
   const start = latest(entries, context.session);
   const resumed = resumedSecretaryStart(context, entries, command);
+  // 같은 세대인지는 시작 지문·역할·작업 폴더·세션으로 본다. 탭 ID는 참고값이라 원장의 현재 창과 달라도 된다.
+  // 두 가지만 탭 ID를 본다: (1) 원장이 그 탭을 다른 세션의 현재 창으로 적어 뒀으면 거절한다.
+  // (2) 자동 재개된 비서(resumed)는 시작 지문이 이미 달라 탭 대조가 남은 근거다: 재개가 새 탭을 열었으면
+  // 로티가 든 옛 탭의 복원을 받지 않는다(비서 탭이 둘이 되지 않게).
+  const elsewhere = tabOwners(entries, context.terminalId).some(session => session !== context.session);
+  const movedSecretary = resumed
+    && currentRottieWindow(entries, context.session)?.rottieTerminalId !== context.terminalId;
   if ((!resumed && digest(start) !== context.startDigest) || start.role !== context.role || start.cwd !== context.cwd
-    || currentRottieWindow(entries, context.session)?.rottieTerminalId !== context.terminalId) {
+    || elsewhere || movedSecretary) {
     fail('카단 역할이 교체되거나 연결 정보가 바뀌었습니다. 옛 역할은 복원하지 않습니다.');
   }
   const original = resumed ? entries.find(e => e.kind === 'start' && digest(e) === context.startDigest) : start;
@@ -198,6 +224,19 @@ function validateContext(context, home, entries, command) {
     fail('카단 역할의 원본 추론 강도가 다릅니다.');
   }
   return start;
+}
+
+// 요청 기록을 배타적으로 한 번만 남긴다(디스크까지 쓴다). 이미 있으면 message와 그 파일 경로로 실패한다.
+// 경로는 사실로만 붙인다. 이 문구는 비서 우편으로도 가므로 "옮기라"는 지시는 넣지 않는다(절차는 docs/recovery.md).
+function claimOnce(file, body, message) {
+  let fd;
+  try { fd = fs.openSync(file, 'wx', 0o600); }
+  catch (error) {
+    if (error.code === 'EEXIST') fail(`${message} 요청 기록: ${file}`);
+    throw error;
+  }
+  try { fs.writeFileSync(fd, JSON.stringify(body)); fs.fsyncSync(fd); }
+  finally { fs.closeSync(fd); }
 }
 
 export function restoreRecovery(flags, deps = {}) {
@@ -266,16 +305,21 @@ function restoreLocked(flags, deps) {
   const dir = path.join(home, 'recovery');
   fs.mkdirSync(dir, {recursive: true, mode: 0o700});
   const claim = path.join(dir, `${digest(context)}.json`);
-  let fd;
-  try { fd = fs.openSync(claim, 'wx', 0o600); }
-  catch (error) {
-    if (error.code === 'EEXIST') fail('이 역할 복원을 이미 요청했습니다. 새 탭을 먼저 확인하세요.');
-    throw error;
-  }
-  try { fs.writeFileSync(fd, JSON.stringify({state: 'claimed', context})); fs.fsyncSync(fd); }
-  finally { fs.closeSync(fd); }
-  // Recheck after claiming. A concurrent new-session also fails atomically on name collision.
+  const alreadyAsked = '이 역할 복원을 이미 요청했습니다. 새 탭을 먼저 확인하세요.';
+  // 살아 있는 pane을 다시 잇는 길: 복원 정보(탭 ID 포함)마다 한 번이다.
+  // 새 세션을 만드는 길: 탭별 기록은 끝난 뒤 영수증으로만 쓰고, 여기서는 이미 남아 있는지만 본다. 막는 것은 아래 세대 기록
+  // 하나라서, 실패를 확인한 사람이 그 파일 하나만 옮기면 같은 요청이 다시 돈다(막힌 요청이 파일을 더 쌓지도 않는다).
+  if (pane) claimOnce(claim, {state: 'claimed', context}, alreadyAsked);
+  else if (fs.existsSync(claim)) fail(`${alreadyAsked} 요청 기록: ${claim}`);
+  // Recheck right before acting. A concurrent new-session also fails atomically on name collision.
   validateContext(context, home, read(), command);
+  // 새 세션을 만드는 복원은 시작 세대(세션·시작 지문)마다 한 번뿐이다. 탭 ID가 신분 기준이 아니어서 같은 세대를 다른 탭 ID로
+  // 요청할 수 있으므로 키에 탭 ID를 넣지 않는다. 세션을 만들기 직전에 남긴다: 이 기록이 있으면 세션이 만들어졌을 수 있다는
+  // 뜻이고(만들기가 던져도 세션이 생긴 뒤일 수 있다), 그 뒤로는 pane이 사라져도 어느 탭의 요청으로도 다시 띄우지 않는다.
+  if (!pane) {
+    claimOnce(path.join(dir, `generation-${digest([context.session, context.startDigest])}.json`),
+      {state: 'claimed', context}, '이 역할 세대의 복원을 이미 요청했습니다. 역할과 탭을 먼저 확인하세요.');
+  }
   const evidence = pane ? {panePid: pane.pid} : (deps.create || tmuxFloor.create)({
     session: context.session, role: context.role, cwd: context.cwd, cmd: launch.launch,
   });
@@ -317,7 +361,7 @@ function restoreLocked(flags, deps) {
   (deps.record || (entry => appendLedger(entry, home)))({kind: 'window', role: context.role,
     session: context.session, panePid: evidence.panePid, rottieTerminalId: terminal.id,
     restoredFrom: context.terminalId, by: '사람'});
-  const refreshed = inspectRecovery({terminal: terminal.id, cwd: context.cwd}, {
+  const refreshed = inspectRecovery({terminal: terminal.id, session: context.session, cwd: context.cwd}, {
     ...deps, home, entries: read(),
   });
   const receipt = {role: context.role, session: context.session, terminalId: terminal.id, context: refreshed};

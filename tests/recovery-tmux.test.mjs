@@ -133,3 +133,61 @@ setInterval(() => {}, 1000);
   assert.equal(start.optionCarry, 'added');
   assert.deepEqual(start.optionCarryKeys, ['permission-mode']);
 });
+
+// 로티가 탭을 바꾸면 그 탭 ID는 원장에 없다. 실제 명령과 실제 tmux로: 세션·pane PID로 같은 역할을 알아보고,
+// 그때 받은 복원 정보로 서버가 사라진 뒤에도 같은 역할을 복원한다.
+test('real tmux: a tab the ledger never saw resolves by session and pane PID, then restores after server loss', {
+  skip: spawnSync('tmux', ['-V']).status !== 0,
+}, t => {
+  const home = ledgerHome();
+  const prior = {socket: process.env.KADAN_SOCKET, tmpdir: process.env.TMUX_TMPDIR};
+  process.env.KADAN_SOCKET = `recovery-swap-${process.pid}`;
+  process.env.TMUX_TMPDIR = home;
+  t.after(() => {
+    killServerAndWait(); // Only this test-owned named server.
+    for (const [key, value] of [['KADAN_SOCKET', prior.socket], ['TMUX_TMPDIR', prior.tmpdir]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const bin = path.join(home, 'fixture-rottie-swap');
+  fs.writeFileSync(bin, `#!/usr/bin/env node
+const args=process.argv.slice(2);
+if(args[0] !== 'terminal' || args[1] !== 'create')process.exit(2);
+console.log(JSON.stringify({ok:true,result:{terminal:{id:'terminal-'+process.pid}}}));
+`, {mode: 0o700});
+  const cwd = path.join(home, 'workspace-swap'); fs.mkdirSync(cwd);
+  const agent = path.join(home, 'swap-agent');
+  fs.writeFileSync(agent, `#!/usr/bin/env node
+setInterval(() => {}, 1000);
+`, {mode: 0o700});
+  const command = `'${agent}'`;
+  const original = tmuxFloor.create({session: 'kadan-mover', role: 'mover', cwd, cmd: command});
+  appendLedger({kind: 'start', floor: 'tmux', role: 'mover', session: 'kadan-mover', cwd, cmd: command,
+    by: 'supervisor', ...original, rottieTerminalId: 'ledger-tab'});
+  const cli = (args, input) => JSON.parse(spawnSync(process.execPath,
+    [path.resolve(import.meta.dirname, '../src/cli.mjs'), 'recovery', 'inspect', ...args],
+    {encoding: 'utf8', env: process.env, input, timeout: 20000}).stdout);
+  const named = ['--terminal', 'swapped-tab', '--session', 'kadan-mover', '--pane-pid', String(original.panePid)];
+  const moved = cli(named);
+  assert.equal(moved.ok, true, JSON.stringify(moved));
+  assert.deepEqual([moved.result.role, moved.result.terminalId, moved.result.cwd], ['mover', 'swapped-tab', cwd]);
+  assert.match(moved.result.sessionCreated, /^\d+$/);
+  assert.equal(moved.result.startDigest, cli(['--terminal', 'ledger-tab']).result.startDigest);
+  assert.equal(cli(['--terminal', 'swapped-tab']).error.kind, 'refused');
+  assert.equal(cli(['--terminal', 'swapped-tab', '--session', 'kadan-mover', '--pane-pid', '1']).error.kind, 'refused');
+  const batched = cli(['--batch'], JSON.stringify({schemaVersion: 1, items: [
+    {terminal: 'swapped-tab', session: 'kadan-mover', panePid: String(original.panePid)}, {terminal: 'swapped-tab'}]}));
+  assert.deepEqual(batched.results.map(row => row.ok ? row.result.terminalId : row.error.kind),
+    ['swapped-tab', 'refused']);
+  assert.equal(killServerAndWait().status, 0);
+  // 서버가 없으면 판단할 수 없다(거절이 아니다). 살아 있을 때 받은 복원 정보는 그대로 쓸 수 있다.
+  assert.equal(cli(named).error.kind, 'unavailable');
+  const receipt = restoreRecovery({context: JSON.stringify(moved.result), command,
+    'rottie-bin': bin, 'allow-reuse': 'false'});
+  assert.deepEqual([receipt.role, receipt.session], ['mover', 'kadan-mover']);
+  assert.equal(receipt.context.terminalId, receipt.terminalId);
+  assert.equal(tmuxFloor.pid('kadan-mover'), receipt.context.panePid);
+  const start = readSystemLedger().filter(e => e.kind === 'start' && e.role === 'mover').at(-1);
+  assert.deepEqual([start.restoredFrom, start.recoverySource, start.rottieTerminalId],
+    ['swapped-tab', moved.result.startDigest, receipt.terminalId]);
+});
