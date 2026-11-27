@@ -385,6 +385,21 @@ test('대시보드 길: 업무 생성도 고정하고, 프리셋 삭제·이름 
         }
         assert.equal(revision(), '1');
 
+        // 업무 저장소가 있는 홈에서도 화면의 삭제가 된다(확인과 쓰기를 저장소 트랜잭션 안에서 하는 길):
+        // 닫힌 업무만 쓰는 프리셋은 지워지고, 그 업무를 다시 열면 응답에 경고 칸이 실린다.
+        assert.equal((await post('/runners/preset-add', {preset: 'D', revision: revision()})).status, 200);
+        const onD = workCommand(['create', 'pin/w-dash-d'], {...workFields(repo), preset: 'D'}, {home, by: 'boss'});
+        const stillOpen = await post('/runners/preset-remove', {preset: 'D', revision: revision()});
+        assert.equal(stillOpen.status, 409);
+        const cancelled = await post('/works/cancel', {key: 'work:pin/w-dash-d', revision: String(onD.revision), result: '취소', note: '닫기'});
+        assert.equal(cancelled.status, 200, await cancelled.clone().text());
+        const removed = await post('/runners/preset-remove', {preset: 'D', revision: revision()});
+        assert.equal(removed.status, 200, await removed.clone().text());
+        assert.equal(Object.hasOwn(readSettings(home).presets, 'D'), false);
+        const reopened = await post('/works/reopen', {key: 'work:pin/w-dash-d', revision: '2', note: '다시 열기'});
+        assert.equal(reopened.status, 200, await reopened.clone().text());
+        assert.match((await reopened.json()).result.presetWarning, /프리셋 D이\(가\) 없다.*kadan work update pin\/w-dash-d --revision 3/);
+
         // 프리셋 안 값 변경: 응답 데이터에 CLI와 같은 다시 띄울 목록이 실린다.
         const edited = await post('/runners/set', {role: 'worker', runner: 'codex', model: 'gpt-6-astra', effort: 'high', revision: revision()});
         assert.equal(edited.status, 200, await edited.clone().text());
