@@ -64,8 +64,9 @@ test('고정 원장의 변형 전부: 전체 읽기가 거절하면 좁은 읽�
   // 헛통과 방지: 변형이 실제로 만들어졌고 전체 읽기가 거절한 경우가 충분히 있다.
   assert.equal(all.length, rows.length + 340 + 17, '변형 수: 빼기(줄 수) + 겹치기 340 + 맞바꾸기 17');
   assert.ok(counts.rejected > 900, `전체 읽기가 거절한 경우 ${counts.rejected}`);
+  assert.equal(counts.compared, all.length * READERS.length);
   assert.deepEqual(escapes, [], `전체 읽기는 거절하는데 좁은 읽기가 받은 변형 ${escapes.length}건`);
-  assert.deepEqual(differs, [], `거절 문구가 다르거나 좁은 읽기만 거절한 변형 ${differs.length}건`);
+  assert.deepEqual(differs, [], `거절 문구가 다르거나 좁은 읽기만 거절하거나 받은 결과가 다른 변형 ${differs.length}건`);
   // 일부러 남긴 차이는 인계 읽기의 완료 우편 연결뿐이고, 실제로 그 경우가 변형에 들어 있다.
   assert.ok(counts.skipped > 0, '인계 읽기의 예외 경우가 변형에 있다');
 });
@@ -293,4 +294,51 @@ test('자동 결과 우편이 빠지고 표지 없는 일반 보관 우편이 �
   const observed = attempt(home, () => new Mailbox(home, replacement.role).acknowledge(replacement.mailId, replacement.role));
   assert.equal(observed.error, expected);
   assert.equal(observed.appended, 0);
+});
+
+test('앞선 발령 우편이 빠진 원장의 done(저장 함수가 기록한 줄, 모델 표지는 밖): 읽기 3종이 전체 읽기와 같은 문구로 막고 새 줄 0건', () => {
+  // 재현 자료의 출처: 재검수 5(exec-7145e9ed) 근거 폴더 classification-samples.test.mjs의 두 건(역할 a의 done, 작업 주소 r/t1의 done).
+  // 발령과 done을 모두 저장 함수로 기록한 정상 원장에서 앞선 발령 우편 한 줄만 뺀다(손상 모델이 허용하는 줄 유실).
+  // modelOf는 "그 줄만 뺀 지금 원장"에 넣어 보므로 이 done에 '밖' 표지를 단다. 그래도 대조는 엄격해야 한다.
+  for (const [role, taskId] of [['a', 'L1'], ['w2', 'r/t1']]) {
+    const pristine = freshHome();
+    saveMailBody('fixture-body', '격리 시험 질문', pristine);
+    appendLedger({kind: 'send', t: T, role, by: 'fixture-owner', taskId, expectReply: true, mailId: QUESTION, digest: 'fixture-body', bytes: 10}, pristine);
+    appendLedger({kind: 'done', t: T, role, taskId, result: 'ok', by: 'a'}, pristine);
+    for (const [name, narrow, full] of READERS) assert.deepEqual(narrow(pristine), full(pristine), `정상 원장 ${name}`);
+    const rows = STREAMS.flatMap(stream => readStream(pristine, stream, {optional: true}).map(value => ({stream, value})));
+    const done = rows.findIndex(row => row.value.kind === 'done');
+    assert.ok(rows[done].value.completionMailId, '저장 함수가 done에 완료 우편을 달았다');
+    const lost = rows.filter(row => !(row.stream === MAIL && row.value.mailId === QUESTION));
+    assert.equal(rows.length - lost.length, 1);
+    assert.equal(modelOf(lost, lost.findIndex(row => row.value.kind === 'done'), rows[done].value), 'out');
+    // 표지가 '밖'이어도 compareAll은 이 원장을 엄격하게 대조한다(빠져나감·차이 0, 전체 읽기 거절 3건).
+    const {escapes, differs, counts} = compareAll([{name: `발령 우편 유실 ${role}/${taskId}`, rows: lost, model: 'out'}]);
+    assert.deepEqual([escapes, differs, counts.rejected, counts.skipped + counts.crashSkipped], [[], [], 3, 0]);
+    const home = build(lost), expected = '도메인 원장 send/dispatch 연결 손상';
+    for (const read of [readMailboxLedger, readSendLedger, readMailboxLedgerNarrow, readSendLedgerNarrow, readHandoverLedger]) {
+      assert.equal(message(() => read(home)), expected, read.name);
+    }
+    // 완료 우편을 받은 쪽의 읽음도 같은 문구로 막히고 원장에 줄이 붙지 않는다.
+    const mail = lost.find(row => row.value.systemGenerated === 'task-completion').value;
+    const observed = attempt(home, () => new Mailbox(home, mail.role).acknowledge(mail.mailId, mail.role));
+    assert.equal(observed.error, expected);
+    assert.equal(observed.appended, 0);
+  }
+});
+
+test('대조는 모델 표지에 기대지 않는다: 표지가 밖인 변형에서 좁은 읽기만 받으면 빠져나감으로 잡힌다', () => {
+  // 헛통과 방지: 전체 읽기는 거절하고 좁은 읽기는 받는 가짜 읽기 쌍을 끼워, 표지가 '밖'이어도 compareAll이 빠져나감으로 세는지 본다.
+  const rows = fixtureRows();
+  const lost = rows.filter((_, k) => k !== rows.length - 2); // 마지막 done을 뺀다(전체 읽기가 거절한다)
+  const saved = READERS[0];
+  READERS[0] = ['우편함', () => [], saved[2]];
+  try {
+    const {escapes, counts} = compareAll([{name: '가짜 좁은 읽기', rows: lost, model: 'out'}]);
+    assert.equal(counts.variants.out, 1);
+    assert.equal(escapes.length, 1);
+    assert.match(escapes[0], /가짜 좁은 읽기 \/ 우편함 \[표지 out\]: 전체 ".+" 좁은 읽기는 받음/);
+  } finally {
+    READERS[0] = saved;
+  }
 });

@@ -4,6 +4,6 @@ import './helpers/isolated-home.mjs';
 import test from 'node:test';
 import {runFieldFamily} from './helpers/ledger-integrity-fields.mjs';
 
-test('칸 변형 1/2(붙이기): 모델 안 변형에서 전체 읽기가 거절하면 좁은 읽기도 같은 문구로 거절하고, 받으면 결과가 같다', t => {
+test('칸 변형 1/2(붙이기): 모든 변형에서 전체 읽기가 거절하면 좁은 읽기도 같은 문구로 거절하고, 받으면 결과가 같다', t => {
   runFieldFamily(t, ['attach'], {part: 0, of: 2});
 });

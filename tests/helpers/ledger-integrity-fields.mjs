@@ -147,13 +147,15 @@ export function runFieldFamily(t, families, {part = 0, of = 1} = {}) {
   // 'rows' 갈래는 칸이 아니라 줄 변형(빼기·순번 겹치기·이웃 맞바꾸기)을 이 큰 고정 원장에 돌린다.
   const pool = families.includes('rows') ? rowVariants(rows).map(variant => ({family: 'rows', ...variant})) : fieldVariants(rows);
   const all = pool.filter(variant => families.includes(variant.family)).filter((_, index) => index % of === part);
-  const {escapes, differs, outside, counts} = compareAll(all);
-  t.diagnostic(`${families.join('·')}${of > 1 ? ` ${part + 1}/${of}` : ''}: 변형 ${all.length}개(모델 안 ${counts.variants.in}, 모델 밖 ${counts.variants.out}, 과거 원문 ${counts.variants.legacy}) × 읽기 3종.`
-    + ` 모델 안·과거 원문: 전체 읽기 거절 ${counts.rejected}건, 수용 ${counts.accepted}건, 인계 읽기 예외 ${counts.skipped}건·계산 중 죽음 ${counts.crashSkipped}건.`
-    + ` 모델 밖: 전체 읽기 거절 ${counts.outsideRejected}건, 좁은 읽기와 갈린 것 ${outside.length}건`);
-  for (const line of outside.slice(0, 12)) t.diagnostic(`모델 밖 차이: ${line}`);
+  // 판정은 모델 표지와 무관하다: 모든 변형에서 전체 읽기가 거절하면 좁은 읽기도 같은 문구로 거절해야 한다(예외는 인계 읽기의 둘뿐).
+  const {escapes, differs, counts} = compareAll(all);
+  t.diagnostic(`${families.join('·')}${of > 1 ? ` ${part + 1}/${of}` : ''}: 변형 ${all.length}개 × 읽기 3종 = 비교 ${counts.compared}번`
+    + `(표지: 모델 안 ${counts.variants.in}, 모델 밖 ${counts.variants.out}, 과거 원문 ${counts.variants.legacy}).`
+    + ` 전체 읽기 거절 ${counts.rejected}건(표지별 안 ${counts.rejectedBy.in}·밖 ${counts.rejectedBy.out}·과거 원문 ${counts.rejectedBy.legacy}), 수용 ${counts.accepted}건,`
+    + ` 허용 예외: 인계 읽기 ${counts.skipped}건·계산 중 죽음 ${counts.crashSkipped}건. 차이 ${escapes.length + differs.length}건`);
   assert.ok(all.length > 0 && counts.rejected > 0, `변형 ${all.length}개, 전체 읽기 거절 ${counts.rejected}건`);
-  assert.deepEqual(escapes, [], `모델 안인데 전체 읽기는 거절하고 좁은 읽기가 받은 변형 ${escapes.length}건`);
-  assert.deepEqual(differs, [], `모델 안인데 거절 문구가 다르거나 좁은 읽기만 거절한 변형 ${differs.length}건`);
-  return {all, counts, outside};
+  assert.equal(counts.compared, all.length * READERS.length);
+  assert.deepEqual(escapes, [], `전체 읽기는 거절하고 좁은 읽기가 받은 경우 ${escapes.length}건`);
+  assert.deepEqual(differs, [], `거절 문구가 다르거나 좁은 읽기만 거절하거나 받은 결과가 다른 경우 ${differs.length}건`);
+  return {all, counts};
 }

@@ -40,7 +40,7 @@ export const HANDOVER_SKIPS = /완료 우편|완료 사건/;
 // 같은 종류의 한 경우: 전체 읽기가 완료 우편의 원발령을 다시 계산하다가 죽는 손상(실행 주소·작업 ID가 글자가 아닌 줄).
 // 전체 읽기는 이 오류로 멈추고, 완료 우편 연결을 계산하지 않는 인계 읽기는 멈추지 않는다. 우편함·전송 길 읽기는 같은 오류로 멈춘다.
 // 칸 변형의 큰 고정 원장에서는 이 경우가 2건이다(완료 우편이 달린 done의 실행 주소·작업 ID를 글자가 아닌 값으로 바꾼 변형).
-// 이 2건은 저장 함수도 그런 done을 완료 우편과 함께 기록하지 못하므로(아래 modelOf) 모델 밖으로 세어진다.
+// 이 2건의 모델 표지는 '밖'이다(저장 함수도 그런 done을 완료 우편과 함께 기록하지 못한다). 표지와 무관하게 예외로 센다.
 // 두 예외 모두 "같은 명령의 준비 읽기(전송 길 좁은 읽기)가 같은 문구로 먼저 막는다"를 변형마다 단언한 뒤에만 넘어간다(compareAll).
 export const HANDOVER_SKIP_CRASH = /^address\?\.includes is not a function$/;
 
@@ -51,6 +51,9 @@ export const VALIDATOR_KEYS = ['kind', 'broken', '_ledgerOrder', 'mailId', 'disp
 
 // 손상 모델(감독 결정): 저장 함수(appendLedger)가 받아 주는 줄로만 된 원장과, 거기서 줄이 빠지거나 순번이 겹치거나
 // 뒤바뀐 원장이 "모델 안"이다. 저장 함수가 거절할 줄이 직접 들어간 원장은 "모델 밖"이다.
+// **이 분류는 결과에 붙이는 표지다. 판정(compareAll)은 분류를 보지 않고 모든 변형을 엄격하게 대조한다.**
+// 표지의 한계: "그 줄만 뺀 지금 원장"에 넣어 보므로, 지금은 빠진 다른 줄이 있었을 때만 만들어지는 줄은 '밖'으로 적힌다
+// (예: 앞선 발령 우편이 빠진 뒤의 done — 재검수 exec-7145e9ed). 그래서 표지에 기대어 변형을 빼지 않는다.
 // 칸 하나를 바꾼 줄이 모델 안인지는 **바뀐 줄을 제품 저장 함수에 실제로 넣어 보고** 정한다(따로 짠 규칙을 두지 않는다).
 // 바꾸기 전 줄이 어떻게 생긴 줄이었는지(호출자가 준 줄인지, 저장 함수가 스스로 만든 발령 짝·자동 결과 우편인지)는 보지 않는다.
 //  1) 그 줄만 뺀 나머지 줄로 원장을 만든다(우편 ID 중복 검사와 완료 우편 계산이 실제 원장을 보게).
@@ -113,38 +116,42 @@ export function rowVariants(rows) {
   return out;
 }
 
-// 변형마다 읽기 3종을 전체 읽기와 대조한다. variant.model이 'out'이면 차이를 세기만 하고, 그 밖('in'·'legacy')은 엄격하게 본다.
-// 분류가 아직 없는 칸 변형(variant.at·variant.value가 있다)은 여기서 modelOf로 가른다. 줄 변형은 만들 때 모델 안으로 정해져 있다.
-// escapes = 전체는 거절하는데 좁은 읽기가 받음, differs = 문구가 다르거나 좁은 읽기만 거절.
+// 변형마다 읽기 3종을 전체 읽기와 대조한다. **모델 분류와 무관하게 모든 변형을 엄격하게 본다**:
+// 전체 읽기가 거절하면 좁은 읽기도 같은 문구로 거절해야 하고, 전체 읽기가 받으면 좁은 읽기도 받고 결과가 같아야 한다.
+// 분류(modelOf)는 결과를 읽을 때 쓰는 표지일 뿐 판정에 쓰지 않는다(분류가 틀려도 반례를 놓치지 않게 — 재검수 exec-f499dedf·exec-7145e9ed).
+// 분류가 아직 없는 칸 변형(variant.at·variant.value가 있다)은 여기서 modelOf로 표지를 단다. 줄 변형은 만들 때 모델 안으로 적혀 있다.
+// 허용하는 예외는 인계 읽기의 둘뿐이다(HANDOVER_SKIPS·HANDOVER_SKIP_CRASH, 전송 길 좁은 읽기가 같은 문구로 먼저 막는 경우만).
+// escapes = 전체는 거절하는데 좁은 읽기가 받음, differs = 문구가 다르거나 좁은 읽기만 거절하거나 받은 결과가 다름.
 export function compareAll(all) {
-  const escapes = [], differs = [], outside = [];
-  const counts = {variants: {in: 0, out: 0, legacy: 0}, rejected: 0, accepted: 0, skipped: 0, crashSkipped: 0, outsideRejected: 0};
+  const escapes = [], differs = [];
+  const tally = () => ({in: 0, out: 0, legacy: 0});
+  const counts = {variants: tally(), compared: 0, rejected: 0, rejectedBy: tally(), accepted: 0, skipped: 0, crashSkipped: 0};
   for (const variant of all) {
-    const model = variant.model ?? modelOf(variant.source, variant.at, variant.value), strict = model !== 'out';
+    const model = variant.model ?? modelOf(variant.source, variant.at, variant.value);
     counts.variants[model]++;
     const home = build(variant.rows), slimErrors = {};
     for (const [name, narrow, full] of READERS) {
       const wide = outcome(() => full(home)), slim = outcome(() => narrow(home));
       slimErrors[name] = slim.error;
-      const note = text => (strict ? differs : outside).push(`${variant.name} / ${name}: ${text}`);
+      counts.compared++;
+      const where = `${variant.name} / ${name} [표지 ${model}]`;
       if (wide.error === undefined) {
-        if (strict) counts.accepted++;
-        if (slim.error !== undefined) note(`전체는 받고 좁은 읽기는 "${slim.error}"`);
-        else if (strict) assert.deepEqual(slim.value, wide.value, `${variant.name} / ${name}`);
+        counts.accepted++;
+        if (slim.error !== undefined) differs.push(`${where}: 전체는 받고 좁은 읽기는 "${slim.error}"`);
+        else if (!isDeepStrictEqual(slim.value, wide.value)) differs.push(`${where}: 둘 다 받았지만 결과가 다름`);
         continue;
       }
-      if (strict) counts.rejected++; else counts.outsideRejected++;
+      counts.rejected++; counts.rejectedBy[model]++;
       if (slim.error !== undefined) {
-        if (slim.error !== wide.error) note(`전체 "${wide.error}" 좁은 "${slim.error}"`);
+        if (slim.error !== wide.error) differs.push(`${where}: 전체 "${wide.error}" 좁은 "${slim.error}"`);
         continue;
       }
       // 인계 읽기의 예외는 "같은 명령의 준비 읽기(전송 길 좁은 읽기)가 먼저 같은 문구로 막는다"는 전제에서만 허용한다.
       const skip = name === '인계' && (HANDOVER_SKIPS.test(wide.error) ? 'skipped' : HANDOVER_SKIP_CRASH.test(wide.error) ? 'crashSkipped' : null);
-      if (skip && slimErrors['전송 길'] === wide.error) { if (strict) counts[skip]++; continue; }
-      (strict ? escapes : outside).push(`${variant.name} / ${name}: 전체 "${wide.error}" 좁은 읽기는 받음`
-        + `${skip ? ` (전송 길 좁은 읽기는 "${slimErrors['전송 길']}")` : ''}`);
+      if (skip && slimErrors['전송 길'] === wide.error) { counts[skip]++; continue; }
+      escapes.push(`${where}: 전체 "${wide.error}" 좁은 읽기는 받음${skip ? ` (전송 길 좁은 읽기는 "${slimErrors['전송 길']}")` : ''}`);
     }
     fs.rmSync(home, {recursive: true, force: true});
   }
-  return {escapes, differs, outside, counts};
+  return {escapes, differs, counts};
 }
