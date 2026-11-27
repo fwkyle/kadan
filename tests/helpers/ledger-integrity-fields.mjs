@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {appendLedger} from '../../src/ledger.mjs';
 import {appendStream, readStream} from '../../src/storage.mjs';
 import {Mailbox} from '../../src/mailbox.mjs';
-import {STREAMS, LEGACY, freshHome, build, label, READERS, VALIDATOR_KEYS, modelOf, rowVariants, compareAll} from './ledger-integrity-rig.mjs';
+import {STREAMS, LEGACY, freshHome, build, label, READERS, VALIDATOR_KEYS, rowVariants, compareAll} from './ledger-integrity-rig.mjs';
 
 // 제품이 원장에 쓰는 사건 종류. 모은 방법: (1) 운영 원장의 새 영역 세 곳에 실제로 적힌 종류 전부(2026-11-27 조사, 37종),
 // (2) src의 `kind: '…'` 리터럴 가운데 원장 기록 호출(appendLedger·record)에 쓰이는데 (1)에 없던 것(watch-judgment 등).
@@ -103,7 +103,8 @@ const ATTACH_ONLY = {broken: [true], rawTaskId: ['attached-raw'], board: ['attac
 // 변형 갈래: 지우기 / 틀린 값(다른 형·빈 값·null) / 다른 줄 값(kind 칸) / 다른 줄 값(그 밖의 칸) / 붙이기.
 export function fieldVariants(rows) {
   const out = [];
-  const push = (family, name, at, value) => out.push({family, name, rows: withValue(rows, at, value), model: modelOf(rows, at, value)});
+  // 모델 분류(modelOf)는 변형마다 저장 함수를 실제로 부르므로, 고른 갈래를 대조할 때(compareAll) 한다. 여기서는 바꾼 자리와 값만 남긴다.
+  const push = (family, name, at, value) => out.push({family, name, rows: withValue(rows, at, value), source: rows, at, value});
   rows.forEach((row, at) => {
     for (const key of Object.keys(row.value)) {
       const value = row.value[key], type = typeOf(value), {[key]: removed, ...rest} = row.value;

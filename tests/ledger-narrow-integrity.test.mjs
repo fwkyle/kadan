@@ -13,7 +13,7 @@ import {appendLedger, saveMailBody, readMailboxLedger, readSendLedger,
   readMailboxLedgerNarrow, readSendLedgerNarrow, readHandoverLedger} from '../src/ledger.mjs';
 import {appendStream, readStream} from '../src/storage.mjs';
 import {Mailbox} from '../src/mailbox.mjs';
-import {STREAMS, LEGACY, freshHome, build, message, READERS, rowVariants, compareAll} from './helpers/ledger-integrity-rig.mjs';
+import {STREAMS, LEGACY, freshHome, build, message, READERS, rowVariants, compareAll, modelOf, storedAs} from './helpers/ledger-integrity-rig.mjs';
 
 const MAIL = 'mail/events.jsonl', SYSTEM = 'system/events.jsonl';
 
@@ -231,4 +231,63 @@ test('창에 넣은 알림의 작업 주소가 완료 우편의 짧은 원발령
       assert.deepEqual(Object.keys(reminder).sort(), ['action', 'delivery', 'kind', 'mailId', 'role', 't']);
     }
   }
+});
+
+// ── 변형의 손상 모델 분류: 바꾸기 전 줄의 출처가 아니라 "바뀐 줄을 저장 함수가 그대로 기록하는가"로 가른다 ──
+test('모델 분류는 저장 함수의 실제 수용·거절과 같다: 바꾸지 않은 줄, 호출자가 줄 수 없는 꼴, 우편 ID 중복, 순번', () => {
+  const rows = fixtureRows();
+  const generated = value => value.kind === 'dispatch' || value.systemGenerated === 'task-completion';
+  for (const [at, row] of rows.entries()) {
+    // 호출자가 준 줄은 저장 함수가 그대로 다시 기록한다(모델 안). 저장 함수가 스스로 만든 발령 짝·자동 결과 우편은 호출자가 넣을 수 없다(모델 밖).
+    const expected = row.stream === LEGACY ? 'legacy' : generated(row.value) ? 'out' : 'in';
+    assert.equal(modelOf(rows, at, row.value), expected, `바꾸지 않은 줄 ${row.stream}:${row.value.kind}`);
+  }
+  const at = kind => rows.findIndex(row => row.stream !== LEGACY && row.value.kind === kind);
+  const reminder = at('watch-mail-reminder'), done = rows.findIndex(row => row.value.completionMailId);
+  const plain = rows.findIndex(row => row.stream === MAIL && row.value.kind === 'send' && !row.value.taskId && !row.value.systemGenerated);
+  const other = rows.find((row, k) => k !== plain && row.stream === MAIL && row.value.kind === 'send');
+  assert.ok(reminder >= 0 && done >= 0 && plain >= 0 && other);
+  const change = (index, extra) => storedAs(rows, index, {...rows[index].value, ...extra});
+  // 어느 줄에든 작업 주소를 적을 수 있다(재검수 3의 줄).
+  assert.ok(change(reminder, {taskId: 'other/short'}).stored);
+  // 호출자가 줄 수 없는 꼴은 저장 함수의 거절 문구 그대로 모델 밖이다.
+  assert.equal(change(reminder, {systemGenerated: 'task-completion'}).error, '완료 우편 연결은 done 저장이 생성합니다');
+  assert.equal(change(reminder, {completionMailId: 'x'}).error, '완료 우편 연결은 done 저장이 생성합니다');
+  assert.equal(change(done, {completionMailId: 'x'}).error, '완료 우편 연결은 done 저장이 생성합니다');
+  assert.match(change(reminder, {kind: 'dispatch'}).error, /^dispatch 직접 기록 금지/);
+  assert.equal(change(plain, {mailId: other.value.mailId}).error, '도메인 원장 중복 mailId');
+  // 순번은 저장 함수가 매긴다: 다른 줄과 겹치는 정수는 모델 안(줄 변형), 정수가 아니면 모델 밖.
+  assert.ok(change(reminder, {_ledgerOrder: rows[done].value._ledgerOrder}).stored);
+  assert.equal(change(reminder, {_ledgerOrder: 'x'}).error, `도메인 원장 순번 손상: ${SYSTEM}`);
+  // 저장 함수가 늘 채우는 칸(t)이 없는 줄, 완료 우편을 만들 수 없는 done에 달린 completionMailId는 저장 함수가 만들 수 없는 줄이다.
+  const {t, ...timeless} = rows[reminder].value;
+  assert.equal(storedAs(rows, reminder, timeless).error, '저장 함수가 기록한 줄이 바뀐 줄과 다름');
+  assert.equal(change(done, {result: 'unknown'}).error, '저장 함수가 기록한 줄이 바뀐 줄과 다름');
+});
+
+test('자동 결과 우편이 빠지고 표지 없는 일반 보관 우편이 저장된 원장: 모델 안이고, 읽음을 막고 새 줄 0건', () => {
+  // 재현 자료의 출처: 재검수 4(exec-f499dedf) 근거 폴더 model-samples.test.mjs.
+  // 발령과 완료를 저장 함수로 기록하고, 자동 결과 우편 한 줄만 뺀 원장에 같은 우편에서 표지(systemGenerated)만 뺀 줄을 저장 함수로 넣는다.
+  const pristine = freshHome();
+  saveMailBody('fixture-body', '격리 시험 질문', pristine);
+  appendLedger({kind: 'send', t: T, role: 'fixture-worker', by: 'fixture-owner', taskId: 'fixture-1', expectReply: true,
+    mailId: QUESTION, digest: 'fixture-body', bytes: 10}, pristine);
+  appendLedger({kind: 'done', t: T, role: 'fixture-worker', taskId: 'fixture-1', result: 'ok'}, pristine);
+  assert.equal(message(() => readMailboxLedger(pristine)), null);
+  const rows = STREAMS.flatMap(stream => readStream(pristine, stream, {optional: true}).map(value => ({stream, value})));
+  const at = rows.findIndex(row => row.value.systemGenerated === 'task-completion');
+  assert.ok(at >= 0);
+  const {systemGenerated, ...replacement} = rows[at].value;
+  const home = build(rows.filter((_, k) => k !== at));
+  const {_ledgerOrder, ...input} = replacement;
+  appendLedger(input, home);
+  // 저장 함수가 칸·값·순번까지 같은 줄을 기록했다. 그래서 이 변형은 모델 안이다(바꾸기 전 줄이 자동 결과 우편이었어도).
+  assert.deepEqual(readStream(home, MAIL).at(-1), replacement);
+  assert.equal(modelOf(rows, at, replacement), 'in');
+  const expected = '도메인 원장 완료 우편 연결 손상';
+  for (const read of [readMailboxLedger, readSendLedger, readMailboxLedgerNarrow, readSendLedgerNarrow]) assert.equal(message(() => read(home)), expected, read.name);
+  // 그 우편을 받은 쪽의 읽음도 같은 문구로 막히고 원장에 줄이 붙지 않는다.
+  const observed = attempt(home, () => new Mailbox(home, replacement.role).acknowledge(replacement.mailId, replacement.role));
+  assert.equal(observed.error, expected);
+  assert.equal(observed.appended, 0);
 });

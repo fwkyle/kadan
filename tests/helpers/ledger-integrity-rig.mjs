@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {readLedger, readMailboxLedger, readSendLedger,
+import {isDeepStrictEqual} from 'node:util';
+import {appendLedger, readLedger, readMailboxLedger, readSendLedger,
   readMailboxLedgerNarrow, readSendLedgerNarrow, readHandoverLedger} from '../../src/ledger.mjs';
 import {validateDomainEvent} from '../../src/ledger-domains.mjs';
-import {createDatabase, writeStorageMarker, appendStream, storageTransaction} from '../../src/storage.mjs';
+import {createDatabase, writeStorageMarker, appendStream, readStream, storageTransaction} from '../../src/storage.mjs';
 
 export const STREAMS = ['tasks/events.jsonl', 'mail/events.jsonl', 'system/events.jsonl'];
 export const LEGACY = 'ledger.jsonl';
@@ -39,6 +40,7 @@ export const HANDOVER_SKIPS = /완료 우편|완료 사건/;
 // 같은 종류의 한 경우: 전체 읽기가 완료 우편의 원발령을 다시 계산하다가 죽는 손상(실행 주소·작업 ID가 글자가 아닌 줄).
 // 전체 읽기는 이 오류로 멈추고, 완료 우편 연결을 계산하지 않는 인계 읽기는 멈추지 않는다. 우편함·전송 길 읽기는 같은 오류로 멈춘다.
 // 칸 변형의 큰 고정 원장에서는 이 경우가 2건이다(완료 우편이 달린 done의 실행 주소·작업 ID를 글자가 아닌 값으로 바꾼 변형).
+// 이 2건은 저장 함수도 그런 done을 완료 우편과 함께 기록하지 못하므로(아래 modelOf) 모델 밖으로 세어진다.
 // 두 예외 모두 "같은 명령의 준비 읽기(전송 길 좁은 읽기)가 같은 문구로 먼저 막는다"를 변형마다 단언한 뒤에만 넘어간다(compareAll).
 export const HANDOVER_SKIP_CRASH = /^address\?\.includes is not a function$/;
 
@@ -47,52 +49,77 @@ export const VALIDATOR_KEYS = ['kind', 'broken', '_ledgerOrder', 'mailId', 'disp
   't', 'role', 'by', 'transport', 'completion', 'systemGenerated', 'replyFinal', 'replyTo', 'completionMailId', 'completionTaskId', 'result',
   'phase', 'taskIds', 'handoverId', 'from', 'to'];
 
-// 손상 모델(감독 결정): 저장 함수(appendDomainLedger)가 받아 주는 줄로만 된 원장과, 거기서 줄이 빠지거나 순번이 겹치거나
+// 손상 모델(감독 결정): 저장 함수(appendLedger)가 받아 주는 줄로만 된 원장과, 거기서 줄이 빠지거나 순번이 겹치거나
 // 뒤바뀐 원장이 "모델 안"이다. 저장 함수가 거절할 줄이 직접 들어간 원장은 "모델 밖"이다.
-// 칸 하나를 바꾼 줄이 모델 안인지: 저장 함수의 줄 검증과 거절 규칙(src/ledger-domains.mjs appendDomainLedger)을 그대로 적용한다.
-//  - validateDomainEvent(stream, 줄)을 통과해야 한다(저장 직전에 같은 함수를 부른다).
-//  - 호출자가 줄 수 없는 칸: completionMailId, systemGenerated === 'task-completion'(저장 함수가 거절), kind === 'dispatch'(직접 기록 금지).
-//  - 저장 함수가 스스로 만드는 줄(dispatch, 자동 결과 우편)은 호출자가 쓸 수 없으므로 고친 꼴은 모두 모델 밖이다.
-//  - 같은 우편 ID를 한 번 더 쓰는 send도 저장 함수가 거절한다.
-// 과거 원문 영역(ledger.jsonl)은 저장 검증 없이 옮겨 온 줄이라 따로 센다('legacy'). 판정은 모델 안과 같이 엄격하게 한다.
-export function modelOf(rows, at, mutated) {
+// 칸 하나를 바꾼 줄이 모델 안인지는 **바뀐 줄을 제품 저장 함수에 실제로 넣어 보고** 정한다(따로 짠 규칙을 두지 않는다).
+// 바꾸기 전 줄이 어떻게 생긴 줄이었는지(호출자가 준 줄인지, 저장 함수가 스스로 만든 발령 짝·자동 결과 우편인지)는 보지 않는다.
+//  1) 그 줄만 뺀 나머지 줄로 원장을 만든다(우편 ID 중복 검사와 완료 우편 계산이 실제 원장을 보게).
+//  2) 바뀐 줄을 appendLedger에 넣는다. 저장 함수가 스스로 매기는 칸은 빼고 넣는다: 순번(_ledgerOrder — 호출자가 주면 거절),
+//     그리고 바꾸기 전 줄에 달려 있던 값 그대로인 completionMailId(저장 함수가 done에 달아 주는 값 — 호출자가 주면 거절).
+//  3) 저장 함수가 거절하면 모델 밖. 받았더라도 그 영역에 기록된 줄이 바뀐 줄과 다르면(저장 함수가 칸을 채우거나 덮어쓰거나,
+//     다른 영역에 기록하면) 저장 함수가 만들 수 없는 줄이므로 모델 밖. 칸·값이 그대로 기록되면 모델 안이다.
+//  4) 순번은 저장 함수가 매기므로 2)에서 뺐다. 바뀐 줄의 순번 값 자체는 저장 함수가 저장 직전에 부르는 줄 검증
+//     (validateDomainEvent — 양의 정수)에 바뀐 줄을 그대로 넣어 본다. 순번이 다른 줄과 겹치거나 뒤바뀐 것은 모델 안이다(줄 변형).
+// 그래서 호출자가 줄 수 없는 꼴(kind가 dispatch, systemGenerated가 task-completion, 새로 달거나 바꾼 completionMailId)은
+// 저장 함수가 거절하는 대로 모델 밖이 되고, 자동 결과 우편에서 그 표지만 지운 줄(일반 보관 우편)은 저장 함수가 받는 대로 모델 안이 된다.
+// 과거 원문 영역(ledger.jsonl)은 저장 함수를 거치지 않고 옮겨 온 줄이라 따로 센다('legacy'). 판정은 모델 안과 같이 엄격하게 한다.
+const ASSIGNED = ['_ledgerOrder'];
+export function storedAs(rows, at, mutated) {
   const {stream, value: original} = rows[at];
-  if (stream === LEGACY) return 'legacy';
-  const generated = value => value?.kind === 'dispatch' || value?.systemGenerated === 'task-completion';
-  if (generated(original) || generated(mutated)) return 'out';
-  if (message(() => validateDomainEvent(stream, mutated)) !== null) return 'out';
-  if (Object.hasOwn(mutated, 'completionMailId') && mutated.completionMailId !== original.completionMailId) return 'out';
-  if (mutated.kind === 'send' && mutated.mailId !== original.mailId
-    && rows.some((row, k) => k !== at && row.value?.kind === 'send' && row.value.mailId === mutated.mailId)) return 'out';
-  return 'in';
+  if (!mutated || typeof mutated !== 'object' || Array.isArray(mutated)) return {error: '줄이 객체가 아님'};
+  const carried = Object.hasOwn(mutated, 'completionMailId') && Object.hasOwn(original, 'completionMailId')
+    && isDeepStrictEqual(mutated.completionMailId, original.completionMailId);
+  const assigned = carried ? [...ASSIGNED, 'completionMailId'] : ASSIGNED;
+  const strip = value => Object.fromEntries(Object.entries(value).filter(([key]) => !assigned.includes(key)));
+  const home = build(rows.filter((_, k) => k !== at));
+  try {
+    const before = readStream(home, stream, {optional: true}).length;
+    appendLedger(strip(mutated), home);
+    const fresh = readStream(home, stream, {optional: true}).slice(before);
+    const stored = fresh.find(row => isDeepStrictEqual(strip(row), strip(mutated))
+      && assigned.every(key => Object.hasOwn(row, key) === Object.hasOwn(mutated, key)));
+    if (!stored) return {error: '저장 함수가 기록한 줄이 바뀐 줄과 다름', fresh};
+    validateDomainEvent(stream, mutated);
+    return {stored};
+  } catch (error) {
+    return {error: error.message};
+  } finally {
+    fs.rmSync(home, {recursive: true, force: true});
+  }
+}
+export function modelOf(rows, at, mutated) {
+  if (rows[at].stream === LEGACY) return 'legacy';
+  return storedAs(rows, at, mutated).stored ? 'in' : 'out';
 }
 
 // 줄 변형(손상 모델 안): 줄 하나 빼기(과거 원문 줄 포함), 한 줄의 순번을 다른 줄과 겹치기(모든 줄 짝), 이웃한 두 줄의 순번 맞바꾸기.
+// 줄의 내용은 그대로이고(저장 함수가 기록한 줄), 모델이 허용하는 "빠짐·겹침·뒤바뀜"만 만든다. 그래서 만들 때 모델 안으로 정한다.
 export function rowVariants(rows) {
   const out = [];
   rows.forEach((row, i) => out.push({name: `빼기 ${label(row)}`, rows: rows.filter((_, k) => k !== i), model: row.stream === LEGACY ? 'legacy' : 'in'}));
   rows.forEach((row, i) => rows.forEach((other, j) => {
     if (i === j || row.stream === LEGACY || other.stream === LEGACY || row.value._ledgerOrder === other.value._ledgerOrder) return;
     out.push({name: `겹치기 ${label(row)} → ${other.value._ledgerOrder}`,
-      rows: rows.map((r, k) => k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: other.value._ledgerOrder}} : r)});
+      rows: rows.map((r, k) => k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: other.value._ledgerOrder}} : r), model: 'in'});
   }));
   for (let i = 0; i + 1 < rows.length; i++) {
     const a = rows[i], b = rows[i + 1];
     if (a.stream === LEGACY || b.stream === LEGACY || a.value._ledgerOrder === b.value._ledgerOrder) continue;
     out.push({name: `맞바꾸기 ${label(a)} ↔ ${label(b)}`, rows: rows.map((r, k) =>
       k === i ? {stream: r.stream, value: {...r.value, _ledgerOrder: b.value._ledgerOrder}}
-        : k === i + 1 ? {stream: r.stream, value: {...r.value, _ledgerOrder: a.value._ledgerOrder}} : r)});
+        : k === i + 1 ? {stream: r.stream, value: {...r.value, _ledgerOrder: a.value._ledgerOrder}} : r), model: 'in'});
   }
   return out;
 }
 
-// 변형마다 읽기 3종을 전체 읽기와 대조한다. variant.model이 'out'이면 차이를 세기만 하고, 그 밖('in'·'legacy'·없음)은 엄격하게 본다.
+// 변형마다 읽기 3종을 전체 읽기와 대조한다. variant.model이 'out'이면 차이를 세기만 하고, 그 밖('in'·'legacy')은 엄격하게 본다.
+// 분류가 아직 없는 칸 변형(variant.at·variant.value가 있다)은 여기서 modelOf로 가른다. 줄 변형은 만들 때 모델 안으로 정해져 있다.
 // escapes = 전체는 거절하는데 좁은 읽기가 받음, differs = 문구가 다르거나 좁은 읽기만 거절.
 export function compareAll(all) {
   const escapes = [], differs = [], outside = [];
   const counts = {variants: {in: 0, out: 0, legacy: 0}, rejected: 0, accepted: 0, skipped: 0, crashSkipped: 0, outsideRejected: 0};
   for (const variant of all) {
-    const model = variant.model ?? 'in', strict = model !== 'out';
+    const model = variant.model ?? modelOf(variant.source, variant.at, variant.value), strict = model !== 'out';
     counts.variants[model]++;
     const home = build(variant.rows), slimErrors = {};
     for (const [name, narrow, full] of READERS) {
