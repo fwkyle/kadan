@@ -34,6 +34,7 @@ import {readOperationsFlowInputs} from '../operations-flow.mjs';
 import {DecisionStore} from '../decisions.mjs';
 import {createDashboardLedgerReader} from '../dashboard-ledger-reader.mjs';
 import {createDashboardMailReader} from '../dashboard-mail-reader.mjs';
+import {createDashboardPresetsReader} from '../dashboard-presets-reader.mjs';
 
 export function cmdTree(_argv, flags = {}) {
   if (!flags.legacy) {
@@ -233,7 +234,8 @@ export function createDashboardReaders(home, {runtime = null, listSessions = () 
   const readWorks = () => dashboardStores(home).works.readRows();
   return {readCards, readWorks, treeInputs,
     loadSummary: createDashboardSummaryReader(home, {runtime, listSessions, now, readCards, readWorks, treeInputs}),
-    loadMail: createDashboardMailReader(home, {runtime, now, readCards})};
+    loadMail: createDashboardMailReader(home, {runtime, now, readCards}),
+    loadPresets: createDashboardPresetsReader(home, {readWorks, now})};
 }
 
 export function cmdWall(_argv, flags) {
@@ -254,9 +256,9 @@ export function cmdWall(_argv, flags) {
   if(!Number.isInteger(cacheSec)||cacheSec<0)die('--cache-sec는 0 이상의 정수여야 한다');
   const runtime=captureRuntimeVersion();
   const home = ledgerHome();
-  const {loadSummary, loadMail} = createDashboardReaders(home, {runtime});
+  const {loadSummary, loadMail, loadPresets} = createDashboardReaders(home, {runtime});
   const server = createWallServer(createWallSnapshotLoader(runtime, {summaryBodies:true}),
-    {home,cacheSec,gui:true,loadSummary,runtime,
+    {home,cacheSec,gui:true,loadSummary,loadPresets,runtime,
     loadLedger:createDashboardLedgerReader(home, {runtime}),
     loadMail,
     loadListSnapshot: createWallSnapshotLoader(runtime, {listOnly:true,summaryBodies:true})});
